@@ -1,0 +1,392 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  Bookmark,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Trash2,
+  X,
+} from "lucide-react";
+import clsx from "clsx";
+import type { Video } from "@/lib/types";
+import { buildInstagramEmbedUrl } from "@/lib/instagramEmbed";
+import { formatAiCategory } from "@/lib/aiCategories";
+import EntityChip from "./EntityChip";
+
+interface SwipeViewerProps {
+  /** Снимок видео на момент открытия — итерация по нему фиксирована. */
+  videos: Video[];
+  startIndex?: number;
+  onClose: () => void;
+  onDelete: (videoId: string) => Promise<void>;
+  onMoveToBookmarks: (videoId: string) => Promise<void>;
+}
+
+const SWIPE_THRESHOLD = 110;
+const SWIPE_VELOCITY = 0.6;
+const ANIM_MS = 250;
+
+// Полноэкранный Tinder-режим: одна карточка по центру, свайп влево/вправо
+// (мышь, тач, клавиатура), счётчик прогресса. Влево → мини-меню «Удалить /
+// В закладки». Вправо — в текущей сессии просто переход к следующей карточке
+// (воронку добавит Сессия 16).
+export default function SwipeViewer({
+  videos: initialVideos,
+  startIndex = 0,
+  onClose,
+  onDelete,
+  onMoveToBookmarks,
+}: SwipeViewerProps) {
+  // Снапшот списка фиксируем здесь — пока пользователь смотрит, удаления и
+  // перенос в закладки изменяют parent state, но мы продолжаем итерацию.
+  const [videos] = useState(initialVideos);
+  const [index, setIndex] = useState(() =>
+    Math.min(Math.max(0, startIndex), Math.max(0, initialVideos.length - 1)),
+  );
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
+  const [exitDir, setExitDir] = useState<"left" | "right" | null>(null);
+  const [postLeftMenu, setPostLeftMenu] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const start = useRef<{ x: number; y: number; t: number } | null>(null);
+
+  const total = videos.length;
+  const current = index < total ? videos[index] : null;
+
+  // Блокируем скролл фона на время режима.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  // При смене карточки — сбрасываем все промежуточные состояния анимации.
+  useEffect(() => {
+    setExitDir(null);
+    setDrag(null);
+    setPostLeftMenu(false);
+  }, [index]);
+
+  const triggerSwipe = useCallback(
+    (direction: "left" | "right") => {
+      if (busy || exitDir || postLeftMenu) return;
+      if (!current) return;
+      setExitDir(direction);
+      setDrag(null);
+      // После CSS-анимации: либо показываем меню (влево), либо листаем дальше.
+      window.setTimeout(() => {
+        if (direction === "left") {
+          setPostLeftMenu(true);
+        } else {
+          setIndex((i) => i + 1);
+        }
+      }, ANIM_MS);
+    },
+    [busy, exitDir, postLeftMenu, current],
+  );
+
+  function onPointerDown(e: React.PointerEvent) {
+    if (busy || exitDir || postLeftMenu) return;
+    // Не перехватываем тачи на iframe — Instagram должен получать свои клики.
+    const target = e.target as HTMLElement;
+    if (target.tagName === "IFRAME") return;
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    start.current = { x: e.clientX, y: e.clientY, t: Date.now() };
+    setDrag({ dx: 0, dy: 0 });
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    if (!start.current) return;
+    setDrag({
+      dx: e.clientX - start.current.x,
+      dy: e.clientY - start.current.y,
+    });
+  }
+
+  function onPointerUp(e: React.PointerEvent) {
+    if (!start.current) return;
+    const dx = e.clientX - start.current.x;
+    const elapsed = Date.now() - start.current.t || 1;
+    const v = Math.abs(dx) / elapsed;
+    start.current = null;
+    if (Math.abs(dx) > SWIPE_THRESHOLD || v > SWIPE_VELOCITY) {
+      triggerSwipe(dx > 0 ? "right" : "left");
+    } else {
+      setDrag(null);
+    }
+  }
+
+  // Клавиатура: Esc закрывает (или скрывает меню), стрелки листают.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        if (postLeftMenu) setPostLeftMenu(false);
+        else onClose();
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        triggerSwipe("left");
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        triggerSwipe("right");
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [postLeftMenu, onClose, triggerSwipe]);
+
+  async function handleDelete() {
+    if (!current || busy) return;
+    setBusy(true);
+    try {
+      await onDelete(current.id);
+      setBusy(false);
+      setPostLeftMenu(false);
+      setIndex((i) => i + 1);
+    } catch (e) {
+      setBusy(false);
+      alert((e as Error).message);
+    }
+  }
+
+  async function handleBookmark() {
+    if (!current || busy) return;
+    setBusy(true);
+    try {
+      await onMoveToBookmarks(current.id);
+      setBusy(false);
+      setPostLeftMenu(false);
+      setIndex((i) => i + 1);
+    } catch (e) {
+      setBusy(false);
+      alert((e as Error).message);
+    }
+  }
+
+  if (typeof document === "undefined") return null;
+
+  // Список закончился — показываем экран завершения.
+  if (!current) {
+    return createPortal(
+      <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-4 bg-canvas p-6">
+        <button
+          type="button"
+          onClick={onClose}
+          className="focus-ring absolute left-4 top-4 inline-flex h-10 w-10 items-center justify-center rounded-full border border-line bg-surface text-ink-muted transition hover:text-ink"
+          aria-label="Закрыть"
+          title="Закрыть (Esc)"
+        >
+          <X size={20} />
+        </button>
+        <p className="font-display text-2xl text-ink">
+          {total === 0 ? "В таблице нет видео" : "Все видео просмотрены"}
+        </p>
+        {total > 0 && (
+          <p className="text-sm text-ink-muted">
+            Просмотрено: {total} из {total}
+          </p>
+        )}
+        <button
+          type="button"
+          onClick={onClose}
+          className="focus-ring mt-2 inline-flex h-12 items-center justify-center rounded-xl bg-accent px-5 text-base font-medium text-surface shadow-card transition hover:bg-accent-hover"
+        >
+          Вернуться к таблице
+        </button>
+      </div>,
+      document.body,
+    );
+  }
+
+  // Трансформация карточки: либо «уходит» с экрана, либо тащится за курсором.
+  let cardTransform: string | undefined;
+  let cardOpacity: number | undefined;
+  if (exitDir) {
+    const sign = exitDir === "left" ? -1 : 1;
+    cardTransform = `translateX(${sign * 1500}px) rotate(${sign * 30}deg)`;
+    cardOpacity = 0;
+  } else if (drag) {
+    cardTransform = `translate(${drag.dx}px, ${drag.dy * 0.2}px) rotate(${drag.dx * 0.05}deg)`;
+  }
+
+  const embedUrl = buildInstagramEmbedUrl(current.url);
+  const author = current.author ?? "Автор не указан";
+  const summary = current.aiSummary;
+  const categoryLabel = formatAiCategory(
+    current.aiCategory,
+    current.aiCategorySuggestion,
+  );
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex flex-col bg-canvas">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-line bg-surface/80 px-4 py-3 backdrop-blur">
+        <button
+          type="button"
+          onClick={onClose}
+          className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-full border border-line bg-surface text-ink-muted transition hover:text-ink"
+          aria-label="Закрыть просмотр"
+          title="Esc"
+        >
+          <X size={20} />
+        </button>
+        <div className="text-sm font-medium text-ink-muted">
+          {index + 1} из {total}
+        </div>
+        <div className="w-10" aria-hidden />
+      </div>
+
+      {/* Card area */}
+      <div className="relative flex flex-1 items-center justify-center overflow-hidden px-2 py-4 sm:px-6">
+        <button
+          type="button"
+          onClick={() => triggerSwipe("left")}
+          aria-label="Предыдущее (←)"
+          title="←"
+          className="focus-ring absolute left-3 top-1/2 z-10 hidden h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-surface text-ink-muted shadow-card transition hover:bg-elevated hover:text-ink lg:inline-flex"
+        >
+          <ChevronLeft size={24} />
+        </button>
+        <button
+          type="button"
+          onClick={() => triggerSwipe("right")}
+          aria-label="Следующее (→)"
+          title="→"
+          className="focus-ring absolute right-3 top-1/2 z-10 hidden h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-surface text-ink-muted shadow-card transition hover:bg-elevated hover:text-ink lg:inline-flex"
+        >
+          <ChevronRight size={24} />
+        </button>
+
+        <div
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          style={{
+            transform: cardTransform,
+            opacity: cardOpacity,
+            transition:
+              drag !== null
+                ? "none"
+                : `transform ${ANIM_MS}ms ease, opacity ${ANIM_MS}ms ease`,
+            touchAction: "pan-y",
+          }}
+          className={clsx(
+            "flex h-full w-full max-w-[420px] flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-pop",
+            !drag && !exitDir && "cursor-grab active:cursor-grabbing",
+          )}
+        >
+          {/* Видео / fallback */}
+          <div className="relative w-full flex-1 overflow-hidden bg-elevated">
+            {embedUrl ? (
+              <iframe
+                key={current.id}
+                src={embedUrl}
+                title="Instagram embed"
+                className="h-full w-full"
+                allow="autoplay; encrypted-media; picture-in-picture; clipboard-write"
+                allowFullScreen
+                referrerPolicy="no-referrer"
+              />
+            ) : current.thumbnailUrl ? (
+              <div className="relative h-full w-full">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/thumbnail?url=${encodeURIComponent(current.thumbnailUrl)}`}
+                  alt=""
+                  referrerPolicy="no-referrer"
+                  className="h-full w-full object-cover"
+                />
+                <a
+                  href={current.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="focus-ring absolute left-1/2 top-1/2 inline-flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-xl bg-surface/95 px-5 py-3 text-sm font-medium text-ink shadow-pop transition hover:bg-surface"
+                >
+                  <ExternalLink size={16} />
+                  Открыть в Instagram
+                </a>
+              </div>
+            ) : (
+              <div className="flex h-full items-center justify-center p-6 text-center text-sm text-ink-muted">
+                Не удалось определить ссылку на видео
+              </div>
+            )}
+          </div>
+
+          {/* Инфо-панель: автор, AI-саммари, категория */}
+          <div className="flex flex-col gap-2 border-t border-line p-4">
+            <div className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
+              {author}
+            </div>
+            {summary ? (
+              <p className="line-clamp-2 text-sm leading-snug text-ink">{summary}</p>
+            ) : (
+              <p className="text-sm italic text-ink-faint">
+                Саммари ещё не готово
+              </p>
+            )}
+            {categoryLabel && (
+              <div>
+                <EntityChip name={categoryLabel} color="blue" size="sm" />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Подсказка по управлению */}
+      <div className="border-t border-line px-4 py-2 text-center text-xs text-ink-faint">
+        ← мимо · → следующее · клавиши ← / → · Esc — закрыть
+      </div>
+
+      {/* Меню после свайпа влево */}
+      {postLeftMenu && (
+        <div
+          className="absolute inset-0 z-[110] flex items-center justify-center bg-ink/60 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="flex w-full max-w-sm flex-col gap-3 rounded-2xl border border-line bg-surface p-5 shadow-pop">
+            <h3 className="font-display text-lg text-ink">
+              Что сделать с видео?
+            </h3>
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={busy}
+              className="focus-ring inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+            >
+              <Trash2 size={18} />
+              Удалить
+            </button>
+            <button
+              type="button"
+              onClick={handleBookmark}
+              disabled={busy}
+              className="focus-ring inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-line bg-elevated px-4 text-sm font-semibold text-ink transition hover:bg-line/40 disabled:opacity-50"
+            >
+              <Bookmark size={18} />В закладки
+            </button>
+            <button
+              type="button"
+              onClick={() => setPostLeftMenu(false)}
+              disabled={busy}
+              className="focus-ring inline-flex h-10 items-center justify-center rounded-xl text-sm text-ink-muted transition hover:bg-elevated disabled:opacity-50"
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
+    </div>,
+    document.body,
+  );
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { Maximize2, Minimize2, PlayCircle } from "lucide-react";
 import clsx from "clsx";
 import type { MyCategory, Rating, Tag, Video } from "@/lib/types";
 import {
@@ -20,6 +20,7 @@ import EntityManageModal from "./EntityManageModal";
 import BulkActionBar from "./BulkActionBar";
 import BatchProgressBar from "./BatchProgressBar";
 import ConfirmDialog from "./ConfirmDialog";
+import SwipeViewer from "./SwipeViewer";
 
 interface AnalystWorkspaceProps {
   initialVideos: Video[];
@@ -49,6 +50,9 @@ export default function AnalystWorkspace({
     | null
   >(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  // Tinder-режим: храним снимок отфильтрованного списка на момент открытия,
+  // чтобы удаления и переносы в закладки не сбивали итерацию.
+  const [viewerSnapshot, setViewerSnapshot] = useState<Video[] | null>(null);
 
   // Когда сервер обновил пропсы (после addVideo + revalidatePath) — синкаем state.
   useEffect(() => setVideos(initialVideos), [initialVideos]);
@@ -225,6 +229,32 @@ export default function AnalystWorkspace({
     }
   }
 
+  // ------- Tinder-режим -------
+
+  // Удаление прямо из режима — без диалога подтверждения, действие изолировано
+  // в режиме «быстрого разбора», у пользователя есть мини-меню как страховка.
+  const handleViewerDelete = useCallback(async (videoId: string) => {
+    const snapshot = videos;
+    setVideos((prev) => prev.filter((v) => v.id !== videoId));
+    try {
+      await deleteVideo(videoId);
+    } catch (e) {
+      setVideos(snapshot);
+      throw e;
+    }
+  }, [videos]);
+
+  const handleViewerBookmark = useCallback(async (videoId: string) => {
+    const snapshot = videos;
+    setVideos((prev) => prev.filter((v) => v.id !== videoId));
+    try {
+      await svc.moveToBookmarks(videoId);
+    } catch (e) {
+      setVideos(snapshot);
+      throw e;
+    }
+  }, [videos]);
+
   // ------- Мутации справочников -------
 
   function nextColor(): EntityColor {
@@ -319,15 +349,28 @@ export default function AnalystWorkspace({
             ? "Таблица пуста"
             : `Показано: ${filtered.length} ${plural(filtered.length, "видео", "видео", "видео")}`}
         </div>
-        <button
-          type="button"
-          onClick={() => setFullscreen((v) => !v)}
-          className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-surface text-ink-muted transition hover:border-line-strong hover:text-ink"
-          aria-label={fullscreen ? "Свернуть таблицу" : "Развернуть таблицу"}
-          title={fullscreen ? "Свернуть (Esc)" : "Развернуть"}
-        >
-          {fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setViewerSnapshot(filtered)}
+            disabled={filtered.length === 0}
+            className="focus-ring inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm font-medium text-ink-muted transition hover:border-line-strong hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Режим просмотра"
+            title="Просмотр карточками со свайпами"
+          >
+            <PlayCircle size={18} />
+            <span className="hidden sm:inline">Режим просмотра</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFullscreen((v) => !v)}
+            className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-surface text-ink-muted transition hover:border-line-strong hover:text-ink"
+            aria-label={fullscreen ? "Свернуть таблицу" : "Развернуть таблицу"}
+            title={fullscreen ? "Свернуть (Esc)" : "Развернуть"}
+          >
+            {fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+          </button>
+        </div>
       </div>
 
       <div className={clsx("min-w-0", fullscreen ? "min-h-0 flex-1" : "")}>
@@ -403,6 +446,15 @@ export default function AnalystWorkspace({
         onDelete={deleteTag}
         deleteConfirmHint="Удалить тег? Он снимется со всех видео."
       />
+
+      {viewerSnapshot && (
+        <SwipeViewer
+          videos={viewerSnapshot}
+          onClose={() => setViewerSnapshot(null)}
+          onDelete={handleViewerDelete}
+          onMoveToBookmarks={handleViewerBookmark}
+        />
+      )}
     </div>
   );
 }
