@@ -5,6 +5,7 @@ import type {
   AiStatus,
   MyCategory,
   ProcessingStatus,
+  Rating,
   Tag,
   TranscriptStatus,
   Video,
@@ -28,6 +29,7 @@ interface VideoRow {
   ai_category_suggestion: string | null;
   my_category_id: string | null;
   note: string | null;
+  rating: string | null;
   processing_status: string | null;
   processing_error: string | null;
   processed_at: string | null;
@@ -72,6 +74,7 @@ function mapVideo(row: VideoRow): Video {
     myCategoryId: row.my_category_id,
     tagIds: (row.video_tags ?? []).map((t) => t.tag_id),
     note: row.note,
+    rating: (row.rating as Rating | null) ?? null,
     processingStatus: (row.processing_status as ProcessingStatus | null) ?? "pending",
     processingError: row.processing_error,
     processedAt: row.processed_at,

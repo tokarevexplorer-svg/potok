@@ -7,9 +7,11 @@ import { aiCategoryLabels } from "@/lib/aiCategories";
 import {
   initialFilterState,
   type FilterState,
+  type RatingFilter,
   type SortKey,
   type TranscriptFilter,
 } from "@/lib/videoFilters";
+import { RATING_ORDER, RATINGS } from "@/lib/rating";
 import type { AiCategory, MyCategory, Tag } from "@/lib/types";
 import EntityChip from "./EntityChip";
 import EntitySelectPopover, {
@@ -68,6 +70,7 @@ export default function FilterBar({
       filters.tagIds.length > 0 ||
       filters.author !== "any" ||
       filters.transcript !== "any" ||
+      filters.rating !== "any" ||
       filters.sortBy !== initialFilterState.sortBy ||
       filters.sortAsc !== initialFilterState.sortAsc,
     [filters],
@@ -190,6 +193,22 @@ export default function FilterBar({
             {(Object.keys(transcriptLabels) as TranscriptFilter[]).map((k) => (
               <option key={k} value={k}>
                 {transcriptLabels[k]}
+              </option>
+            ))}
+          </select>
+        </FilterChip>
+
+        <FilterChip label="Оценка">
+          <select
+            value={filters.rating}
+            onChange={(e) => update("rating", e.target.value as RatingFilter)}
+            className="bg-transparent text-sm text-ink outline-none"
+          >
+            <option value="any">Любая</option>
+            <option value="none">Не оценено</option>
+            {RATING_ORDER.map((r) => (
+              <option key={r} value={r}>
+                {RATINGS[r].emoji} {RATINGS[r].label}
               </option>
             ))}
           </select>

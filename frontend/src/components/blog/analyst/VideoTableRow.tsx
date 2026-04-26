@@ -6,6 +6,7 @@ import type {
   AiStatus,
   MyCategory,
   ProcessingStatus,
+  Rating,
   Tag,
   TranscriptStatus,
   Video,
@@ -151,6 +152,7 @@ export interface VideoTableRowCallbacks {
   onDetachTag: (videoId: string, tagId: string) => Promise<void>;
   onCreateTag: (name: string) => Promise<Tag>;
   onSaveNote: (videoId: string, value: string | null) => Promise<void>;
+  onSelectRating: (videoId: string, rating: Rating | null) => Promise<void>;
   onManageMyCategories: () => void;
   onManageTags: () => void;
   // Чекбокс выбора и удаление одной строки.
@@ -176,6 +178,7 @@ export default function VideoTableRow({
   onDetachTag,
   onCreateTag,
   onSaveNote,
+  onSelectRating,
   onManageMyCategories,
   onManageTags,
   onToggleSelected,
@@ -190,7 +193,14 @@ export default function VideoTableRow({
   function renderCell(key: string) {
     switch (key) {
       case "thumbnail":
-        return <ThumbnailCell url={video.thumbnailUrl} />;
+        return (
+          <ThumbnailCell
+            url={video.thumbnailUrl}
+            videoId={video.id}
+            rating={video.rating}
+            onSelectRating={onSelectRating}
+          />
+        );
       case "publishedAt":
         return refCell(
           video.publishedAt ? (

@@ -1,10 +1,12 @@
 // Чистые функции фильтрации/сортировки. UI-состояние держит React,
 // сюда передаёт фильтры → получает отсортированный массив видео.
 
-import type { AiCategory, Video } from "@/lib/types";
+import type { AiCategory, Rating, Video } from "@/lib/types";
 
 export type SortKey = "createdAt" | "publishedAt" | "views" | "likes" | "virality";
 export type TranscriptFilter = "any" | "with" | "without";
+// «none» — только не оценённые. Иначе — конкретная оценка или «any».
+export type RatingFilter = "any" | "none" | Rating;
 
 export interface FilterState {
   search: string;
@@ -15,6 +17,7 @@ export interface FilterState {
   tagIds: string[];
   author: string | "any";
   transcript: TranscriptFilter;
+  rating: RatingFilter;
   sortBy: SortKey;
   // true = по возрастанию. По умолчанию false (свежее/больше — выше).
   sortAsc: boolean;
@@ -27,6 +30,7 @@ export const initialFilterState: FilterState = {
   tagIds: [],
   author: "any",
   transcript: "any",
+  rating: "any",
   sortBy: "createdAt",
   sortAsc: false,
 };
@@ -51,6 +55,12 @@ function matchesTranscript(v: Video, mode: TranscriptFilter): boolean {
   if (mode === "any") return true;
   const has = Boolean(v.transcript) && v.transcriptStatus === "done";
   return mode === "with" ? has : !has;
+}
+
+function matchesRating(v: Video, mode: RatingFilter): boolean {
+  if (mode === "any") return true;
+  if (mode === "none") return v.rating === null;
+  return v.rating === mode;
 }
 
 function compare(a: Video, b: Video, key: SortKey): number {
@@ -78,6 +88,7 @@ export function applyFilters(videos: Video[], f: FilterState): Video[] {
     if (f.author !== "any" && v.author !== f.author) return false;
     if (!matchesTags(v, f.tagIds)) return false;
     if (!matchesTranscript(v, f.transcript)) return false;
+    if (!matchesRating(v, f.rating)) return false;
     if (!matchesSearch(v, f.search.trim())) return false;
     return true;
   });
