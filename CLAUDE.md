@@ -480,7 +480,7 @@ superapp/
 
 ---
 
-**Сессия 14: Таблица закладок + поле оценки** (завершена 2026-04-26)
+**Сессия 14: Таблица закладок + поле оценки** (завершена 2026-04-26 — задеплоено и проверено в проде)
 - Миграция `supabase/migrations/0007_bookmarks_and_rating.sql`:
   - В `videos` добавлен столбец `rating` (`text` с CHECK на `'verified' | 'super' | 'repeat'`, дефолт `null`). Частичный индекс `videos_rating_idx where rating is not null` — фильтрация по оценке быстрая, не оценённые видео индекс не раздувают
   - Новая таблица `bookmarks` — структура повторяет основные поля `videos`: url (unique), published_at, author/author_url, caption, thumbnail_url, статистика (views/likes/comments/shares/virality_score), AI-поля (ai_summary, transcript, ai_category, ai_category_suggestion) и `user_note`. **Не связана с videos через FK** — это отдельная сущность «не для блога, но не хочу терять». Триггер `bookmarks_set_updated_at`. RLS открытая, как у остальных таблиц
