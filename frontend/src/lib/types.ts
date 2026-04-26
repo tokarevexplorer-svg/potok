@@ -16,6 +16,12 @@ export type AiStatus =
   | "skipped"
   | "error";
 
+// Оценка пользователя — три уровня + null (не оценено).
+//   verified — видео просмотрено и подтверждено как полезное (✅)
+//   super    — выдающееся, вернуться первым (🔥)
+//   repeat   — снять такое же видео слово в слово (🔄)
+export type Rating = "verified" | "super" | "repeat";
+
 export type AiCategory =
   | "vibe-coding"
   | "history"
@@ -68,6 +74,7 @@ export interface Video {
   myCategoryId: string | null;
   tagIds: string[];
   note: string | null;
+  rating: Rating | null;
 
   processingStatus: ProcessingStatus;
   processingError: string | null;

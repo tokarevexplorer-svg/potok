@@ -19,7 +19,7 @@ export const columnGroupLabels: Record<ColumnGroup, string> = {
 };
 
 export const videoColumns: VideoColumn[] = [
-  { key: "thumbnail", label: "Превью", group: "ref", minWidth: "min-w-[84px]" },
+  { key: "thumbnail", label: "Превью", group: "ref", minWidth: "min-w-[120px]" },
   { key: "publishedAt", label: "Дата", group: "ref", minWidth: "min-w-[112px]" },
   { key: "author", label: "Автор", group: "ref", minWidth: "min-w-[160px]" },
   { key: "caption", label: "Описание", group: "ref", minWidth: "min-w-[280px]" },

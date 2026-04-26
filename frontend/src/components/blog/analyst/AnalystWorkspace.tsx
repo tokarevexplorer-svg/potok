@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import clsx from "clsx";
-import type { MyCategory, Tag, Video } from "@/lib/types";
+import type { MyCategory, Rating, Tag, Video } from "@/lib/types";
 import {
   applyFilters,
   initialFilterState,
@@ -139,6 +139,20 @@ export default function AnalystWorkspace({
       );
       try {
         await svc.setVideoNote(videoId, value);
+      } catch (e) {
+        alert((e as Error).message);
+      }
+    },
+    [],
+  );
+
+  const handleSelectRating = useCallback(
+    async (videoId: string, rating: Rating | null) => {
+      setVideos((prev) =>
+        prev.map((v) => (v.id === videoId ? { ...v, rating } : v)),
+      );
+      try {
+        await svc.setVideoRating(videoId, rating);
       } catch (e) {
         alert((e as Error).message);
       }
@@ -332,6 +346,7 @@ export default function AnalystWorkspace({
             onDetachTag={handleDetachTag}
             onCreateTag={handleCreateTag}
             onSaveNote={handleSaveNote}
+            onSelectRating={handleSelectRating}
             onManageMyCategories={() => setManageMode("categories")}
             onManageTags={() => setManageMode("tags")}
             onToggleSelected={handleToggleSelected}

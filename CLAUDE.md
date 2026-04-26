@@ -480,20 +480,43 @@ superapp/
 
 ---
 
+**Сессия 14: Таблица закладок + поле оценки** (завершена 2026-04-26)
+- Миграция `supabase/migrations/0007_bookmarks_and_rating.sql`:
+  - В `videos` добавлен столбец `rating` (`text` с CHECK на `'verified' | 'super' | 'repeat'`, дефолт `null`). Частичный индекс `videos_rating_idx where rating is not null` — фильтрация по оценке быстрая, не оценённые видео индекс не раздувают
+  - Новая таблица `bookmarks` — структура повторяет основные поля `videos`: url (unique), published_at, author/author_url, caption, thumbnail_url, статистика (views/likes/comments/shares/virality_score), AI-поля (ai_summary, transcript, ai_category, ai_category_suggestion) и `user_note`. **Не связана с videos через FK** — это отдельная сущность «не для блога, но не хочу терять». Триггер `bookmarks_set_updated_at`. RLS открытая, как у остальных таблиц
+  - Категории/теги/оценка в bookmarks **не дублируются** — это сущности блога, в закладках не нужны
+- Новый тип `Rating = "verified" | "super" | "repeat"` в `frontend/src/lib/types.ts`. Поле `rating: Rating | null` добавлено в интерфейс `Video`. Маппинг в `videosService.ts` читает столбец `rating`
+- `frontend/src/lib/rating.ts` — единый конфиг: `RATINGS` (slug → `{ emoji, label }`) + `RATING_ORDER`. Меняешь подпись или эмодзи здесь — обновляется и поповер ячейки, и фильтр в шапке
+- `frontend/src/lib/manualFieldsService.ts`:
+  - `setVideoRating(videoId, rating)` — браузерная мутация, как `setVideoMyCategory`
+  - `moveToBookmarks(videoId)` — select полей видео → upsert в bookmarks (`onConflict: "url", ignoreDuplicates: true`) → delete из videos. Транзакций между таблицами в supabase-js из браузера нет; порядок «insert до delete» гарантирует, что данные не потеряются, а `ignoreDuplicates` защищает от случайного двойного переноса. Используется не сейчас — это фундамент под Tinder-режим (Сессия 15)
+- Компоненты:
+  - `frontend/src/components/blog/analyst/RatingCell.tsx` — кнопка-эмодзи с поповером. Если оценка стоит — кнопка с фоном `bg-elevated`, эмодзи всегда видна. Если оценки нет — иконка-звёздочка `Star`, видна только при hover строки (`group-hover:opacity-100` — `tr` имеет класс `group`). Поповер: три кнопки (✅/🔥/🔄), повторный клик по выбранной снимает оценку, либо «Снять оценку» снизу. `position: fixed` через `getBoundingClientRect` + `createPortal` в `document.body` — не клипается `overflow:hidden` таблицы, закрывается по Esc/клику вне/скроллу — копия паттерна из `EntitySelectPopover`
+  - `ThumbnailCell.tsx` — теперь принимает `videoId`, `rating`, `onSelectRating` и рисует превью + RatingCell в `flex gap-2`. Min-width столбца «Превью» поднят с 84px до 120px, чтобы вместить и картинку, и кнопку оценки
+  - `VideoTableRow.tsx` — в `VideoTableRowCallbacks` добавлен `onSelectRating`, прокинут до ячейки превью
+  - `AnalystWorkspace.tsx` — `handleSelectRating` повторяет паттерн `handleSelectMyCategory`: оптимистичное обновление state → запрос в Supabase → alert при ошибке
+- Фильтр по оценке:
+  - `frontend/src/lib/videoFilters.ts` — тип `RatingFilter = "any" | "none" | Rating`, поле `rating` в `FilterState`, чистая `matchesRating()`. Учтено в `isDirty` и в `applyFilters`
+  - `FilterBar.tsx` — новый чип «Оценка»: select с пунктами «Любая», «Не оценено», «✅ Верифицировано», «🔥 Супер», «🔄 Повторить». Список оценок и эмодзи берутся из `RATING_ORDER`/`RATINGS`
+
+Решения, принятые намеренно:
+- **Оценка хранится в `videos`, а не в отдельной таблице.** Каждое видео имеет максимум одну оценку — связь 1:1 не нуждается в join-таблице (в отличие от тегов, где many-to-many)
+- **`rating` — `text` с CHECK, а не Postgres `enum`-тип.** Расширять enum миграциями неудобно; CHECK легче править — только альтер таблицы. Меньше текущих и будущих ошибок
+- **bookmarks не связан FK с videos.** Перенос — это «вырезать и вставить»: после `moveToBookmarks` исходной строки в videos нет, FK был бы лишней связью
+- **Фронтовый `moveToBookmarks` сейчас не вызывается из UI.** Появится в Сессии 15 (Tinder-режим, свайп влево → «В закладки»). Здесь — только подготовка слоя данных
+
+Ручные шаги для Влада (после pull):
+1. **Миграция Supabase**: Dashboard → SQL Editor → вставить целиком `supabase/migrations/0007_bookmarks_and_rating.sql` → Run. Миграция ничего не дропает: добавляет столбец `rating` в `videos` и создаёт новую таблицу `bookmarks`
+2. Перезапускать ничего не нужно — это правки только во фронте. Если фронт уже запущен, изменения подтянутся hot reload-ом, иначе `& "C:\Program Files\nodejs\npm.cmd" run dev` в `frontend/`
+3. Открой страницу «База референсов». Наведи мышь на любое видео — в ячейке превью справа от картинки появится иконка-звёздочка. Кликни → поповер с тремя оценками (✅ Верифицировано / 🔥 Супер / 🔄 Повторить). Выбери любую — рядом с превью встанет соответствующее эмодзи
+4. В фильтрах сверху появился новый чип «Оценка» — выбери «✅ Верифицировано» или «Не оценено», таблица отфильтруется
+
+---
+
 ### 🔄 Текущая задача
-*(нет — сессия 13 завершена, прод живёт по https://potok-omega.vercel.app, следующая сессия 14)*
+*(нет — сессия 14 завершена, следующая — Сессия 15: Tinder-режим)*
 
 ### 📋 Следующие задачи
-
-**Сессия 14: Таблица закладок + поле оценки**
-Цель: подготовить фундамент для Tinder-режима — закладки и оценки.
-
-Что сделать:
-- **Миграция**: новая таблица `bookmarks` в Supabase — структура аналогична `videos` (те же поля: url, author, description, thumbnail_url, views, likes, comments, virality, ai_summary, transcript, ai_category, и т.д.). RLS открытая. Отдельная таблица, НЕ связана с videos — это отдельная сущность "не для блога, но не хочу терять"
-- **Миграция**: добавить поле `rating` в таблицу `videos` — enum (`null` / `verified` / `super` / `repeat`). Дефолт `null` (не оценено). Индекс по `rating` для фильтрации
-- **Фронтенд — отображение оценки в таблице**: рядом с превью (слева или справа) показывать эмодзи оценки: ✅ / 🔥 / 🔄. Если `null` — ничего не показывать. Клик по эмодзи-зоне → попover с тремя вариантами + "Снять оценку". Работает как MyCategoryCell — single select
-- **Фильтрация по оценке**: добавить фильтр "Оценка" в FilterBar (Любая / Не оценено / ✅ Верифицировано / 🔥 Супер / 🔄 Повторить)
-- **Server action `moveToBookmarks`**: принимает videoId → копирует все данные из `videos` в `bookmarks` → удаляет из `videos`. Одной транзакцией
 
 ---
 
