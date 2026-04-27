@@ -11,18 +11,25 @@ import {
   X,
 } from "lucide-react";
 import clsx from "clsx";
-import type { Video } from "@/lib/types";
+import type { MyCategory, Tag, Video } from "@/lib/types";
 import { buildInstagramEmbedUrl } from "@/lib/instagramEmbed";
 import { formatAiCategory } from "@/lib/aiCategories";
+import type { SwipeRightPayload } from "@/lib/manualFieldsService";
 import EntityChip from "./EntityChip";
+import SwipeRightFlow from "./SwipeRightFlow";
 
 interface SwipeViewerProps {
   /** Снимок видео на момент открытия — итерация по нему фиксирована. */
   videos: Video[];
   startIndex?: number;
+  myCategories: MyCategory[];
+  tags: Tag[];
   onClose: () => void;
   onDelete: (videoId: string) => Promise<void>;
   onMoveToBookmarks: (videoId: string) => Promise<void>;
+  onCreateMyCategory: (name: string) => Promise<MyCategory>;
+  onCreateTag: (name: string) => Promise<Tag>;
+  onSubmitRightFlow: (videoId: string, payload: SwipeRightPayload) => Promise<void>;
 }
 
 const SWIPE_THRESHOLD = 110;
@@ -31,14 +38,19 @@ const ANIM_MS = 250;
 
 // Полноэкранный Tinder-режим: одна карточка по центру, свайп влево/вправо
 // (мышь, тач, клавиатура), счётчик прогресса. Влево → мини-меню «Удалить /
-// В закладки». Вправо — в текущей сессии просто переход к следующей карточке
-// (воронку добавит Сессия 16).
+// В закладки». Вправо → воронка SwipeRightFlow (категория → заметка/теги →
+// оценка), после неё — переход к следующей карточке.
 export default function SwipeViewer({
   videos: initialVideos,
   startIndex = 0,
+  myCategories,
+  tags,
   onClose,
   onDelete,
   onMoveToBookmarks,
+  onCreateMyCategory,
+  onCreateTag,
+  onSubmitRightFlow,
 }: SwipeViewerProps) {
   // Снапшот списка фиксируем здесь — пока пользователь смотрит, удаления и
   // перенос в закладки изменяют parent state, но мы продолжаем итерацию.
@@ -49,6 +61,8 @@ export default function SwipeViewer({
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
   const [exitDir, setExitDir] = useState<"left" | "right" | null>(null);
   const [postLeftMenu, setPostLeftMenu] = useState(false);
+  // Воронка после правого свайпа — рендерится поверх карточки.
+  const [rightFlowOpen, setRightFlowOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const start = useRef<{ x: number; y: number; t: number } | null>(null);
@@ -70,28 +84,32 @@ export default function SwipeViewer({
     setExitDir(null);
     setDrag(null);
     setPostLeftMenu(false);
+    setRightFlowOpen(false);
   }, [index]);
 
   const triggerSwipe = useCallback(
     (direction: "left" | "right") => {
-      if (busy || exitDir || postLeftMenu) return;
+      if (busy || exitDir || postLeftMenu || rightFlowOpen) return;
       if (!current) return;
+      // Вправо: открываем воронку без анимации ухода — карточка остаётся
+      // на месте (видна за затемнённой подложкой), листание произойдёт после
+      // сохранения. Влево: классическая анимация + мини-меню.
+      if (direction === "right") {
+        setDrag(null);
+        setRightFlowOpen(true);
+        return;
+      }
       setExitDir(direction);
       setDrag(null);
-      // После CSS-анимации: либо показываем меню (влево), либо листаем дальше.
       window.setTimeout(() => {
-        if (direction === "left") {
-          setPostLeftMenu(true);
-        } else {
-          setIndex((i) => i + 1);
-        }
+        setPostLeftMenu(true);
       }, ANIM_MS);
     },
-    [busy, exitDir, postLeftMenu, current],
+    [busy, exitDir, postLeftMenu, rightFlowOpen, current],
   );
 
   function onPointerDown(e: React.PointerEvent) {
-    if (busy || exitDir || postLeftMenu) return;
+    if (busy || exitDir || postLeftMenu || rightFlowOpen) return;
     // Не перехватываем тачи на iframe — Instagram должен получать свои клики.
     const target = e.target as HTMLElement;
     if (target.tagName === "IFRAME") return;
@@ -121,9 +139,11 @@ export default function SwipeViewer({
     }
   }
 
-  // Клавиатура: Esc закрывает (или скрывает меню), стрелки листают.
+  // Клавиатура: Esc закрывает (или скрывает меню), стрелки листают. Когда
+  // открыта воронка правого свайпа — стрелки игнорируем (Esc ловит сама воронка).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (rightFlowOpen) return;
       if (e.key === "Escape") {
         if (postLeftMenu) setPostLeftMenu(false);
         else onClose();
@@ -140,7 +160,7 @@ export default function SwipeViewer({
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [postLeftMenu, onClose, triggerSwipe]);
+  }, [postLeftMenu, rightFlowOpen, onClose, triggerSwipe]);
 
   async function handleDelete() {
     if (!current || busy) return;
@@ -168,6 +188,15 @@ export default function SwipeViewer({
       setBusy(false);
       alert((e as Error).message);
     }
+  }
+
+  async function handleRightFlowSubmit(
+    videoId: string,
+    payload: SwipeRightPayload,
+  ) {
+    await onSubmitRightFlow(videoId, payload);
+    setRightFlowOpen(false);
+    setIndex((i) => i + 1);
   }
 
   if (typeof document === "undefined") return null;
@@ -346,6 +375,19 @@ export default function SwipeViewer({
       <div className="border-t border-line px-4 py-2 text-center text-xs text-ink-faint">
         ← мимо · → следующее · клавиши ← / → · Esc — закрыть
       </div>
+
+      {/* Воронка после свайпа вправо */}
+      {rightFlowOpen && current && (
+        <SwipeRightFlow
+          video={current}
+          myCategories={myCategories}
+          tags={tags}
+          onCreateMyCategory={onCreateMyCategory}
+          onCreateTag={onCreateTag}
+          onSubmit={handleRightFlowSubmit}
+          onCancel={() => setRightFlowOpen(false)}
+        />
+      )}
 
       {/* Меню после свайпа влево */}
       {postLeftMenu && (
