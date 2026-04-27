@@ -152,7 +152,7 @@ export interface VideoTableRowCallbacks {
   onDetachTag: (videoId: string, tagId: string) => Promise<void>;
   onCreateTag: (name: string) => Promise<Tag>;
   onSaveNote: (videoId: string, value: string | null) => Promise<void>;
-  onSelectRating: (videoId: string, rating: Rating | null) => Promise<void>;
+  onUpdateRatings: (videoId: string, ratings: Rating[]) => Promise<void>;
   onManageMyCategories: () => void;
   onManageTags: () => void;
   // Чекбокс выбора и удаление одной строки.
@@ -178,7 +178,7 @@ export default function VideoTableRow({
   onDetachTag,
   onCreateTag,
   onSaveNote,
-  onSelectRating,
+  onUpdateRatings,
   onManageMyCategories,
   onManageTags,
   onToggleSelected,
@@ -197,8 +197,8 @@ export default function VideoTableRow({
           <ThumbnailCell
             url={video.thumbnailUrl}
             videoId={video.id}
-            rating={video.rating}
-            onSelectRating={onSelectRating}
+            ratings={video.ratings}
+            onUpdateRatings={onUpdateRatings}
           />
         );
       case "publishedAt":

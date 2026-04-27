@@ -45,8 +45,9 @@ export default function SwipeRightFlow({
   );
   const [note, setNote] = useState("");
   const [tagIds, setTagIds] = useState<string[]>([]);
-  // Свайп вправо = «одобрено», поэтому оценка стартует с verified.
-  const [rating, setRating] = useState<Rating | null>("verified");
+  // Свайп вправо = «одобрено», поэтому verified включён по умолчанию. Можно
+  // докинуть ещё 🔥/🔄 — multi-select.
+  const [ratings, setRatings] = useState<Rating[]>(["verified"]);
 
   // Esc на любом шаге = закрыть воронку.
   useEffect(() => {
@@ -68,7 +69,7 @@ export default function SwipeRightFlow({
     const trimmed = note.trim();
     if (trimmed.length > 0) payload.note = trimmed;
     if (tagIds.length > 0) payload.tagIdsToAttach = tagIds;
-    payload.rating = rating;
+    payload.ratings = ratings;
     Object.assign(payload, extraOverrides ?? {});
     try {
       await onSubmit(video.id, payload);
@@ -126,10 +127,14 @@ export default function SwipeRightFlow({
 
         {step === 3 && (
           <RatingStep
-            rating={rating}
-            onPick={setRating}
+            ratings={ratings}
+            onToggle={(r) =>
+              setRatings((prev) =>
+                prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r],
+              )
+            }
             onSubmit={() => commit()}
-            onSkip={() => commit({ rating: "verified" })}
+            onSkip={() => commit({ ratings: ["verified"] })}
             busy={busy}
           />
         )}
@@ -448,14 +453,14 @@ function NoteTagsStep({
 // ---------- Шаг 3: Оценка ----------
 
 function RatingStep({
-  rating,
-  onPick,
+  ratings,
+  onToggle,
   onSubmit,
   onSkip,
   busy,
 }: {
-  rating: Rating | null;
-  onPick: (r: Rating | null) => void;
+  ratings: Rating[];
+  onToggle: (r: Rating) => void;
   onSubmit: () => void;
   onSkip: () => void;
   busy: boolean;
@@ -465,12 +470,12 @@ function RatingStep({
       <div className="grid grid-cols-3 gap-2">
         {RATING_ORDER.map((r) => {
           const meta = RATINGS[r];
-          const on = rating === r;
+          const on = ratings.includes(r);
           return (
             <button
               key={r}
               type="button"
-              onClick={() => onPick(on ? null : r)}
+              onClick={() => onToggle(r)}
               aria-pressed={on}
               className={clsx(
                 "focus-ring flex flex-col items-center justify-center gap-1 rounded-xl border px-2 py-3 text-xs font-medium transition",
@@ -487,8 +492,9 @@ function RatingStep({
       </div>
 
       <p className="text-xs text-ink-faint">
-        Свайп вправо = одобрено. По умолчанию — ✅ Верифицировано. Можно
-        переключить на 🔥 или 🔄, или снять оценку повторным нажатием.
+        Свайп вправо = одобрено: ✅ Верифицировано включено по умолчанию. Можно
+        дополнительно выбрать 🔥 и/или 🔄 — сохранятся все отмеченные. Повторный
+        клик снимает оценку.
       </p>
 
       <div className="flex items-center justify-between pt-1">

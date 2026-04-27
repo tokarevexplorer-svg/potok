@@ -59,8 +59,8 @@ function matchesTranscript(v: Video, mode: TranscriptFilter): boolean {
 
 function matchesRating(v: Video, mode: RatingFilter): boolean {
   if (mode === "any") return true;
-  if (mode === "none") return v.rating === null;
-  return v.rating === mode;
+  if (mode === "none") return v.ratings.length === 0;
+  return v.ratings.includes(mode);
 }
 
 function compare(a: Video, b: Video, key: SortKey): number {

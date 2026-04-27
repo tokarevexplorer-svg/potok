@@ -151,13 +151,13 @@ export default function AnalystWorkspace({
     [],
   );
 
-  const handleSelectRating = useCallback(
-    async (videoId: string, rating: Rating | null) => {
+  const handleUpdateRatings = useCallback(
+    async (videoId: string, ratings: Rating[]) => {
       setVideos((prev) =>
-        prev.map((v) => (v.id === videoId ? { ...v, rating } : v)),
+        prev.map((v) => (v.id === videoId ? { ...v, ratings } : v)),
       );
       try {
-        await svc.setVideoRating(videoId, rating);
+        await svc.setVideoRatings(videoId, ratings);
       } catch (e) {
         alert((e as Error).message);
       }
@@ -268,7 +268,7 @@ export default function AnalystWorkspace({
           if (payload.myCategoryId !== undefined)
             next.myCategoryId = payload.myCategoryId;
           if (payload.note !== undefined) next.note = payload.note;
-          if (payload.rating !== undefined) next.rating = payload.rating;
+          if (payload.ratings !== undefined) next.ratings = payload.ratings;
           if (payload.tagIdsToAttach && payload.tagIdsToAttach.length > 0) {
             const set = new Set(next.tagIds);
             for (const id of payload.tagIdsToAttach) set.add(id);
@@ -421,7 +421,7 @@ export default function AnalystWorkspace({
             onDetachTag={handleDetachTag}
             onCreateTag={handleCreateTag}
             onSaveNote={handleSaveNote}
-            onSelectRating={handleSelectRating}
+            onUpdateRatings={handleUpdateRatings}
             onManageMyCategories={() => setManageMode("categories")}
             onManageTags={() => setManageMode("tags")}
             onToggleSelected={handleToggleSelected}
