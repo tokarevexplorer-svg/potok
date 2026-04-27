@@ -74,7 +74,9 @@ export interface Video {
   myCategoryId: string | null;
   tagIds: string[];
   note: string | null;
-  rating: Rating | null;
+  // Можно проставить несколько одновременно: например, видео и
+  // «верифицировано», и «супер». Пустой массив = не оценено.
+  ratings: Rating[];
 
   processingStatus: ProcessingStatus;
   processingError: string | null;

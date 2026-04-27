@@ -8,17 +8,17 @@ import RatingCell from "./RatingCell";
 interface ThumbnailCellProps {
   url: string | null;
   videoId: string;
-  rating: Rating | null;
-  onSelectRating: (videoId: string, rating: Rating | null) => Promise<void>;
+  ratings: Rating[];
+  onUpdateRatings: (videoId: string, ratings: Rating[]) => Promise<void>;
 }
 
-// Превью + эмодзи оценки рядом. Клик по картинке — модалка увеличения,
-// клик по эмодзи — поповер выбора оценки.
+// Превью + эмодзи оценок рядом. Клик по картинке — модалка увеличения,
+// клик по эмодзи — поповер multi-select.
 export default function ThumbnailCell({
   url,
   videoId,
-  rating,
-  onSelectRating,
+  ratings,
+  onUpdateRatings,
 }: ThumbnailCellProps) {
   const [open, setOpen] = useState(false);
 
@@ -51,8 +51,8 @@ export default function ThumbnailCell({
 
       <RatingCell
         videoId={videoId}
-        rating={rating}
-        onSelect={onSelectRating}
+        ratings={ratings}
+        onChange={onUpdateRatings}
       />
 
       {proxied && (

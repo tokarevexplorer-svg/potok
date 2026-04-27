@@ -9,16 +9,16 @@ import { RATING_ORDER, RATINGS } from "@/lib/rating";
 
 interface RatingCellProps {
   videoId: string;
-  rating: Rating | null;
-  onSelect: (videoId: string, rating: Rating | null) => Promise<void>;
+  ratings: Rating[];
+  onChange: (videoId: string, ratings: Rating[]) => Promise<void>;
 }
 
-const POPOVER_WIDTH = 220;
+const POPOVER_WIDTH = 240;
 
-// Кнопка-эмодзи под/рядом с превью. Клик открывает поповер с тремя
-// вариантами оценки + «Снять оценку». Single-select — повторный клик по той
-// же оценке снимает её.
-export default function RatingCell({ videoId, rating, onSelect }: RatingCellProps) {
+// Кнопка-эмодзи рядом с превью. Multi-select: можно проставить несколько
+// оценок одновременно, каждая независима. Поповер не закрывается на клик —
+// удобно проставить сразу две (например, ✅ + 🔥).
+export default function RatingCell({ videoId, ratings, onChange }: RatingCellProps) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const anchorRef = useRef<HTMLButtonElement>(null);
@@ -63,18 +63,23 @@ export default function RatingCell({ videoId, rating, onSelect }: RatingCellProp
     };
   }, [open]);
 
-  async function handlePick(next: Rating) {
-    setOpen(false);
-    const value = next === rating ? null : next;
-    await onSelect(videoId, value);
+  async function handleToggle(r: Rating) {
+    const next = ratings.includes(r)
+      ? ratings.filter((x) => x !== r)
+      : [...ratings, r];
+    await onChange(videoId, next);
   }
 
   async function handleClear() {
     setOpen(false);
-    await onSelect(videoId, null);
+    if (ratings.length === 0) return;
+    await onChange(videoId, []);
   }
 
-  const meta = rating ? RATINGS[rating] : null;
+  const hasAny = ratings.length > 0;
+  const summary = RATING_ORDER.filter((r) => ratings.includes(r))
+    .map((r) => RATINGS[r].label)
+    .join(", ");
 
   return (
     <>
@@ -82,16 +87,24 @@ export default function RatingCell({ videoId, rating, onSelect }: RatingCellProp
         ref={anchorRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label={meta ? `Оценка: ${meta.label}` : "Поставить оценку"}
-        title={meta ? meta.label : "Поставить оценку"}
+        aria-label={hasAny ? `Оценки: ${summary}` : "Поставить оценку"}
+        title={hasAny ? summary : "Поставить оценку"}
         className={clsx(
-          "focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md text-base transition",
-          meta
-            ? "bg-elevated hover:bg-line"
-            : "text-ink-faint opacity-0 hover:bg-elevated hover:text-ink-muted group-hover:opacity-100 focus:opacity-100",
+          "focus-ring inline-flex h-7 items-center justify-center rounded-md text-base transition",
+          hasAny
+            ? "bg-elevated px-1.5 hover:bg-line"
+            : "w-7 text-ink-faint opacity-0 hover:bg-elevated hover:text-ink-muted group-hover:opacity-100 focus:opacity-100",
         )}
       >
-        {meta ? meta.emoji : <Star size={14} />}
+        {hasAny ? (
+          <span className="inline-flex items-center gap-0.5 leading-none">
+            {RATING_ORDER.filter((r) => ratings.includes(r)).map((r) => (
+              <span key={r}>{RATINGS[r].emoji}</span>
+            ))}
+          </span>
+        ) : (
+          <Star size={14} />
+        )}
       </button>
 
       {open && pos && typeof document !== "undefined"
@@ -110,32 +123,31 @@ export default function RatingCell({ videoId, rating, onSelect }: RatingCellProp
             >
               {RATING_ORDER.map((r) => {
                 const item = RATINGS[r];
-                const selected = rating === r;
+                const on = ratings.includes(r);
                 return (
                   <button
                     key={r}
                     type="button"
-                    onClick={() => handlePick(r)}
+                    onClick={() => handleToggle(r)}
+                    aria-pressed={on}
                     className="focus-ring flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-elevated"
                   >
                     <span className="flex items-center gap-2">
                       <span className="text-base leading-none">{item.emoji}</span>
                       <span className="text-ink">{item.label}</span>
                     </span>
-                    {selected && (
-                      <Check size={16} className="shrink-0 text-accent" />
-                    )}
+                    {on && <Check size={16} className="shrink-0 text-accent" />}
                   </button>
                 );
               })}
 
-              {rating && (
+              {hasAny && (
                 <button
                   type="button"
                   onClick={handleClear}
                   className="focus-ring mt-1 flex items-center gap-2 rounded-md border-t border-line px-2 py-1.5 text-left text-xs text-ink-muted transition hover:bg-elevated hover:text-ink"
                 >
-                  Снять оценку
+                  Снять все оценки
                 </button>
               )}
             </div>,

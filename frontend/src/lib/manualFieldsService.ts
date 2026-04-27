@@ -124,13 +124,14 @@ export async function setVideoNote(
 
 // ---------- Оценка ----------
 
-export async function setVideoRating(
+// Multi-select: массив из 0..3 элементов. Пустой массив = «не оценено».
+export async function setVideoRatings(
   videoId: string,
-  rating: Rating | null,
+  ratings: Rating[],
 ): Promise<void> {
   const { error } = await client()
     .from("videos")
-    .update({ rating })
+    .update({ ratings })
     .eq("id", videoId);
   if (error) throw new Error(error.message);
 }
@@ -142,7 +143,8 @@ export async function setVideoRating(
 export interface SwipeRightPayload {
   myCategoryId?: string | null;
   note?: string | null;
-  rating?: Rating | null;
+  // Multi-select. Если поле undefined — оценка не трогается.
+  ratings?: Rating[];
   // Только новые привязки. Снять тег здесь нельзя — это «быстрый разбор».
   tagIdsToAttach?: string[];
 }
@@ -159,7 +161,7 @@ export async function saveSwipeRightFlow(
   const updates: Record<string, unknown> = {};
   if (payload.myCategoryId !== undefined) updates.my_category_id = payload.myCategoryId;
   if (payload.note !== undefined) updates.note = payload.note;
-  if (payload.rating !== undefined) updates.rating = payload.rating;
+  if (payload.ratings !== undefined) updates.ratings = payload.ratings;
 
   if (Object.keys(updates).length > 0) {
     const { error } = await sb.from("videos").update(updates).eq("id", videoId);
