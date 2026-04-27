@@ -135,6 +135,50 @@ export async function setVideoRating(
   if (error) throw new Error(error.message);
 }
 
+// ---------- Воронка правого свайпа ----------
+
+// Полезные данные, заполненные в воронке (Сессия 16). Любое поле может быть
+// `undefined` — значит, пользователь пропустил соответствующий шаг.
+export interface SwipeRightPayload {
+  myCategoryId?: string | null;
+  note?: string | null;
+  rating?: Rating | null;
+  // Только новые привязки. Снять тег здесь нельзя — это «быстрый разбор».
+  tagIdsToAttach?: string[];
+}
+
+// Сохраняем всё, что заполнил пользователь в воронке. Один update по videos +
+// один upsert по video_tags (если есть теги). UI к моменту вызова уже перешёл
+// к следующей карточке — оптимистичное обновление делает AnalystWorkspace.
+export async function saveSwipeRightFlow(
+  videoId: string,
+  payload: SwipeRightPayload,
+): Promise<void> {
+  const sb = client();
+
+  const updates: Record<string, unknown> = {};
+  if (payload.myCategoryId !== undefined) updates.my_category_id = payload.myCategoryId;
+  if (payload.note !== undefined) updates.note = payload.note;
+  if (payload.rating !== undefined) updates.rating = payload.rating;
+
+  if (Object.keys(updates).length > 0) {
+    const { error } = await sb.from("videos").update(updates).eq("id", videoId);
+    if (error) throw new Error(error.message);
+  }
+
+  if (payload.tagIdsToAttach && payload.tagIdsToAttach.length > 0) {
+    const rows = payload.tagIdsToAttach.map((tag_id) => ({
+      video_id: videoId,
+      tag_id,
+    }));
+    const { error } = await sb
+      .from("video_tags")
+      .upsert(rows, { ignoreDuplicates: true });
+    // 23505 — primary key collision: тег уже привязан, не страшно.
+    if (error && error.code !== "23505") throw new Error(error.message);
+  }
+}
+
 // ---------- Перенос в закладки ----------
 
 // Копирует поля из videos в bookmarks и удаляет исходное видео.

@@ -12,6 +12,7 @@ import {
 } from "@/lib/videoFilters";
 import { pickNextColor, type EntityColor } from "@/lib/tagColors";
 import * as svc from "@/lib/manualFieldsService";
+import type { SwipeRightPayload } from "@/lib/manualFieldsService";
 import { deleteVideo, deleteVideos } from "@/lib/videoDeleteService";
 import VideoTable from "./VideoTable";
 import VideoTableEmpty from "./VideoTableEmpty";
@@ -255,6 +256,37 @@ export default function AnalystWorkspace({
     }
   }, [videos]);
 
+  // Воронка правого свайпа: применяем все изменения к локальному state, потом
+  // отправляем одним батчем. При ошибке откатываем по снапшоту.
+  const handleViewerSubmitRightFlow = useCallback(
+    async (videoId: string, payload: SwipeRightPayload) => {
+      const snapshot = videos;
+      setVideos((prev) =>
+        prev.map((v) => {
+          if (v.id !== videoId) return v;
+          const next = { ...v };
+          if (payload.myCategoryId !== undefined)
+            next.myCategoryId = payload.myCategoryId;
+          if (payload.note !== undefined) next.note = payload.note;
+          if (payload.rating !== undefined) next.rating = payload.rating;
+          if (payload.tagIdsToAttach && payload.tagIdsToAttach.length > 0) {
+            const set = new Set(next.tagIds);
+            for (const id of payload.tagIdsToAttach) set.add(id);
+            next.tagIds = Array.from(set);
+          }
+          return next;
+        }),
+      );
+      try {
+        await svc.saveSwipeRightFlow(videoId, payload);
+      } catch (e) {
+        setVideos(snapshot);
+        throw e;
+      }
+    },
+    [videos],
+  );
+
   // ------- Мутации справочников -------
 
   function nextColor(): EntityColor {
@@ -450,9 +482,14 @@ export default function AnalystWorkspace({
       {viewerSnapshot && (
         <SwipeViewer
           videos={viewerSnapshot}
+          myCategories={myCategories}
+          tags={tags}
           onClose={() => setViewerSnapshot(null)}
           onDelete={handleViewerDelete}
           onMoveToBookmarks={handleViewerBookmark}
+          onCreateMyCategory={handleCreateMyCategory}
+          onCreateTag={handleCreateTag}
+          onSubmitRightFlow={handleViewerSubmitRightFlow}
         />
       )}
     </div>
