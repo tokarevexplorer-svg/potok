@@ -64,10 +64,10 @@ export interface Video {
   authorUrl: string | null;
   caption: string | null;
   thumbnailUrl: string | null;
-  // ID файла на Google Drive — нужен, чтобы при удалении видео удалить и
-  // файл с Drive. Если null — превью на оригинальном URL Instagram CDN
-  // (либо Drive отключён в env, либо загрузка не удалась).
-  thumbnailDriveId: string | null;
+  // Путь к файлу в Supabase Storage — нужен, чтобы при удалении видео
+  // удалить и файл из bucket'а. Если null — превью на оригинальном URL
+  // Instagram CDN (либо Storage отключён в env, либо загрузка не удалась).
+  thumbnailStoragePath: string | null;
 
   // Длительность в секундах (только для contentType === "video"). Для фото/каруселей null.
   duration: number | null;

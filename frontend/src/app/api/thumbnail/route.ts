@@ -9,11 +9,9 @@ const ALLOWED_HOSTS = [
   "cdninstagram.com",
   "fbcdn.net",
   "instagram.com",
-  // Постоянные превью на Google Drive (Сессия 20). После миграции старых
-  // ссылок старые `cdninstagram.com` URL остаются в БД до момента, пока
-  // запись не пересоздастся — поэтому держим оба источника.
-  "drive.google.com",
-  "googleusercontent.com",
+  // Постоянные превью на Supabase Storage (Сессия 20 после переезда с Drive).
+  // URL вида `https://<project>.supabase.co/storage/v1/object/public/...`.
+  "supabase.co",
 ];
 
 export async function GET(req: Request) {
