@@ -136,6 +136,21 @@ export async function setVideoRatings(
   if (error) throw new Error(error.message);
 }
 
+// ---------- Референс (для блога / другое) ----------
+
+// true = полезно для блога (✅), false = другое (❌), null = не определено (пусто).
+// Проставляется AI при анализе, но Влад может вручную поменять (toggle в таблице).
+export async function setVideoIsReference(
+  videoId: string,
+  value: boolean | null,
+): Promise<void> {
+  const { error } = await client()
+    .from("videos")
+    .update({ is_reference: value })
+    .eq("id", videoId);
+  if (error) throw new Error(error.message);
+}
+
 // ---------- Воронка правого свайпа ----------
 
 // Полезные данные, заполненные в воронке (Сессия 16). Любое поле может быть

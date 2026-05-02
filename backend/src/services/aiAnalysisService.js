@@ -31,7 +31,8 @@ const MAX_CAPTION_CHARS = 2000;
 const SYSTEM_PROMPT = [
   "Ты — помощник русскоязычного блогера, разбирающего Reels из Instagram.",
   "На вход — описание под видео (caption) и транскрипция речи (если есть).",
-  "Твоя задача — дать короткое саммари и категорию.",
+  "Твоя задача — дать короткое саммари, категорию и определить, относится ли",
+  "контент к теме блога владельца.",
   "",
   "Саммари: 2–3 коротких предложения по делу — о чём видео и в чём его идея.",
   "Не пересказывай дословно, не используй вводные («в этом видео», «автор рассказывает»).",
@@ -45,8 +46,14 @@ const SYSTEM_PROMPT = [
   "свою короткую категорию по-русски (1–3 слова, с большой буквы).",
   "Во всех остальных случаях category_suggestion = null.",
   "",
+  "is_reference: true/false. Определи, относится ли этот контент к блогу о создании",
+  "контента, визуальном сторителлинге, съёмке видео, монтаже, продвижении, работе",
+  "блогера и медиа в целом. Если да — true. Если это личный контент (рестораны,",
+  "выставки, путешествия, мемы, бытовое, политика, чужие интервью) — false.",
+  "Если сомневаешься — лучше false, владелец сам пересмотрит.",
+  "",
   "Ответ строго в JSON по схеме:",
-  '{ "summary": string, "category": string, "category_suggestion": string | null }',
+  '{ "summary": string, "category": string, "category_suggestion": string | null, "is_reference": boolean }',
 ].join("\n");
 
 function buildUserPrompt({ caption, transcript }) {
@@ -66,7 +73,7 @@ function buildUserPrompt({ caption, transcript }) {
 }
 
 // Возвращает один из вариантов:
-//   { status: "done", summary, category, categorySuggestion }
+//   { status: "done", summary, category, categorySuggestion, isReference }
 //   { status: "skipped" } — нет ни caption, ни транскрипции
 // Любая ошибка (сеть, парсинг) бросается наружу — videoProcessor её ловит.
 export async function analyzeVideo({ caption, transcript }) {
@@ -123,5 +130,10 @@ export async function analyzeVideo({ caption, transcript }) {
     category = "other";
   }
 
-  return { status: "done", summary, category, categorySuggestion };
+  // is_reference — bool. Если модель не вернула или прислала мусор, оставляем null,
+  // тогда в БД запишется null = «не определено», и в UI появится placeholder.
+  const isReference =
+    typeof parsed.is_reference === "boolean" ? parsed.is_reference : null;
+
+  return { status: "done", summary, category, categorySuggestion, isReference };
 }

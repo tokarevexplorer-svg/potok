@@ -49,6 +49,7 @@ export async function processVideoById(id) {
   let videoMediaUrl = null;
   let captionForAi = null;
   let transcriptForAi = null;
+  let contentType = "video";
 
   // --- Шаг 1: Apify ---
   try {
@@ -59,10 +60,11 @@ export async function processVideoById(id) {
     const fields = mapReelToVideoFields(raw);
     videoMediaUrl = extractVideoUrl(raw);
     captionForAi = fields.caption;
+    contentType = fields.content_type ?? "video";
 
     await saveVideoSuccess(id, fields);
     console.log(
-      `[processor] ${id}: Apify готов, автор=${fields.author}, просмотров=${fields.views}`,
+      `[processor] ${id}: Apify готов, тип=${contentType}, автор=${fields.author}, просмотров=${fields.views}`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -72,7 +74,12 @@ export async function processVideoById(id) {
   }
 
   // --- Шаг 2: транскрипция ---
-  if (!videoMediaUrl) {
+  // Для фото/каруселей транскрибировать нечего — сразу помечаем "no_speech"
+  // (UI отрисует «Без речи»), пропускаем Whisper.
+  if (contentType !== "video") {
+    await saveTranscriptNoSpeech(id);
+    console.log(`[processor] ${id}: тип ${contentType} — транскрипция пропущена`);
+  } else if (!videoMediaUrl) {
     const message =
       "Apify не вернул прямую ссылку на видео — транскрипцию выполнить нельзя.";
     console.warn(`[processor] ${id}: ${message}`);
@@ -118,14 +125,22 @@ export async function processVideoById(id) {
       return;
     }
 
+    // Для фото и каруселей принудительно ставим is_reference = false:
+    // референсы для блога владельца — это видеоконтент. AI может помечать
+    // фото как референс, но мы хотим, чтобы Влад работал только с видео.
+    const isReference =
+      contentType !== "video" ? false : result.isReference;
+
     await saveAiSuccess(id, {
       summary: result.summary,
       category: result.category,
       categorySuggestion: result.categorySuggestion,
+      isReference,
     });
     console.log(
       `[processor] ${id}: AI готов, категория=${result.category}` +
-        (result.categorySuggestion ? ` (${result.categorySuggestion})` : ""),
+        (result.categorySuggestion ? ` (${result.categorySuggestion})` : "") +
+        `, is_reference=${isReference}`,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

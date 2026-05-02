@@ -1,12 +1,17 @@
 // Чистые функции фильтрации/сортировки. UI-состояние держит React,
 // сюда передаёт фильтры → получает отсортированный массив видео.
 
-import type { AiCategory, Rating, Video } from "@/lib/types";
+import type { AiCategory, ContentType, Rating, Video } from "@/lib/types";
 
 export type SortKey = "createdAt" | "publishedAt" | "views" | "likes" | "virality";
 export type TranscriptFilter = "any" | "with" | "without";
 // «none» — только не оценённые. Иначе — конкретная оценка или «any».
 export type RatingFilter = "any" | "none" | Rating;
+// Тип медиа: any = всё, либо конкретное значение из Apify (video/image/carousel).
+export type ContentTypeFilter = "any" | ContentType;
+// Референс: any = всё, true/false = только «для блога»/«другое»,
+// "unset" = AI ещё не определил или Влад снял отметку.
+export type IsReferenceFilter = "any" | "true" | "false" | "unset";
 
 export interface FilterState {
   search: string;
@@ -18,6 +23,8 @@ export interface FilterState {
   author: string | "any";
   transcript: TranscriptFilter;
   rating: RatingFilter;
+  contentType: ContentTypeFilter;
+  isReference: IsReferenceFilter;
   sortBy: SortKey;
   // true = по возрастанию. По умолчанию false (свежее/больше — выше).
   sortAsc: boolean;
@@ -31,6 +38,8 @@ export const initialFilterState: FilterState = {
   author: "any",
   transcript: "any",
   rating: "any",
+  contentType: "any",
+  isReference: "any",
   sortBy: "createdAt",
   sortAsc: false,
 };
@@ -63,6 +72,17 @@ function matchesRating(v: Video, mode: RatingFilter): boolean {
   return v.ratings.includes(mode);
 }
 
+function matchesContentType(v: Video, mode: ContentTypeFilter): boolean {
+  if (mode === "any") return true;
+  return v.contentType === mode;
+}
+
+function matchesIsReference(v: Video, mode: IsReferenceFilter): boolean {
+  if (mode === "any") return true;
+  if (mode === "unset") return v.isReference === null;
+  return v.isReference === (mode === "true");
+}
+
 function compare(a: Video, b: Video, key: SortKey): number {
   switch (key) {
     case "createdAt":
@@ -86,6 +106,8 @@ export function applyFilters(videos: Video[], f: FilterState): Video[] {
     if (f.aiCategory !== "any" && v.aiCategory !== f.aiCategory) return false;
     if (f.myCategoryId !== "any" && v.myCategoryId !== f.myCategoryId) return false;
     if (f.author !== "any" && v.author !== f.author) return false;
+    if (!matchesContentType(v, f.contentType)) return false;
+    if (!matchesIsReference(v, f.isReference)) return false;
     if (!matchesTags(v, f.tagIds)) return false;
     if (!matchesTranscript(v, f.transcript)) return false;
     if (!matchesRating(v, f.rating)) return false;
