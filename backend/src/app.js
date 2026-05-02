@@ -3,6 +3,7 @@ import cors from "cors";
 import { env } from "./config/env.js";
 import videosRouter from "./routes/videos.js";
 import thumbnailsRouter from "./routes/thumbnails.js";
+import reprocessRouter from "./routes/reprocess.js";
 
 export function createApp() {
   const app = express();
@@ -26,6 +27,7 @@ export function createApp() {
 
   app.use("/api/videos", videosRouter);
   app.use("/api/thumbnails", thumbnailsRouter);
+  app.use("/", reprocessRouter);
 
   // Финальный обработчик ошибок — чтобы не падали сокеты.
   app.use((err, _req, res, _next) => {

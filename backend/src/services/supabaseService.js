@@ -237,6 +237,47 @@ export async function clearStaleThumbnail(id) {
   }
 }
 
+// --- Переклассификация is_reference (Сессия 21) ---------------------------
+
+// Видео, для которых имеет смысл пересчитать is_reference: AI уже выдал саммари
+// (значит данные есть), и тип — video. Для image/carousel мы принудительно
+// ставим is_reference = false ещё в videoProcessor — повторная классификация
+// бесполезна.
+//
+// Сортировка по created_at desc + cursor (`before` = created_at последнего
+// обработанного видео в прошлом вызове) — keyset pagination, чтобы повторные
+// вызовы не возвращали тех же самых.
+export async function getVideosForReferenceReprocessing({ limit = 50, before } = {}) {
+  let query = client
+    .from("videos")
+    .select("id, caption, transcript, ai_summary, is_reference, created_at")
+    .eq("content_type", "video")
+    .not("ai_summary", "is", null);
+
+  if (before) {
+    query = query.lt("created_at", before);
+  }
+
+  const { data, error } = await query
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Supabase select for reference reprocessing failed: ${error.message}`);
+  }
+  return data ?? [];
+}
+
+export async function setVideoIsReference(id, value) {
+  const { error } = await client
+    .from("videos")
+    .update({ is_reference: value })
+    .eq("id", id);
+  if (error) {
+    throw new Error(`Supabase update (is_reference) failed: ${error.message}`);
+  }
+}
+
 export async function saveAiError(id, message) {
   const { error } = await client
     .from("videos")
