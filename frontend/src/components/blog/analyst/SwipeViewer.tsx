@@ -18,15 +18,25 @@ import type { SwipeRightPayload } from "@/lib/manualFieldsService";
 import EntityChip from "./EntityChip";
 import SwipeRightFlow from "./SwipeRightFlow";
 
+type ViewerMode = "default" | "cleanup";
+
 interface SwipeViewerProps {
   /** Снимок видео на момент открытия — итерация по нему фиксирована. */
   videos: Video[];
   startIndex?: number;
+  /**
+   * Режим работы:
+   *  - "default": свайп влево → меню «Удалить/В закладки», свайп вправо → воронка тегов/категории/оценки.
+   *  - "cleanup": свайп влево → сразу в закладки, свайп вправо → пометить «для блога» (is_reference=true). Без меню/воронки.
+   */
+  mode?: ViewerMode;
   myCategories: MyCategory[];
   tags: Tag[];
   onClose: () => void;
   onDelete: (videoId: string) => Promise<void>;
   onMoveToBookmarks: (videoId: string) => Promise<void>;
+  /** Только для cleanup-режима: пометить видео как «полезно для блога». */
+  onMarkAsReference?: (videoId: string) => Promise<void>;
   onCreateMyCategory: (name: string) => Promise<MyCategory>;
   onCreateTag: (name: string) => Promise<Tag>;
   onSubmitRightFlow: (videoId: string, payload: SwipeRightPayload) => Promise<void>;
@@ -45,11 +55,13 @@ const EMBED_TIMEOUT_MS = 5000;
 export default function SwipeViewer({
   videos: initialVideos,
   startIndex = 0,
+  mode = "default",
   myCategories,
   tags,
   onClose,
   onDelete,
   onMoveToBookmarks,
+  onMarkAsReference,
   onCreateMyCategory,
   onCreateTag,
   onSubmitRightFlow,
@@ -97,6 +109,21 @@ export default function SwipeViewer({
     (direction: "left" | "right") => {
       if (busy || exitDir || postLeftMenu || rightFlowOpen) return;
       if (!current) return;
+
+      // Cleanup-режим: оба свайпа фиксируют действие сразу, без меню/воронки.
+      // Влево → в закладки, вправо → пометить как «для блога». Анимация ухода
+      // идёт в обе стороны — пользователь должен видеть фиксацию выбора.
+      if (mode === "cleanup") {
+        setExitDir(direction);
+        setDrag(null);
+        const action = direction === "left" ? "bookmark" : "markRef";
+        window.setTimeout(() => {
+          performCleanupAction(action);
+        }, ANIM_MS);
+        return;
+      }
+
+      // Default-режим:
       // Вправо: открываем воронку без анимации ухода — карточка остаётся
       // на месте (видна за затемнённой подложкой), листание произойдёт после
       // сохранения. Влево: классическая анимация + мини-меню.
@@ -111,8 +138,35 @@ export default function SwipeViewer({
         setPostLeftMenu(true);
       }, ANIM_MS);
     },
-    [busy, exitDir, postLeftMenu, rightFlowOpen, current],
+    // performCleanupAction опирается на current/onMoveToBookmarks/onMarkAsReference
+    // — но мы их не включаем в deps, чтобы не пересоздавать триггер на каждом
+    // рендере. Внутри performCleanupAction всегда читаем актуальные ссылки через
+    // замыкание на момент клика — это допустимо, потому что свайп — мгновенное
+    // действие.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [busy, exitDir, postLeftMenu, rightFlowOpen, current, mode],
   );
+
+  async function performCleanupAction(action: "bookmark" | "markRef") {
+    if (!current) return;
+    setBusy(true);
+    try {
+      if (action === "bookmark") {
+        await onMoveToBookmarks(current.id);
+      } else if (onMarkAsReference) {
+        await onMarkAsReference(current.id);
+      }
+      setBusy(false);
+      setExitDir(null);
+      setIndex((i) => i + 1);
+    } catch (e) {
+      // Ошибка: возвращаем карточку в исходную позицию, оставляем индекс,
+      // показываем сообщение. Пользователь может попробовать заново.
+      setBusy(false);
+      setExitDir(null);
+      alert((e as Error).message);
+    }
+  }
 
   function onPointerDown(e: React.PointerEvent) {
     if (busy || exitDir || postLeftMenu || rightFlowOpen) return;
@@ -221,11 +275,19 @@ export default function SwipeViewer({
           <X size={20} />
         </button>
         <p className="font-display text-2xl text-ink">
-          {total === 0 ? "В таблице нет видео" : "Все видео просмотрены"}
+          {total === 0
+            ? mode === "cleanup"
+              ? "Нет видео для разбора"
+              : "В таблице нет видео"
+            : mode === "cleanup"
+              ? "Очистка завершена"
+              : "Все видео просмотрены"}
         </p>
         {total > 0 && (
           <p className="text-sm text-ink-muted">
-            Просмотрено: {total} из {total}
+            {mode === "cleanup"
+              ? `Разобрано: ${total} ${total === 1 ? "видео" : "видео"}`
+              : `Просмотрено: ${total} из ${total}`}
           </p>
         )}
         <button
@@ -276,7 +338,9 @@ export default function SwipeViewer({
           <X size={20} />
         </button>
         <div className="text-sm font-medium text-ink-muted">
-          {index + 1} из {total}
+          {mode === "cleanup"
+            ? `Осталось проверить: ${total - index}`
+            : `${index + 1} из ${total}`}
         </div>
         <div className="w-10" aria-hidden />
       </div>
@@ -371,7 +435,9 @@ export default function SwipeViewer({
 
       {/* Подсказка по управлению */}
       <div className="border-t border-line px-4 py-2 text-center text-xs text-ink-faint">
-        ← мимо · → следующее · клавиши ← / → · Esc — закрыть
+        {mode === "cleanup"
+          ? "← в закладки · → для блога · клавиши ← / → · Esc — закрыть"
+          : "← мимо · → следующее · клавиши ← / → · Esc — закрыть"}
       </div>
 
       {/* Воронка после свайпа вправо */}

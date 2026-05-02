@@ -1,11 +1,12 @@
 "use client";
 
-import { Trash2, X } from "lucide-react";
+import { Bookmark, Trash2, X } from "lucide-react";
 
 interface BulkActionBarProps {
   count: number;
   onClear: () => void;
   onDelete: () => void;
+  onMoveToBookmarks: () => void;
 }
 
 // Плавающая панель снизу — появляется, когда выбрана хотя бы одна строка.
@@ -14,17 +15,28 @@ export default function BulkActionBar({
   count,
   onClear,
   onDelete,
+  onMoveToBookmarks,
 }: BulkActionBarProps) {
   if (count === 0) return null;
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[80] flex justify-center px-4">
-      <div className="pointer-events-auto flex items-center gap-3 rounded-2xl border border-line bg-ink px-4 py-3 text-canvas shadow-pop">
+      <div className="pointer-events-auto flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-ink px-4 py-3 text-canvas shadow-pop">
         <span className="text-sm font-medium">
           Выбрано: {count} {plural(count, "видео", "видео", "видео")}
         </span>
 
         <span className="h-5 w-px bg-canvas/20" aria-hidden />
+
+        <button
+          type="button"
+          onClick={onMoveToBookmarks}
+          className="focus-ring inline-flex items-center gap-1.5 rounded-xl border border-canvas/20 bg-canvas/5 px-3 py-2 text-sm font-medium text-canvas transition hover:bg-canvas/15"
+          title="Переместить выбранные в закладки"
+        >
+          <Bookmark size={14} />
+          В закладки
+        </button>
 
         <button
           type="button"
