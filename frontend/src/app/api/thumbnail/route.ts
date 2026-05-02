@@ -9,6 +9,11 @@ const ALLOWED_HOSTS = [
   "cdninstagram.com",
   "fbcdn.net",
   "instagram.com",
+  // Постоянные превью на Google Drive (Сессия 20). После миграции старых
+  // ссылок старые `cdninstagram.com` URL остаются в БД до момента, пока
+  // запись не пересоздастся — поэтому держим оба источника.
+  "drive.google.com",
+  "googleusercontent.com",
 ];
 
 export async function GET(req: Request) {

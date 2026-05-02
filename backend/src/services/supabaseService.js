@@ -196,6 +196,47 @@ export async function saveAiSkipped(id) {
   }
 }
 
+// --- Превью (Google Drive миграция) ---------------------------------------
+
+// Видео, у которых превью ещё на Instagram CDN и не залито на Drive.
+// Используется одноразовым endpoint'ом миграции старых превью.
+export async function getVideosForThumbnailMigration(limit = 100) {
+  const { data, error } = await client
+    .from("videos")
+    .select("id, url, thumbnail_url")
+    .is("thumbnail_drive_id", null)
+    .not("thumbnail_url", "is", null)
+    .or("thumbnail_url.ilike.%cdninstagram.com%,thumbnail_url.ilike.%fbcdn.net%")
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Supabase select for thumbnail migration failed: ${error.message}`);
+  }
+  return data ?? [];
+}
+
+export async function saveThumbnailUploadResult(id, { url, driveId }) {
+  const { error } = await client
+    .from("videos")
+    .update({ thumbnail_url: url, thumbnail_drive_id: driveId })
+    .eq("id", id);
+  if (error) {
+    throw new Error(`Supabase update (thumbnail) failed: ${error.message}`);
+  }
+}
+
+// Если ссылка с Instagram CDN уже протухла и скачать не получилось —
+// обнуляем thumbnail_url, чтобы UI показывал placeholder, а не битую картинку.
+export async function clearStaleThumbnail(id) {
+  const { error } = await client
+    .from("videos")
+    .update({ thumbnail_url: null })
+    .eq("id", id);
+  if (error) {
+    console.error("Supabase clear stale thumbnail failed:", error.message);
+  }
+}
+
 export async function saveAiError(id, message) {
   const { error } = await client
     .from("videos")

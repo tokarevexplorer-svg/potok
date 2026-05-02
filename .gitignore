@@ -10,6 +10,11 @@
 !.env.example
 !**/.env.example
 
+# Service-account ключи Google Cloud (Сессия 20). НИКОГДА не коммитить.
+google-credentials.json
+**/google-credentials.json
+*-service-account.json
+
 # --- Зависимости и сборки ---------------------------------------------------
 node_modules/
 .next/
