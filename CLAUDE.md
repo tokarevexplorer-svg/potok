@@ -805,82 +805,83 @@ superapp/
 
 ---
 
-**Сессия 20: Постоянные превью через Google Drive** (завершена 2026-05-02)
-- Решение проблемы: ссылки Instagram CDN на превью протухают за ~24 часа. Теперь после парсинга бэкенд скачивает превью и заливает его в публичную папку на Google Drive — URL и fileId сохраняются в БД, при удалении видео файл с Drive подчищается.
+**Сессия 20: Постоянные превью через Supabase Storage** (завершена 2026-05-02; первоначально планировалась через Google Drive, но переехали на Supabase — см. ниже)
+- Решение проблемы: ссылки Instagram CDN на превью протухают за ~24 часа. Теперь после парсинга бэкенд скачивает превью и заливает его в публичный bucket Supabase Storage — постоянный URL и относительный path сохраняются в БД, при удалении видео файл из bucket'а подчищается.
 
-- Миграция `supabase/migrations/0010_thumbnail_drive_id.sql`:
-  - В `videos` и `bookmarks` добавлено поле `thumbnail_drive_id` (text, nullable). Bookmarks тоже трогаем — при переносе видео в закладки fileId едет с ним, и удаление из bookmarks тоже должно подчистить Drive (этот шаг сделаем в одной из следующих сессий, поле под него уже есть).
+История: сначала было реализовано через Google Drive Service Account, но в проде Drive отказал с ошибкой `Service Accounts do not have storage quota` — Service Account-ы Google **не имеют собственной квоты** и могут писать только в Shared Drive (доступен только в Google Workspace, ~$6/мес). Переехали на Supabase Storage: уже есть в проекте, бесплатно до 1 ГБ места и 2 ГБ исходящего трафика в месяц, ключ доступа (`SUPABASE_SERVICE_ROLE_KEY`) уже прокинут — никаких новых сервисов и аккаунтов.
+
+- Миграции:
+  - `supabase/migrations/0010_thumbnail_drive_id.sql` — добавила колонку `thumbnail_drive_id` (legacy от Drive-плана). Миграция уже выполнена в проде, поэтому не откатываем
+  - `supabase/migrations/0011_thumbnail_storage_path.sql` — переименовывает `thumbnail_drive_id` → `thumbnail_storage_path` в `videos` и `bookmarks`. Реальных данных в колонке не было (Drive-загрузка ни разу не сработала), переименование безопасное
 
 - Бэкенд:
-  - Новая зависимость `googleapis ^144` в `backend/package.json` (Влад делает `npm install` после pull)
-  - `backend/src/services/googleDriveService.js` — клиент Google Drive с **ленивой инициализацией**:
-    - Авторизация через Service Account с двумя источниками credentials: `GOOGLE_DRIVE_CREDENTIALS_JSON` (содержимое JSON-ключа в виде строки — для Railway, где файлы не положишь) **или** `GOOGLE_DRIVE_CREDENTIALS_PATH` (путь к файлу — для локалки). JSON важнее, если задан — берём его. Если не задано ничего — `isEnabled()` возвращает false, остальные функции бросают ошибку
-    - `uploadThumbnail(imageUrl, filename)` — fetch картинки без Referer (Instagram отдаёт только так) → upload в папку (scope `drive.file` — минимально достаточный) → permission anyone:reader → возвращает `{ url, fileId }`. URL формата `https://drive.google.com/uc?export=view&id=FILE_ID` — встраиваемый в `<img>`
-    - `deleteThumbnail(fileId)` / `deleteManyThumbnails(ids)` — best effort, 404 не считается ошибкой (файл уже удалён вручную — ок), остальное логируется и не падает
-    - **`isEnabled()` логирует initError ровно один раз** через флаг `warnedAboutDisabled`, иначе на массовом батче лог зальётся повторами
-  - `backend/src/config/env.js` — три новых переменных, **все опциональные**: `googleDriveFolderId`, `googleDriveCredentialsPath`, `googleDriveCredentialsJson`. Если ни одна не задана — бэкенд продолжает работать как раньше (превью на Instagram CDN, протухнет за сутки), не падает на старте
-  - `backend/src/services/videoProcessor.js` — после Apify, **до** `saveVideoSuccess`: если есть `thumbnail_url` и Drive включён, пытаемся залить. При успехе — заменяем `fields.thumbnail_url` на Drive-URL и кладём `fields.thumbnail_drive_id`. При ошибке — оставляем оригинальный URL, продолжаем (видео не блокируется). Имя файла на Drive: `<shortcode>-<timestamp>.jpg` — shortcode достаём тем же regex'ом, что во `frontend/lib/instagramEmbed.ts`, чтобы было согласованно
-  - `backend/src/services/supabaseService.js` — три helper-функции для миграции старых превью: `getVideosForThumbnailMigration(limit)` (фильтр `thumbnail_drive_id IS NULL AND thumbnail_url ILIKE '%cdninstagram.com%' OR ... fbcdn.net`), `saveThumbnailUploadResult(id, {url, driveId})`, `clearStaleThumbnail(id)` (для протухших ссылок — обнуляем URL, чтобы UI показал placeholder, и фильтр миграции их не подбирал заново)
+  - Зависимость `googleapis` **не используется**, удалена из `package.json` и `package-lock.json`
+  - `backend/src/services/supabaseStorageService.js` — клиент Supabase Storage:
+    - Авторизация через `SUPABASE_SERVICE_ROLE_KEY` (тот же, что для writeable-операций по БД), service-role клиент минует RLS bucket'а
+    - `uploadThumbnail(imageUrl, filename)` — fetch картинки без Referer → `supabase.storage.from(bucket).upload(...)` с `upsert: true` → возвращает `{ url, path }`. URL — публичный CDN-URL Supabase, встраиваемый в `<img>` напрямую без прокси
+    - `deleteThumbnail(path)` / `deleteManyThumbnails(paths)` — Supabase API принимает массив путей одним запросом, отсутствующие файлы не считает ошибкой
+    - **`isEnabled()` возвращает true когда `SUPABASE_STORAGE_BUCKET` задан**. Логирует warning ровно один раз (флаг `warnedAboutDisabled`), чтобы на массовом батче не зашумлять лог
+  - `backend/src/config/env.js` — одна новая переменная `storageBucket` (опциональная). Если не задана — бэкенд работает как раньше, превью остаются на Instagram CDN
+  - `backend/src/services/videoProcessor.js` — после Apify, **до** `saveVideoSuccess`: если есть `thumbnail_url` и Storage включён, пытаемся залить. При успехе — заменяем `fields.thumbnail_url` на CDN-URL Supabase и кладём `fields.thumbnail_storage_path`. При ошибке — оставляем оригинальный URL, продолжаем (видео не блокируется). Имя файла: `<shortcode>-<timestamp>.jpg`
+  - `backend/src/services/supabaseService.js` — три helper-функции для миграции старых превью: `getVideosForThumbnailMigration(limit)` (фильтр `thumbnail_storage_path IS NULL AND thumbnail_url ILIKE '%cdninstagram.com%' OR ... fbcdn.net`), `saveThumbnailUploadResult(id, {url, storagePath})`, `clearStaleThumbnail(id)` (для протухших ссылок — обнуляем URL, чтобы UI показал placeholder)
   - `backend/src/routes/thumbnails.js` (подключён в `app.js` как `/api/thumbnails/*`):
-    - `POST /api/thumbnails/delete` — принимает `{ driveIds: [...] }`, вызывает `deleteManyThumbnails`. Лимит 5000 за вызов. Если Drive не настроен — отвечает 200 со счётчиком 0 (фронт не должен ломаться)
-    - `POST /api/thumbnails/migrate` — принимает `{ limit?: number }` (default 50, max 200). Берёт пачку из `getVideosForThumbnailMigration`, по очереди заливает на Drive, обновляет БД. Возвращает `{ requested, migrated, staled, failed, errors[] }`. Запускать можно несколько раз подряд — пока в ответе есть необработанные
+    - `POST /api/thumbnails/delete` — принимает `{ storagePaths: [...] }` (или legacy `{ driveIds: [...] }` — пока фронт не задеплоен после переезда). Лимит 5000 за вызов. Если Storage не настроен — отвечает 200 со счётчиком 0
+    - `POST /api/thumbnails/migrate` — принимает `{ limit?: number }` (default 50, max 200). Берёт пачку из `getVideosForThumbnailMigration`, по очереди заливает в Storage, обновляет БД. Возвращает `{ requested, migrated, staled, failed, errors[] }`
 
 - Фронтенд:
-  - `lib/types.ts` + `lib/videosService.ts` — поле `thumbnailDriveId: string | null` в `Video`, маппинг `thumbnail_drive_id`
-  - `lib/videoDeleteService.ts` — теперь принимает driveId как второй аргумент. **Перед** удалением из БД дёргает `/api/thumbnails-delete` с массивом driveIds (best effort: ошибки не пробрасывает, чтобы видео всё равно удалилось из БД, даже если Drive не отвечает)
-  - `app/api/thumbnails-delete/route.ts` — Next API-роут, проксирует POST на `${BACKEND_URL}/api/thumbnails/delete`. Тот же паттерн, что у `/api/thumbnail` для CDN — не плодим `NEXT_PUBLIC_BACKEND_URL`, скрываем URL бэкенда от клиента
-  - `app/api/thumbnail/route.ts` — в whitelist хостов добавлены `drive.google.com` и `googleusercontent.com`, чтобы прокси работал и для новых превью с Drive
+  - `lib/types.ts` + `lib/videosService.ts` — поле `thumbnailStoragePath: string | null` в `Video`, маппинг `thumbnail_storage_path` (раньше было `thumbnailDriveId` / `thumbnail_drive_id`)
+  - `lib/videoDeleteService.ts` — `deleteVideo(id, storagePath)` и `deleteVideos(ids, storagePaths)`. **Перед** удалением из БД дёргает `/api/thumbnails-delete` с массивом storagePaths (best effort: ошибки не пробрасывает)
+  - `app/api/thumbnails-delete/route.ts` — Next API-роут, проксирует POST на `${BACKEND_URL}/api/thumbnails/delete`. Не плодим `NEXT_PUBLIC_BACKEND_URL`
+  - `app/api/thumbnail/route.ts` — в whitelist хостов добавлен `supabase.co` (Drive-хосты убраны как ненужные)
   - `components/blog/analyst/AnalystWorkspace.tsx`:
-    - `confirmDelete` собирает driveIds из снапшота state через `videos.filter(...).map(v => v.thumbnailDriveId)` и передаёт в `deleteVideo`/`deleteVideos`
+    - `confirmDelete` собирает storagePaths через `videos.filter(...).map(v => v.thumbnailStoragePath)` и передаёт в `deleteVideo`/`deleteVideos`
     - `handleViewerDelete` — то же для удаления из Tinder-режима
 
 - Конфигурация:
-  - `backend/.env.example` — добавлены три переменных с подробным комментарием о том, как получить (Google Cloud Console → Service Account → JSON-ключ → расшарить папку)
-  - `.gitignore` — `google-credentials.json` и `*-service-account.json` в чёрном списке
+  - `backend/.env.example` — переменная `SUPABASE_STORAGE_BUCKET=thumbnails` с инструкцией создания bucket'а в Dashboard
+  - `.gitignore` — правила про `google-credentials.json` убраны (больше не нужны)
 
 Решения, принятые намеренно:
-- **Все Google-переменные опциональные.** Если Влад ещё не настроил Google Cloud — бэкенд просто продолжает работать как до Сессии 20: превью с Instagram CDN, протухают через сутки. Это критично: миграция БД 0010 + `npm install googleapis` могут пройти раньше, чем Влад успеет создать Service Account, и в этот момент система не должна падать
-- **Ленивая инициализация Drive.** Не лезем в credentials при старте — только при первом вызове `isEnabled()` или `uploadThumbnail()`. Если переменные кривые, бэкенд всё равно поднимется и health-чек ответит 200; ошибка будет в логах при первой реальной обработке видео
-- **Залить превью на Drive — лучшее усилие, не блокер.** Любая ошибка (Drive недоступен, ключ просрочен, картинка не скачалась) → логируем warning, оставляем оригинальный URL Instagram, идём дальше. Видео обрабатывается успешно. На следующем рестарте бэкенда / запуске migrate-эндпоинта это превью можно перезалить
-- **`drive.file` scope, не `drive.full`.** Минимально достаточный: даёт доступ только к файлам, созданным самим приложением. Не сможет читать/писать ничего другого на Drive Влада, даже если он залогинит приложение в большой Drive
-- **URL `uc?export=view&id=`.** Этот формат Drive поддерживает прямую отдачу содержимого файла для встраивания в `<img>`. Альтернатива `lh3.googleusercontent.com/d/<id>` — короче, но иногда отдаёт уменьшенный thumbnail вместо оригинала. `uc?export=view` стабильнее для нашего use case
-- **Удаление превью через Next API-route, не из server actions.** Удаление видео сделано на чистом клиенте (Supabase RLS), и ломать архитектуру ради одного шага слишком инвазивно. Прокси-роут даёт минимально нужное: фронт делает один POST, прокси пробрасывает на бэк. Эта конструкция уже есть для `/api/thumbnail` (Instagram CDN) — паттерн знакомый
-- **Имя файла = `<shortcode>-<timestamp>.jpg`.** Уникальный timestamp защищает от конфликтов: если на одно видео случится повторная обработка (retry), новый файл создастся с другим именем, старый удалится при удалении самого видео. Без timestamp Drive создал бы дубликаты с одинаковыми именами (он на это спокойно реагирует, но потом не разберёшь)
-- **Bookmarks тоже получают `thumbnail_drive_id`.** Когда видео переезжает в закладки через `moveToBookmarks`, сейчас mfilesService копирует все базовые поля. Поле `thumbnail_drive_id` добавим в это копирование в одной из следующих сессий — миграция 0010 уже делает колонку доступной, так что эту правку можно докатить точечно
+- **Supabase Storage вместо Google Drive.** Service Account на бесплатном Google не может писать на Drive. Workspace ($6/мес) или OAuth (своя квота) решают, но добавляют сложность и/или стоимость. Storage уже есть, бесплатный лимит покрывает все обозримые объёмы для личного инструмента
+- **`SUPABASE_STORAGE_BUCKET` опциональная.** Если переменная не задана — бэкенд продолжает работать как до Сессии 20: превью с Instagram CDN, протухают через сутки. Это критично на этапе деплоя: миграция БД может пройти раньше, чем создан bucket, и в этот момент система не должна падать
+- **Залить превью в Storage — лучшее усилие, не блокер.** Любая ошибка (Storage недоступен, картинка не скачалась) → логируем warning, оставляем оригинальный URL Instagram, идём дальше. Видео обрабатывается успешно
+- **Public bucket, не private с signed URLs.** Превью — не секрет: Instagram-посты публичные, и наша БД в `videos` тоже хранит публичные ссылки. Public bucket даёт прямой CDN-URL, не нужны сервер-генерируемые ссылки на каждый просмотр, проще встраивать в `<img>`
+- **Прокси `/api/thumbnail` оставлен, но для Supabase URL не критичен.** Supabase CDN отдаёт картинки с правильными CORS-заголовками, прокси нужен только для старых записей с Instagram CDN (которые ещё не мигрированы). Postoянный whitelist даёт чистоту: всё проходит через один путь, кэширование Vercel CDN на сутки работает для обоих источников
+- **Имя файла = `<shortcode>-<timestamp>.jpg`.** Уникальный timestamp защищает от конфликтов на retry
+- **Bookmarks тоже получают `thumbnail_storage_path`.** Колонка добавлена в обе таблицы — при будущем UI закладок и переносе превью в `moveToBookmarks` поле уже доступно
 
 Известные ограничения сессии 20:
-- **Google Drive free-tier — 15 ГБ.** При типичном размере превью Instagram (~50 КБ) этого хватит на ~300 000 видео. Влад вряд ли наберёт столько за обозримое время, но мониторить стоит
-- **Bookmarks → удаление:** удаление из bookmarks (через Supabase Dashboard, UI пока нет) **не подчищает Drive**. Файлы останутся «сиротами». Когда появится UI закладок — добавим тот же flow, что для видео
-- **Скрипт миграции старых превью.** `POST /api/thumbnails/migrate` — синхронный, обрабатывает 50 видео за вызов (~30–60 секунд). Запускать вручную через curl / Postman / DevTools fetch. Для нескольких сотен видео — кликнуть несколько раз. Если хочется автоматизировать — можно добавить cron или UI-кнопку, но это полишинг
-- **Один Drive-аккаунт = одна папка = всё в куче.** Файлы лежат «плоско» в одной папке без подпапок по дате/автору. Drive UI справляется и с тысячами файлов в папке, но если когда-то захочется чистить вручную — будет неудобно
-- **Race condition на удалении.** Если фронт упал между `purgeThumbnails` и `delete from videos` — Drive файл уже удалён, а запись в БД осталась с `thumbnail_drive_id`. UI отрисует битую картинку (404 от Drive). Это редкий сценарий (между двумя fetch-вызовами секунды), и поправляется retry удаления — driveId уже null после первого прохода, повторный запрос не дёргает Drive
+- **Бесплатный лимит Supabase: 1 ГБ места и 2 ГБ трафика в месяц.** При типичном превью ~50 КБ это ~20 000 файлов. Трафик считается на каждом скачивании браузером — открытие страницы с таблицей грузит ~50 миниатюр × 50 КБ = ~2.5 МБ. То есть ~800 открытий страницы в месяц без апгрейда. Для личного инструмента — с большим запасом
+- **Bookmarks → удаление:** удаление из bookmarks (через Supabase Dashboard, UI пока нет) **не подчищает Storage**. Файлы останутся «сиротами». Когда появится UI закладок — добавим тот же flow, что для видео
+- **Скрипт миграции старых превью.** `POST /api/thumbnails/migrate` — синхронный, обрабатывает 50 видео за вызов (~20–40 секунд). Запускать вручную через DevTools fetch. Для нескольких сотен видео — кликнуть несколько раз
+- **Race condition на удалении.** Если фронт упал между `purgeThumbnails` и `delete from videos` — файл в Storage уже удалён, а запись в БД осталась с `thumbnail_storage_path`. UI отрисует битую картинку (404). Это редкий сценарий и поправляется retry удаления
 
 Ручные шаги для Влада (после pull):
-1. **Установить новую зависимость**: PowerShell в `backend/` → `& "C:\Program Files\nodejs\npm.cmd" install`. Подтянет `googleapis`
-2. **Миграция Supabase**: Dashboard → SQL Editor → вставить целиком `supabase/migrations/0010_thumbnail_drive_id.sql` → Run. Миграция ничего не дропает: только добавляет два nullable-поля
-3. **Настроить Google Cloud (один раз)**:
-   - https://console.cloud.google.com → создать проект «potok»
-   - APIs & Services → Library → найти **Google Drive API** → Enable
-   - APIs & Services → Credentials → Create credentials → **Service account** → имя любое, роль не нужна, Done
-   - Кликнуть на созданный аккаунт → вкладка Keys → Add key → Create new key → JSON → скачать
-   - Скачанный файл переименовать в `google-credentials.json` и положить в `backend/`. **`.gitignore` уже содержит правило**, файл не попадёт в репо
-   - Открыть Google Drive → создать папку «potok-thumbnails» → правый клик → Поделиться → ввести email сервисного аккаунта (он есть в JSON-файле, поле `client_email`) → роль **Editor** → Поделиться
-   - В адресной строке Drive скопировать ID папки из URL `drive.google.com/drive/folders/<ID>`
-4. **Заполнить `backend/.env`** (новые переменные см. в `backend/.env.example`):
-   - `GOOGLE_DRIVE_CREDENTIALS_PATH=./google-credentials.json`
-   - `GOOGLE_DRIVE_FOLDER_ID=<ID папки>`
-   - (`GOOGLE_DRIVE_CREDENTIALS_JSON` оставить пустым локально)
-5. **Перезапустить бэкенд** (`Ctrl+C` → `npm start` в `backend/`). В логах НЕ должно быть warning «Google Drive не инициализирован»
+1. **Удалить старую зависимость**: PowerShell в `backend/` → `& "C:\Program Files\nodejs\npm.cmd" install`. Удалит `googleapis` (если был), синхронизирует lock-файл
+2. **Применить миграцию 0011**: Supabase Dashboard → SQL Editor → вставить целиком `supabase/migrations/0011_thumbnail_storage_path.sql` → Run. Переименует колонку, ничего не дропает
+3. **Создать bucket в Supabase**:
+   - Dashboard → Storage (иконка папки слева) → New bucket
+   - Имя: `thumbnails`
+   - **Public bucket = ON** (важно! без этого превью не отдадутся в `<img>`)
+   - Save
+4. **Заполнить `backend/.env`**:
+   - Удалить старые `GOOGLE_DRIVE_*` переменные (если оставались)
+   - Добавить: `SUPABASE_STORAGE_BUCKET=thumbnails`
+5. **Перезапустить бэкенд локально** (`Ctrl+C` → `npm start` в `backend/`). В логах НЕ должно быть warning `[storage] SUPABASE_STORAGE_BUCKET не задан`
 6. **На Railway**:
-   - Settings → Variables → добавить `GOOGLE_DRIVE_FOLDER_ID` (тот же ID папки)
-   - `GOOGLE_DRIVE_CREDENTIALS_JSON` — открыть скачанный JSON-файл, **скопировать всё содержимое целиком** (одной строкой) → вставить как значение переменной. Railway переразвернёт сервис
-7. **Перезалить старые превью на Drive (одноразово)**:
-   - Открыть DevTools → Console (на любой странице сайта) → выполнить:
+   - Settings → Variables → **удалить** `GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_DRIVE_CREDENTIALS_PATH`, `GOOGLE_DRIVE_CREDENTIALS_JSON` (они больше не нужны)
+   - **Добавить** новую: `SUPABASE_STORAGE_BUCKET=thumbnails`
+   - Railway переразвернёт сервис автоматически
+7. **Удалить Google Cloud-проект (опционально, для чистоты)**:
+   - В Google Cloud Console удалить проект `potok` (или Service Account и его ключи) — больше не нужен
+   - Файл `backend/google-credentials.json` (если лежал локально) можно удалить
+8. **Перезалить старые превью в Storage (если хочется)**:
+   - DevTools → Console (на сайте) → выполнить:
      ```js
      fetch('https://potok-production-a2dc.up.railway.app/api/thumbnails/migrate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{"limit":50}' }).then(r => r.json()).then(console.log)
      ```
-   - В ответе будет `{ requested, migrated, staled, failed }`. Запускать пока `requested > 0` — обычно 5–10 вызовов хватит на пару сотен видео. Это безопасно: запуск повторно не задвоит файлы (фильтр в БД отсекает уже мигрированных)
-8. **Проверить**: добавить новое видео — после обработки в БД `thumbnail_url` будет с `drive.google.com`, `thumbnail_drive_id` заполнен. Удалить это видео — файл с Drive тоже исчезнет (можно проверить в папке)
+   - Запускать пока в ответе `requested > 0`. Безопасно повторять
+9. **Проверить**: добавить новое видео — после обработки в БД `thumbnail_url` будет с `<твой-проект>.supabase.co/storage/v1/object/public/thumbnails/...`, `thumbnail_storage_path` заполнен. Удалить это видео — файл из bucket'а тоже исчезнет (видно в Supabase Dashboard → Storage → thumbnails)
 
 **Сессия 21: Обновление AI-промпта с полным контекстом блога**
 Цель: заменить текущий краткий промпт классификации is_reference на полную версию из секции "Контекст блога для AI-классификации" выше.

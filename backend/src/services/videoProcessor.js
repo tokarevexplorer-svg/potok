@@ -4,7 +4,10 @@ import {
   fetchReelByUrl,
   mapReelToVideoFields,
 } from "./apifyService.js";
-import { isEnabled as isDriveEnabled, uploadThumbnail } from "./googleDriveService.js";
+import {
+  isEnabled as isStorageEnabled,
+  uploadThumbnail,
+} from "./supabaseStorageService.js";
 import {
   getVideoById,
   markAiProcessing,
@@ -63,26 +66,26 @@ export async function processVideoById(id) {
     captionForAi = fields.caption;
     contentType = fields.content_type ?? "video";
 
-    // Заливаем превью на Google Drive (если сервис настроен), чтобы получить
-    // постоянный URL вместо временного с Instagram CDN. Замена URL делается
-    // ДО saveVideoSuccess, чтобы в БД сразу попал постоянный линк.
-    // Любая ошибка загрузки — не блокирует обработку: остаётся оригинальный URL,
-    // через сутки протухнет — но к тому моменту, скорее всего, retry или
+    // Заливаем превью на Supabase Storage (если bucket настроен), чтобы
+    // получить постоянный URL вместо временного с Instagram CDN. Замена URL
+    // делается ДО saveVideoSuccess, чтобы в БД сразу попал постоянный линк.
+    // Любая ошибка загрузки — не блокирует обработку: остаётся оригинальный
+    // URL, через сутки протухнет — но к тому моменту, скорее всего, retry или
     // миграция всё равно пройдут заново.
-    if (fields.thumbnail_url && isDriveEnabled()) {
+    if (fields.thumbnail_url && isStorageEnabled()) {
       try {
         const shortcode = extractShortcode(video.url) ?? id;
-        const { url, fileId } = await uploadThumbnail(
+        const { url, path } = await uploadThumbnail(
           fields.thumbnail_url,
           `${shortcode}-${Date.now()}`,
         );
         fields.thumbnail_url = url;
-        fields.thumbnail_drive_id = fileId;
-        console.log(`[processor] ${id}: превью на Drive (${fileId})`);
+        fields.thumbnail_storage_path = path;
+        console.log(`[processor] ${id}: превью на Storage (${path})`);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.warn(`[processor] ${id}: превью на Drive не залилось — ${message}`);
-        // оставляем оригинальный thumbnail_url, fileId не пишем
+        console.warn(`[processor] ${id}: превью на Storage не залилось — ${message}`);
+        // оставляем оригинальный thumbnail_url, path не пишем
       }
     }
 

@@ -196,15 +196,15 @@ export async function saveAiSkipped(id) {
   }
 }
 
-// --- Превью (Google Drive миграция) ---------------------------------------
+// --- Превью (Supabase Storage миграция) -----------------------------------
 
-// Видео, у которых превью ещё на Instagram CDN и не залито на Drive.
+// Видео, у которых превью ещё на Instagram CDN и не залито в Storage.
 // Используется одноразовым endpoint'ом миграции старых превью.
 export async function getVideosForThumbnailMigration(limit = 100) {
   const { data, error } = await client
     .from("videos")
     .select("id, url, thumbnail_url")
-    .is("thumbnail_drive_id", null)
+    .is("thumbnail_storage_path", null)
     .not("thumbnail_url", "is", null)
     .or("thumbnail_url.ilike.%cdninstagram.com%,thumbnail_url.ilike.%fbcdn.net%")
     .limit(limit);
@@ -215,10 +215,10 @@ export async function getVideosForThumbnailMigration(limit = 100) {
   return data ?? [];
 }
 
-export async function saveThumbnailUploadResult(id, { url, driveId }) {
+export async function saveThumbnailUploadResult(id, { url, storagePath }) {
   const { error } = await client
     .from("videos")
-    .update({ thumbnail_url: url, thumbnail_drive_id: driveId })
+    .update({ thumbnail_url: url, thumbnail_storage_path: storagePath })
     .eq("id", id);
   if (error) {
     throw new Error(`Supabase update (thumbnail) failed: ${error.message}`);

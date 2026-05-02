@@ -239,20 +239,20 @@ export default function AnalystWorkspace({
     setDeleteBusy(true);
     const ids =
       pendingDelete.kind === "single" ? [pendingDelete.id] : pendingDelete.ids;
-    // Собираем driveIds из снапшота — потом удалятся вместе с записями.
+    // Собираем storagePaths из снапшота — потом удалятся вместе с записями.
     const idSet = new Set(ids);
-    const driveIds = videos
+    const storagePaths = videos
       .filter((v) => idSet.has(v.id))
-      .map((v) => v.thumbnailDriveId)
+      .map((v) => v.thumbnailStoragePath)
       .filter((x): x is string => Boolean(x));
     // Оптимистично убираем из state — если упадёт, вернём.
     const snapshot = videos;
     setVideos((prev) => prev.filter((v) => !ids.includes(v.id)));
     try {
       if (pendingDelete.kind === "single") {
-        await deleteVideo(pendingDelete.id, driveIds[0] ?? null);
+        await deleteVideo(pendingDelete.id, storagePaths[0] ?? null);
       } else {
-        await deleteVideos(pendingDelete.ids, driveIds);
+        await deleteVideos(pendingDelete.ids, storagePaths);
       }
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -311,10 +311,11 @@ export default function AnalystWorkspace({
   // в режиме «быстрого разбора», у пользователя есть мини-меню как страховка.
   const handleViewerDelete = useCallback(async (videoId: string) => {
     const snapshot = videos;
-    const driveId = videos.find((v) => v.id === videoId)?.thumbnailDriveId ?? null;
+    const storagePath =
+      videos.find((v) => v.id === videoId)?.thumbnailStoragePath ?? null;
     setVideos((prev) => prev.filter((v) => v.id !== videoId));
     try {
-      await deleteVideo(videoId, driveId);
+      await deleteVideo(videoId, storagePath);
     } catch (e) {
       setVideos(snapshot);
       throw e;

@@ -1,9 +1,9 @@
 import { Router } from "express";
 import {
   deleteManyThumbnails,
-  isEnabled as isDriveEnabled,
+  isEnabled as isStorageEnabled,
   uploadThumbnail,
-} from "../services/googleDriveService.js";
+} from "../services/supabaseStorageService.js";
 import {
   clearStaleThumbnail,
   getVideosForThumbnailMigration,
@@ -12,31 +12,41 @@ import {
 
 const router = Router();
 
-// POST /api/thumbnails/delete  { driveIds: ["...", "..."] }
-// Удаляет файлы с Google Drive. Используется фронтом перед удалением видео из
-// БД, чтобы не оставлять «сирот» на Drive.
+// POST /api/thumbnails/delete  { storagePaths: ["...", "..."] }
+// Удаляет файлы из Supabase Storage. Используется фронтом перед удалением
+// видео из БД, чтобы не оставлять «сирот» в bucket'е.
 //
-// Best effort: если Drive не настроен или вернул ошибку — отвечаем 200 с
+// Best effort: если Storage не настроен или вернул ошибку — отвечаем 200 с
 // нулевым счётчиком и не ломаем поток удаления видео в браузере.
+//
+// Также принимает legacy-имя поля `driveIds` — если фронт ещё не обновился
+// до нового деплоя на Vercel. Можно убрать через несколько недель.
 router.post("/delete", async (req, res) => {
-  const { driveIds } = req.body ?? {};
+  const body = req.body ?? {};
+  const raw = body.storagePaths ?? body.driveIds;
 
-  if (!Array.isArray(driveIds)) {
-    return res.status(400).json({ error: "driveIds должен быть массивом строк" });
+  if (!Array.isArray(raw)) {
+    return res
+      .status(400)
+      .json({ error: "storagePaths должен быть массивом строк" });
   }
-  if (driveIds.length === 0) {
+  if (raw.length === 0) {
     return res.json({ deleted: 0 });
   }
-  if (driveIds.length > 5000) {
-    return res.status(400).json({ error: "максимум 5000 id за раз" });
+  if (raw.length > 5000) {
+    return res.status(400).json({ error: "максимум 5000 path за раз" });
   }
 
   // Фильтруем мусор и пустые строки.
-  const valid = driveIds.filter((id) => typeof id === "string" && id.length > 0);
+  const valid = raw.filter((p) => typeof p === "string" && p.length > 0);
   if (valid.length === 0) return res.json({ deleted: 0 });
 
-  if (!isDriveEnabled()) {
-    return res.json({ deleted: 0, skipped: valid.length, reason: "drive disabled" });
+  if (!isStorageEnabled()) {
+    return res.json({
+      deleted: 0,
+      skipped: valid.length,
+      reason: "storage disabled",
+    });
   }
 
   const deleted = await deleteManyThumbnails(valid);
@@ -45,18 +55,18 @@ router.post("/delete", async (req, res) => {
 
 // POST /api/thumbnails/migrate  { limit?: number }
 // Проходит по существующим видео, у которых превью ещё на Instagram CDN, и
-// перезаливает их на Drive. По умолчанию 50 за вызов — Drive API в free-tier
-// это переваривает спокойно. Запускать можно несколько раз подряд, пока в
-// ответе `migrated > 0` или `failed > 0` — пока есть что обрабатывать.
+// перезаливает их на Supabase Storage. По умолчанию 50 за вызов. Запускать
+// можно несколько раз подряд, пока в ответе `migrated > 0` или `failed > 0`
+// — пока есть что обрабатывать.
 //
 // Для протухших ссылок (Instagram отдаёт 403/404) thumbnail_url обнуляется,
 // чтобы UI показывал placeholder вместо битой картинки. Эти видео в
 // следующий вызов уже не попадут (фильтр `not is null`).
 router.post("/migrate", async (req, res) => {
-  if (!isDriveEnabled()) {
+  if (!isStorageEnabled()) {
     return res
       .status(503)
-      .json({ error: "Google Drive не настроен — миграция невозможна" });
+      .json({ error: "Supabase Storage не настроен — миграция невозможна" });
   }
 
   const limit = Math.min(
@@ -79,11 +89,11 @@ router.post("/migrate", async (req, res) => {
   for (const row of pending) {
     try {
       const filenameBase = extractShortcode(row.url) ?? row.id;
-      const { url, fileId } = await uploadThumbnail(
+      const { url, path } = await uploadThumbnail(
         row.thumbnail_url,
         `${filenameBase}-${Date.now()}`,
       );
-      await saveThumbnailUploadResult(row.id, { url, driveId: fileId });
+      await saveThumbnailUploadResult(row.id, { url, storagePath: path });
       migrated += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
