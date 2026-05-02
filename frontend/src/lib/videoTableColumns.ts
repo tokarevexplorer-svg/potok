@@ -21,6 +21,7 @@ export const columnGroupLabels: Record<ColumnGroup, string> = {
 export const videoColumns: VideoColumn[] = [
   { key: "thumbnail", label: "Превью", group: "ref", minWidth: "min-w-[120px]" },
   { key: "publishedAt", label: "Дата", group: "ref", minWidth: "min-w-[112px]" },
+  { key: "duration", label: "Хронометраж", group: "ref", minWidth: "min-w-[120px]" },
   { key: "author", label: "Автор", group: "ref", minWidth: "min-w-[160px]" },
   { key: "caption", label: "Описание", group: "ref", minWidth: "min-w-[280px]" },
 
@@ -34,6 +35,7 @@ export const videoColumns: VideoColumn[] = [
   { key: "aiSummary", label: "Саммари", group: "ai", minWidth: "min-w-[280px]" },
   { key: "transcript", label: "Транскрипция", group: "ai", minWidth: "min-w-[200px]" },
   { key: "aiCategory", label: "Категория AI", group: "ai", minWidth: "min-w-[160px]" },
+  { key: "isReference", label: "Референс", group: "ai", minWidth: "min-w-[120px]" },
 
   { key: "myCategory", label: "Категория Я", group: "manual", minWidth: "min-w-[160px]" },
   { key: "tags", label: "Теги", group: "manual", minWidth: "min-w-[180px]" },

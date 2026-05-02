@@ -35,6 +35,8 @@ interface SwipeViewerProps {
 const SWIPE_THRESHOLD = 110;
 const SWIPE_VELOCITY = 0.6;
 const ANIM_MS = 250;
+// Если iframe не вызвал onLoad за этот таймаут — показываем fallback c превью.
+const EMBED_TIMEOUT_MS = 5000;
 
 // Полноэкранный Tinder-режим: одна карточка по центру, свайп влево/вправо
 // (мышь, тач, клавиатура), счётчик прогресса. Влево → мини-меню «Удалить /
@@ -64,6 +66,9 @@ export default function SwipeViewer({
   // Воронка после правого свайпа — рендерится поверх карточки.
   const [rightFlowOpen, setRightFlowOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // iframe не вызвал onLoad за 5 сек → переключаемся на fallback с превью.
+  // Для фото/каруселей iframe не показываем вовсе.
+  const [embedFailed, setEmbedFailed] = useState(false);
 
   const start = useRef<{ x: number; y: number; t: number } | null>(null);
 
@@ -85,6 +90,7 @@ export default function SwipeViewer({
     setDrag(null);
     setPostLeftMenu(false);
     setRightFlowOpen(false);
+    setEmbedFailed(false);
   }, [index]);
 
   const triggerSwipe = useCallback(
@@ -245,7 +251,10 @@ export default function SwipeViewer({
     cardTransform = `translate(${drag.dx}px, ${drag.dy * 0.2}px) rotate(${drag.dx * 0.05}deg)`;
   }
 
-  const embedUrl = buildInstagramEmbedUrl(current.url);
+  // Для фото/каруселей iframe-плеер бесполезен — Instagram отдаст пустоту или
+  // битый embed. Сразу показываем превью + кнопку «Открыть в Instagram».
+  const useEmbed = current.contentType === "video";
+  const embedUrl = useEmbed ? buildInstagramEmbedUrl(current.url) : null;
   const author = current.author ?? "Автор не указан";
   const summary = current.aiSummary;
   const categoryLabel = formatAiCategory(
@@ -314,40 +323,29 @@ export default function SwipeViewer({
         >
           {/* Видео / fallback */}
           <div className="relative w-full flex-1 overflow-hidden bg-elevated">
-            {embedUrl ? (
-              <iframe
-                key={current.id}
-                src={embedUrl}
-                title="Instagram embed"
-                className="h-full w-full"
-                allow="autoplay; encrypted-media; picture-in-picture; clipboard-write"
-                allowFullScreen
-                referrerPolicy="no-referrer"
-              />
-            ) : current.thumbnailUrl ? (
-              <div className="relative h-full w-full">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`/api/thumbnail?url=${encodeURIComponent(current.thumbnailUrl)}`}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  className="h-full w-full object-cover"
-                />
-                <a
-                  href={current.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="focus-ring absolute left-1/2 top-1/2 inline-flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-xl bg-surface/95 px-5 py-3 text-sm font-medium text-ink shadow-pop transition hover:bg-surface"
-                >
-                  <ExternalLink size={16} />
-                  Открыть в Instagram
-                </a>
-              </div>
-            ) : (
-              <div className="flex h-full items-center justify-center p-6 text-center text-sm text-ink-muted">
-                Не удалось определить ссылку на видео
-              </div>
-            )}
+            <CardMedia
+              key={current.id}
+              embedUrl={embedUrl}
+              videoId={current.id}
+              videoUrl={current.url}
+              thumbnailUrl={current.thumbnailUrl}
+              embedFailed={embedFailed}
+              onEmbedFail={() => setEmbedFailed(true)}
+            />
+
+            {/* Кнопка «Открыть в Instagram» — всегда видна поверх плеера/превью.
+                На мобиле URL открывает приложение Instagram автоматически. */}
+            <a
+              href={current.url}
+              target="_blank"
+              rel="noreferrer"
+              onPointerDown={(e) => e.stopPropagation()}
+              className="focus-ring absolute right-3 top-3 z-10 inline-flex items-center gap-1.5 rounded-full bg-ink/70 px-3 py-1.5 text-xs font-medium text-surface backdrop-blur-sm transition hover:bg-ink/85"
+              title="Открыть пост в Instagram"
+            >
+              <ExternalLink size={14} />
+              <span className="hidden sm:inline">Instagram</span>
+            </a>
           </div>
 
           {/* Инфо-панель: автор, AI-саммари, категория */}
@@ -430,5 +428,82 @@ export default function SwipeViewer({
       )}
     </div>,
     document.body,
+  );
+}
+
+interface CardMediaProps {
+  embedUrl: string | null;
+  videoId: string;
+  videoUrl: string;
+  thumbnailUrl: string | null;
+  embedFailed: boolean;
+  onEmbedFail: () => void;
+}
+
+// Внутренности карточки: iframe Instagram-плеера или fallback с превью.
+// Если iframe не успел загрузиться за EMBED_TIMEOUT_MS — переключаемся на превью.
+// Для фото/каруселей вызывающий код передаёт embedUrl=null, и мы сразу
+// показываем превью.
+function CardMedia({
+  embedUrl,
+  videoId,
+  videoUrl,
+  thumbnailUrl,
+  embedFailed,
+  onEmbedFail,
+}: CardMediaProps) {
+  // Таймер ставим при каждом новом video id; чистим при unmount/смене карточки.
+  useEffect(() => {
+    if (!embedUrl || embedFailed) return;
+    const timer = window.setTimeout(onEmbedFail, EMBED_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+    // videoId передан только чтобы гарантировать рестарт таймера на новой карточке.
+  }, [embedUrl, embedFailed, onEmbedFail, videoId]);
+
+  if (embedUrl && !embedFailed) {
+    return (
+      <iframe
+        src={embedUrl}
+        title="Instagram embed"
+        className="h-full w-full"
+        allow="autoplay; encrypted-media; picture-in-picture; clipboard-write"
+        allowFullScreen
+        referrerPolicy="no-referrer"
+        // onLoad срабатывает один раз — отменять таймер не обязательно, но и не вредно.
+        onLoad={() => {
+          /* iframe загрузился — оставляем как есть */
+        }}
+      />
+    );
+  }
+
+  if (thumbnailUrl) {
+    return (
+      <div className="relative h-full w-full">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`/api/thumbnail?url=${encodeURIComponent(thumbnailUrl)}`}
+          alt=""
+          referrerPolicy="no-referrer"
+          className="h-full w-full object-cover"
+        />
+        <a
+          href={videoUrl}
+          target="_blank"
+          rel="noreferrer"
+          onPointerDown={(e) => e.stopPropagation()}
+          className="focus-ring absolute left-1/2 top-1/2 inline-flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-xl bg-surface/95 px-5 py-3 text-sm font-medium text-ink shadow-pop transition hover:bg-surface"
+        >
+          <ExternalLink size={16} />
+          Смотреть в Instagram
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center p-6 text-center text-sm text-ink-muted">
+      Не удалось определить ссылку на видео
+    </div>
   );
 }

@@ -165,6 +165,20 @@ export default function AnalystWorkspace({
     [],
   );
 
+  const handleUpdateIsReference = useCallback(
+    async (videoId: string, value: boolean | null) => {
+      setVideos((prev) =>
+        prev.map((v) => (v.id === videoId ? { ...v, isReference: value } : v)),
+      );
+      try {
+        await svc.setVideoIsReference(videoId, value);
+      } catch (e) {
+        alert((e as Error).message);
+      }
+    },
+    [],
+  );
+
   // ------- Выбор строк -------
 
   const handleToggleSelected = useCallback((videoId: string) => {
@@ -422,6 +436,7 @@ export default function AnalystWorkspace({
             onCreateTag={handleCreateTag}
             onSaveNote={handleSaveNote}
             onUpdateRatings={handleUpdateRatings}
+            onUpdateIsReference={handleUpdateIsReference}
             onManageMyCategories={() => setManageMode("categories")}
             onManageTags={() => setManageMode("tags")}
             onToggleSelected={handleToggleSelected}

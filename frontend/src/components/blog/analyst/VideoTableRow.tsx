@@ -15,11 +15,17 @@ import { videoColumns } from "@/lib/videoTableColumns";
 import { formatAiCategory } from "@/lib/aiCategories";
 import { ENTITY_COLORS } from "@/lib/tagColors";
 import { getViralityLevel } from "@/lib/viralityLevel";
+import {
+  contentTypeEmoji,
+  contentTypeLabels,
+  formatDuration,
+} from "@/lib/contentType";
 import ExpandableText from "./ExpandableText";
 import MyCategoryCell from "./MyCategoryCell";
 import TagsCell from "./TagsCell";
 import NoteCell from "./NoteCell";
 import ThumbnailCell from "./ThumbnailCell";
+import IsReferenceCell from "./IsReferenceCell";
 
 const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   day: "2-digit",
@@ -153,6 +159,8 @@ export interface VideoTableRowCallbacks {
   onCreateTag: (name: string) => Promise<Tag>;
   onSaveNote: (videoId: string, value: string | null) => Promise<void>;
   onUpdateRatings: (videoId: string, ratings: Rating[]) => Promise<void>;
+  // Toggle между null → true → false → null.
+  onUpdateIsReference: (videoId: string, value: boolean | null) => Promise<void>;
   onManageMyCategories: () => void;
   onManageTags: () => void;
   // Чекбокс выбора и удаление одной строки.
@@ -179,6 +187,7 @@ export default function VideoTableRow({
   onCreateTag,
   onSaveNote,
   onUpdateRatings,
+  onUpdateIsReference,
   onManageMyCategories,
   onManageTags,
   onToggleSelected,
@@ -216,6 +225,26 @@ export default function VideoTableRow({
           ) : null,
           status,
         );
+      case "duration": {
+        // Для фото/каруселей длительности нет — показываем эмодзи + подпись.
+        if (video.contentType !== "video") {
+          return (
+            <span
+              className="inline-flex items-center gap-1.5 text-ink-muted"
+              title={contentTypeLabels[video.contentType]}
+            >
+              <span aria-hidden>{contentTypeEmoji[video.contentType]}</span>
+              {contentTypeLabels[video.contentType]}
+            </span>
+          );
+        }
+        const formatted = formatDuration(video.duration);
+        if (formatted) {
+          return <span className="tabular-nums text-ink">{formatted}</span>;
+        }
+        if (status === "done") return <Placeholder />;
+        return <StatusHint status={status} />;
+      }
       case "author":
         if (video.author) {
           return video.authorUrl ? (
@@ -277,6 +306,15 @@ export default function VideoTableRow({
         return renderTranscriptCell(video);
       case "aiCategory":
         return renderCategoryCell(video);
+      case "isReference":
+        return (
+          <IsReferenceCell
+            videoId={video.id}
+            value={video.isReference}
+            aiStatus={video.aiStatus}
+            onChange={onUpdateIsReference}
+          />
+        );
       case "myCategory":
         return (
           <MyCategoryCell

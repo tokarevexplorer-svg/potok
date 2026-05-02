@@ -73,7 +73,27 @@ export function mapReelToVideoFields(raw) {
       comments: commentsInt,
       shares: sharesInt,
     }),
+
+    // Хронометраж — только для видео. Apify отдаёт дробное число секунд
+    // (например, 31.453) — округляем до целого, чтобы UI показывал "0:31".
+    duration: toIntOrNull(raw.videoDuration ?? raw.duration ?? null),
+    content_type: extractContentType(raw),
   };
+}
+
+// Apify Instagram Scraper отдаёт `type`: "Video" | "Image" | "Sidecar".
+// Sidecar — это карусель (несколько фото/видео в одном посте).
+// Маппим в наши значения; неизвестное приводим к 'video' (Reels по умолчанию).
+function extractContentType(raw) {
+  const type = String(raw.type ?? raw.mediaType ?? "").toLowerCase();
+  if (type.includes("sidecar") || type.includes("carousel")) return "carousel";
+  if (type.includes("image") || type.includes("photo")) return "image";
+  if (type.includes("video") || type.includes("reel") || type.includes("clip")) {
+    return "video";
+  }
+  // productType: "clips" — отдельный сигнал у некоторых акторов, что это Reel.
+  if (String(raw.productType ?? "").toLowerCase().includes("clip")) return "video";
+  return "video";
 }
 
 // Прямая ссылка на mp4-файл Reels из ответа Apify.

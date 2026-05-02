@@ -6,13 +6,16 @@ import clsx from "clsx";
 import { aiCategoryLabels } from "@/lib/aiCategories";
 import {
   initialFilterState,
+  type ContentTypeFilter,
   type FilterState,
+  type IsReferenceFilter,
   type RatingFilter,
   type SortKey,
   type TranscriptFilter,
 } from "@/lib/videoFilters";
 import { RATING_ORDER, RATINGS } from "@/lib/rating";
-import type { AiCategory, MyCategory, Tag } from "@/lib/types";
+import { contentTypeLabels } from "@/lib/contentType";
+import type { AiCategory, ContentType, MyCategory, Tag } from "@/lib/types";
 import EntityChip from "./EntityChip";
 import EntitySelectPopover, {
   type ColoredEntity,
@@ -41,6 +44,16 @@ const transcriptLabels: Record<TranscriptFilter, string> = {
   with: "С транскрипцией",
   without: "Без транскрипции",
 };
+
+const isReferenceLabels: Record<IsReferenceFilter, string> = {
+  any: "Все",
+  true: "✅ Для блога",
+  false: "❌ Другое",
+  unset: "Не определено",
+};
+
+// Список значений для селекта «Тип» — порядок имеет значение для UX.
+const contentTypeOrder: ContentTypeFilter[] = ["any", "video", "image", "carousel"];
 
 export default function FilterBar({
   filters,
@@ -71,6 +84,8 @@ export default function FilterBar({
       filters.author !== "any" ||
       filters.transcript !== "any" ||
       filters.rating !== "any" ||
+      filters.contentType !== "any" ||
+      filters.isReference !== "any" ||
       filters.sortBy !== initialFilterState.sortBy ||
       filters.sortAsc !== initialFilterState.sortAsc,
     [filters],
@@ -209,6 +224,38 @@ export default function FilterBar({
             {RATING_ORDER.map((r) => (
               <option key={r} value={r}>
                 {RATINGS[r].emoji} {RATINGS[r].label}
+              </option>
+            ))}
+          </select>
+        </FilterChip>
+
+        <FilterChip label="Тип">
+          <select
+            value={filters.contentType}
+            onChange={(e) =>
+              update("contentType", e.target.value as ContentTypeFilter)
+            }
+            className="bg-transparent text-sm text-ink outline-none"
+          >
+            {contentTypeOrder.map((k) => (
+              <option key={k} value={k}>
+                {k === "any" ? "Все" : contentTypeLabels[k as ContentType]}
+              </option>
+            ))}
+          </select>
+        </FilterChip>
+
+        <FilterChip label="Референс">
+          <select
+            value={filters.isReference}
+            onChange={(e) =>
+              update("isReference", e.target.value as IsReferenceFilter)
+            }
+            className="bg-transparent text-sm text-ink outline-none"
+          >
+            {(Object.keys(isReferenceLabels) as IsReferenceFilter[]).map((k) => (
+              <option key={k} value={k}>
+                {isReferenceLabels[k]}
               </option>
             ))}
           </select>

@@ -22,6 +22,11 @@ export type AiStatus =
 //   repeat   — снять такое же видео слово в слово (🔄)
 export type Rating = "verified" | "super" | "repeat";
 
+// Тип медиа из ответа Apify. Видео = Reels (с длительностью и звуком).
+// Image — одно фото. Carousel (sidecar в терминах Instagram) — несколько фото
+// и/или коротких клипов в одном посте.
+export type ContentType = "video" | "image" | "carousel";
+
 export type AiCategory =
   | "vibe-coding"
   | "history"
@@ -60,6 +65,10 @@ export interface Video {
   caption: string | null;
   thumbnailUrl: string | null;
 
+  // Длительность в секундах (только для contentType === "video"). Для фото/каруселей null.
+  duration: number | null;
+  contentType: ContentType;
+
   views: number | null;
   likes: number | null;
   comments: number | null;
@@ -69,6 +78,9 @@ export interface Video {
   transcript: string | null;
   aiCategory: AiCategory | null;
   aiCategorySuggestion: string | null;
+  // AI-классификация «полезно для блога» (true) / «личный/нерелевантный» (false).
+  // null — ещё не определено или AI не смог решить. Влад может вручную поменять.
+  isReference: boolean | null;
 
   // Ручные поля
   myCategoryId: string | null;

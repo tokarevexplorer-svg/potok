@@ -3,6 +3,7 @@ import { safeColor } from "@/lib/tagColors";
 import type {
   AiCategory,
   AiStatus,
+  ContentType,
   MyCategory,
   ProcessingStatus,
   Rating,
@@ -19,6 +20,8 @@ interface VideoRow {
   author_url: string | null;
   caption: string | null;
   thumbnail_url: string | null;
+  duration: number | null;
+  content_type: string | null;
   views: number | null;
   likes: number | null;
   comments: number | null;
@@ -27,6 +30,7 @@ interface VideoRow {
   transcript: string | null;
   ai_category: string | null;
   ai_category_suggestion: string | null;
+  is_reference: boolean | null;
   my_category_id: string | null;
   note: string | null;
   ratings: string[] | null;
@@ -59,6 +63,11 @@ function isRating(x: unknown): x is Rating {
   return typeof x === "string" && VALID_RATINGS.has(x as Rating);
 }
 
+const VALID_CONTENT_TYPES = new Set<ContentType>(["video", "image", "carousel"]);
+function safeContentType(x: string | null): ContentType {
+  return x && VALID_CONTENT_TYPES.has(x as ContentType) ? (x as ContentType) : "video";
+}
+
 function mapVideo(row: VideoRow): Video {
   return {
     id: row.id,
@@ -68,6 +77,8 @@ function mapVideo(row: VideoRow): Video {
     authorUrl: row.author_url,
     caption: row.caption,
     thumbnailUrl: row.thumbnail_url,
+    duration: row.duration,
+    contentType: safeContentType(row.content_type),
     views: row.views,
     likes: row.likes,
     comments: row.comments,
@@ -76,6 +87,7 @@ function mapVideo(row: VideoRow): Video {
     transcript: row.transcript,
     aiCategory: (row.ai_category as AiCategory | null) ?? null,
     aiCategorySuggestion: row.ai_category_suggestion,
+    isReference: row.is_reference,
     myCategoryId: row.my_category_id,
     tagIds: (row.video_tags ?? []).map((t) => t.tag_id),
     note: row.note,

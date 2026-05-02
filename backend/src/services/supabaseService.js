@@ -158,17 +158,24 @@ export async function markAiProcessing(id) {
   }
 }
 
-export async function saveAiSuccess(id, { summary, category, categorySuggestion }) {
-  const { error } = await client
-    .from("videos")
-    .update({
-      ai_summary: summary,
-      ai_category: category,
-      ai_category_suggestion: categorySuggestion,
-      ai_status: "done",
-      ai_error: null,
-    })
-    .eq("id", id);
+export async function saveAiSuccess(
+  id,
+  { summary, category, categorySuggestion, isReference },
+) {
+  const update = {
+    ai_summary: summary,
+    ai_category: category,
+    ai_category_suggestion: categorySuggestion,
+    ai_status: "done",
+    ai_error: null,
+  };
+  // Пишем is_reference только если AI смог его определить (true/false).
+  // Если null — оставляем колонку как есть (обычно тоже null до анализа).
+  if (typeof isReference === "boolean") {
+    update.is_reference = isReference;
+  }
+
+  const { error } = await client.from("videos").update(update).eq("id", id);
 
   if (error) {
     throw new Error(`Supabase update (ai done) failed: ${error.message}`);
