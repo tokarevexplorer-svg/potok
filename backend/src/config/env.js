@@ -33,4 +33,11 @@ export const env = {
   // стоят денег — слишком высокое число спалит лимиты на больших батчах.
   // 2 — безопасный дефолт. Можно поднять до 3–4, если Apify-план позволяет.
   workerConcurrency: Number.parseInt(process.env.WORKER_CONCURRENCY ?? "2", 10),
+
+  // Google Drive — постоянное хранилище превью. Если не настроено — превью
+  // остаются на Instagram CDN (временные ~24 часа), всё остальное работает.
+  // Поэтому переменные ОПЦИОНАЛЬНЫЕ.
+  googleDriveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID ?? null,
+  googleDriveCredentialsPath: process.env.GOOGLE_DRIVE_CREDENTIALS_PATH ?? null,
+  googleDriveCredentialsJson: process.env.GOOGLE_DRIVE_CREDENTIALS_JSON ?? null,
 };

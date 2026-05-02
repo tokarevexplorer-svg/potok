@@ -4,6 +4,7 @@ import {
   fetchReelByUrl,
   mapReelToVideoFields,
 } from "./apifyService.js";
+import { isEnabled as isDriveEnabled, uploadThumbnail } from "./googleDriveService.js";
 import {
   getVideoById,
   markAiProcessing,
@@ -61,6 +62,29 @@ export async function processVideoById(id) {
     videoMediaUrl = extractVideoUrl(raw);
     captionForAi = fields.caption;
     contentType = fields.content_type ?? "video";
+
+    // Заливаем превью на Google Drive (если сервис настроен), чтобы получить
+    // постоянный URL вместо временного с Instagram CDN. Замена URL делается
+    // ДО saveVideoSuccess, чтобы в БД сразу попал постоянный линк.
+    // Любая ошибка загрузки — не блокирует обработку: остаётся оригинальный URL,
+    // через сутки протухнет — но к тому моменту, скорее всего, retry или
+    // миграция всё равно пройдут заново.
+    if (fields.thumbnail_url && isDriveEnabled()) {
+      try {
+        const shortcode = extractShortcode(video.url) ?? id;
+        const { url, fileId } = await uploadThumbnail(
+          fields.thumbnail_url,
+          `${shortcode}-${Date.now()}`,
+        );
+        fields.thumbnail_url = url;
+        fields.thumbnail_drive_id = fileId;
+        console.log(`[processor] ${id}: превью на Drive (${fileId})`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[processor] ${id}: превью на Drive не залилось — ${message}`);
+        // оставляем оригинальный thumbnail_url, fileId не пишем
+      }
+    }
 
     await saveVideoSuccess(id, fields);
     console.log(
@@ -147,4 +171,12 @@ export async function processVideoById(id) {
     console.error(`[processor] ${id}: ошибка AI — ${message}`);
     await saveAiError(id, message);
   }
+}
+
+// Достаём shortcode из ссылки Reels/поста — для имени файла на Drive.
+// Тот же regex, что и на фронте (lib/instagramEmbed.ts), чтобы поведение
+// было согласованным.
+function extractShortcode(url) {
+  const match = url.match(/instagram\.com\/(?:reel|reels|p)\/([A-Za-z0-9_-]+)/i);
+  return match ? match[1] : null;
 }

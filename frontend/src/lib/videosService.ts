@@ -20,6 +20,7 @@ interface VideoRow {
   author_url: string | null;
   caption: string | null;
   thumbnail_url: string | null;
+  thumbnail_drive_id: string | null;
   duration: number | null;
   content_type: string | null;
   views: number | null;
@@ -77,6 +78,7 @@ function mapVideo(row: VideoRow): Video {
     authorUrl: row.author_url,
     caption: row.caption,
     thumbnailUrl: row.thumbnail_url,
+    thumbnailDriveId: row.thumbnail_drive_id,
     duration: row.duration,
     contentType: safeContentType(row.content_type),
     views: row.views,
