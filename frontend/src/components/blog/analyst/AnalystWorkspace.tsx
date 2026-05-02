@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Maximize2, Minimize2, PlayCircle } from "lucide-react";
+import { Filter, Maximize2, Minimize2, PlayCircle } from "lucide-react";
 import clsx from "clsx";
 import type { MyCategory, Rating, Tag, Video } from "@/lib/types";
 import {
@@ -51,9 +51,19 @@ export default function AnalystWorkspace({
     | null
   >(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  // Подтверждение массового переноса в закладки.
+  const [pendingBookmark, setPendingBookmark] = useState<{ ids: string[] } | null>(
+    null,
+  );
+  const [bookmarkBusy, setBookmarkBusy] = useState(false);
   // Tinder-режим: храним снимок отфильтрованного списка на момент открытия,
   // чтобы удаления и переносы в закладки не сбивали итерацию.
-  const [viewerSnapshot, setViewerSnapshot] = useState<Video[] | null>(null);
+  // mode = "default" — обычный просмотр (свайпы открывают меню/воронку).
+  // mode = "cleanup" — быстрая очистка по is_reference=false (влево → в закладки,
+  // вправо → пометить «для блога», без меню/воронки).
+  const [viewer, setViewer] = useState<
+    { mode: "default" | "cleanup"; videos: Video[] } | null
+  >(null);
 
   // Когда сервер обновил пропсы (после addVideo + revalidatePath) — синкаем state.
   useEffect(() => setVideos(initialVideos), [initialVideos]);
@@ -92,6 +102,11 @@ export default function AnalystWorkspace({
 
   const filtered = useMemo(() => applyFilters(videos, filters), [videos, filters]);
   const authors = useMemo(() => uniqueAuthors(videos), [videos]);
+  // Сколько видео ждут разбора в режиме «Очистка» (помечены AI как not-ref).
+  const cleanupCount = useMemo(
+    () => videos.filter((v) => v.isReference === false).length,
+    [videos],
+  );
 
   // ------- Мутации видео -------
 
@@ -244,6 +259,43 @@ export default function AnalystWorkspace({
     }
   }
 
+  // ------- Массовый перенос в закладки -------
+
+  const handleRequestBulkBookmark = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    setPendingBookmark({ ids: Array.from(selectedIds) });
+  }, [selectedIds]);
+
+  async function confirmBookmark() {
+    if (!pendingBookmark) return;
+    setBookmarkBusy(true);
+    const { ids } = pendingBookmark;
+    const snapshot = videos;
+    // Оптимистично режем строки. moveToBookmarks внутри делает upsert+delete,
+    // и если на середине пачки сеть упадёт — часть уже уехала, мы откатываем
+    // только в state, БД остаётся в консистентном состоянии (просто меньше
+    // строк, чем планировали).
+    setVideos((prev) => prev.filter((v) => !ids.includes(v.id)));
+    try {
+      await svc.moveManyToBookmarks(ids);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      setPendingBookmark(null);
+    } catch (e) {
+      // Если упало — самый безопасный путь: вернуть весь снапшот, при
+      // следующем revalidatePath реальная картина с сервера всё равно
+      // подтянется. До тех пор пользователь увидит лишние строки, но это
+      // лучше, чем потеря.
+      setVideos(snapshot);
+      alert("Не удалось перенести в закладки: " + (e as Error).message);
+    } finally {
+      setBookmarkBusy(false);
+    }
+  }
+
   // ------- Tinder-режим -------
 
   // Удаление прямо из режима — без диалога подтверждения, действие изолировано
@@ -264,6 +316,24 @@ export default function AnalystWorkspace({
     setVideos((prev) => prev.filter((v) => v.id !== videoId));
     try {
       await svc.moveToBookmarks(videoId);
+    } catch (e) {
+      setVideos(snapshot);
+      throw e;
+    }
+  }, [videos]);
+
+  // Cleanup-режим: «вернуть в основную базу как референс». Обновляет
+  // is_reference=true, но сама строка остаётся в таблице (в отличие от
+  // переноса в закладки). Используем отдельный коллбэк, а не общий
+  // handleUpdateIsReference — здесь это часть жеста-свайпа, нужно отличить
+  // ошибку запроса (надо откатиться и не идти к следующей карточке).
+  const handleViewerMarkAsReference = useCallback(async (videoId: string) => {
+    const snapshot = videos;
+    setVideos((prev) =>
+      prev.map((v) => (v.id === videoId ? { ...v, isReference: true } : v)),
+    );
+    try {
+      await svc.setVideoIsReference(videoId, true);
     } catch (e) {
       setVideos(snapshot);
       throw e;
@@ -398,7 +468,9 @@ export default function AnalystWorkspace({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setViewerSnapshot(filtered)}
+            onClick={() =>
+              setViewer({ mode: "default", videos: filtered })
+            }
             disabled={filtered.length === 0}
             className="focus-ring inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm font-medium text-ink-muted transition hover:border-line-strong hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="Режим просмотра"
@@ -406,6 +478,30 @@ export default function AnalystWorkspace({
           >
             <PlayCircle size={18} />
             <span className="hidden sm:inline">Режим просмотра</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              // В режим очистки идём по всему массиву видео (без учёта текущих
+              // фильтров): задача — пройтись по всем не-референсам и решить.
+              const cleanupList = videos.filter((v) => v.isReference === false);
+              if (cleanupList.length > 0) {
+                setViewer({ mode: "cleanup", videos: cleanupList });
+              }
+            }}
+            disabled={cleanupCount === 0}
+            className="focus-ring inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-surface px-3 text-sm font-medium text-ink-muted transition hover:border-line-strong hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Очистка"
+            title={
+              cleanupCount === 0
+                ? "Нет видео с пометкой «Другое»"
+                : `Быстро разобрать ${cleanupCount} видео с пометкой «Другое»`
+            }
+          >
+            <Filter size={18} />
+            <span className="hidden sm:inline">
+              Очистка{cleanupCount > 0 ? ` · ${cleanupCount}` : ""}
+            </span>
           </button>
           <button
             type="button"
@@ -449,6 +545,7 @@ export default function AnalystWorkspace({
         count={selectedIds.size}
         onClear={clearSelection}
         onDelete={handleRequestBulkDelete}
+        onMoveToBookmarks={handleRequestBulkBookmark}
       />
 
       <ConfirmDialog
@@ -473,6 +570,25 @@ export default function AnalystWorkspace({
         }}
       />
 
+      <ConfirmDialog
+        open={pendingBookmark !== null}
+        tone="neutral"
+        title={
+          pendingBookmark && pendingBookmark.ids.length > 1
+            ? `Переместить ${pendingBookmark.ids.length} ${plural(pendingBookmark.ids.length, "видео", "видео", "видео")} в закладки?`
+            : "Переместить видео в закладки?"
+        }
+        description="Видео уйдут из основной таблицы и появятся в таблице «bookmarks» в Supabase. Из основной базы удалятся, но не пропадут — это безопасный «архив»."
+        confirmLabel="В закладки"
+        busyLabel="Переношу…"
+        cancelLabel="Отмена"
+        busy={bookmarkBusy}
+        onConfirm={confirmBookmark}
+        onCancel={() => {
+          if (!bookmarkBusy) setPendingBookmark(null);
+        }}
+      />
+
       <EntityManageModal
         open={manageMode === "categories"}
         onClose={() => setManageMode("none")}
@@ -494,14 +610,16 @@ export default function AnalystWorkspace({
         deleteConfirmHint="Удалить тег? Он снимется со всех видео."
       />
 
-      {viewerSnapshot && (
+      {viewer && (
         <SwipeViewer
-          videos={viewerSnapshot}
+          mode={viewer.mode}
+          videos={viewer.videos}
           myCategories={myCategories}
           tags={tags}
-          onClose={() => setViewerSnapshot(null)}
+          onClose={() => setViewer(null)}
           onDelete={handleViewerDelete}
           onMoveToBookmarks={handleViewerBookmark}
+          onMarkAsReference={handleViewerMarkAsReference}
           onCreateMyCategory={handleCreateMyCategory}
           onCreateTag={handleCreateTag}
           onSubmitRightFlow={handleViewerSubmitRightFlow}

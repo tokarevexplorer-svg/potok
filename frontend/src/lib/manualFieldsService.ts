@@ -198,6 +198,16 @@ export async function saveSwipeRightFlow(
 
 // ---------- Перенос в закладки ----------
 
+// Массовый перенос — последовательно для каждого id. Параллельно не запускаем,
+// чтобы Supabase не упёрся в лимит запросов и чтобы при ошибке точно знать,
+// какие видео успели уехать (всё, что до failed id). Для пачек до ~50 это
+// быстрее заметного.
+export async function moveManyToBookmarks(videoIds: string[]): Promise<void> {
+  for (const id of videoIds) {
+    await moveToBookmarks(id);
+  }
+}
+
 // Копирует поля из videos в bookmarks и удаляет исходное видео.
 // Транзакции из браузера через supabase-js не доступны: делаем select →
 // upsert (по url, ignoreDuplicates) → delete. Если url уже есть в bookmarks —

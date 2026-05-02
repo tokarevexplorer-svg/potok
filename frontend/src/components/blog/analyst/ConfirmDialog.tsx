@@ -8,6 +8,9 @@ interface ConfirmDialogProps {
   title: string;
   description: React.ReactNode;
   confirmLabel?: string;
+  // Подпись на кнопке во время выполнения (по умолчанию «Удаляю…» — исторически
+  // диалог использовался только для удалений). Передавай свой для других действий.
+  busyLabel?: string;
   cancelLabel?: string;
   // tone="danger" — красная подсветка кнопки подтверждения для удалений.
   tone?: "danger" | "neutral";
@@ -23,6 +26,7 @@ export default function ConfirmDialog({
   title,
   description,
   confirmLabel = "Подтвердить",
+  busyLabel = "Удаляю…",
   cancelLabel = "Отмена",
   tone = "neutral",
   busy = false,
@@ -94,7 +98,7 @@ export default function ConfirmDialog({
             disabled={busy}
             className={`focus-ring inline-flex h-10 items-center rounded-xl px-4 text-sm font-semibold transition disabled:opacity-50 ${confirmClasses}`}
           >
-            {busy ? "Удаляю…" : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
         </div>
       </div>
