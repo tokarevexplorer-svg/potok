@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  ArrowRight,
+  BadgeCheck,
   Bookmark,
-  ChevronLeft,
-  ChevronRight,
   ExternalLink,
   Trash2,
   X,
@@ -146,6 +146,30 @@ export default function SwipeViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [busy, exitDir, postLeftMenu, rightFlowOpen, current, mode],
   );
+
+  // Действие из боковой кнопки слева (без подтверждения, с анимацией ухода).
+  // Используется и в default, и в cleanup — отличается только action.
+  async function executeLeftAction(action: "delete" | "bookmark") {
+    if (busy || exitDir || postLeftMenu || rightFlowOpen) return;
+    if (!current) return;
+    setExitDir("left");
+    setDrag(null);
+    const targetId = current.id;
+    window.setTimeout(async () => {
+      setBusy(true);
+      try {
+        if (action === "delete") await onDelete(targetId);
+        else await onMoveToBookmarks(targetId);
+        setBusy(false);
+        setExitDir(null);
+        setIndex((i) => i + 1);
+      } catch (e) {
+        setBusy(false);
+        setExitDir(null);
+        alert((e as Error).message);
+      }
+    }, ANIM_MS);
+  }
 
   async function performCleanupAction(action: "bookmark" | "markRef") {
     if (!current) return;
@@ -347,23 +371,53 @@ export default function SwipeViewer({
 
       {/* Card area */}
       <div className="relative flex flex-1 items-center justify-center overflow-hidden px-2 py-4 sm:px-6">
-        <button
-          type="button"
-          onClick={() => triggerSwipe("left")}
-          aria-label="Предыдущее (←)"
-          title="←"
-          className="focus-ring absolute left-3 top-1/2 z-10 hidden h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-surface text-ink-muted shadow-card transition hover:bg-elevated hover:text-ink lg:inline-flex"
-        >
-          <ChevronLeft size={24} />
-        </button>
+        {/* Левая панель кнопок (только десктоп). В обоих режимах одинаковая:
+            «Удалить» и «В закладки» без подтверждения, с анимацией ухода влево. */}
+        <div className="absolute left-4 top-1/2 z-10 hidden -translate-y-1/2 flex-col gap-2 lg:flex">
+          <button
+            type="button"
+            onClick={() => executeLeftAction("delete")}
+            disabled={busy}
+            aria-label="Удалить видео"
+            title="Удалить (без подтверждения)"
+            className="focus-ring inline-flex h-12 items-center gap-2 rounded-2xl border border-red-200 bg-red-50/95 px-4 text-sm font-semibold text-red-700 shadow-card transition hover:bg-red-100 disabled:opacity-50"
+          >
+            <Trash2 size={18} />
+            Удалить
+          </button>
+          <button
+            type="button"
+            onClick={() => executeLeftAction("bookmark")}
+            disabled={busy}
+            aria-label="В закладки"
+            title="В закладки (без подтверждения)"
+            className="focus-ring inline-flex h-12 items-center gap-2 rounded-2xl border border-line bg-surface/95 px-4 text-sm font-semibold text-ink shadow-card transition hover:bg-elevated disabled:opacity-50"
+          >
+            <Bookmark size={18} />В закладки
+          </button>
+        </div>
+        {/* Правая панель — одна крупная кнопка. В default это «Оставить»
+            (запускает воронку правого свайпа), в cleanup — «Для блога»
+            (помечает is_reference=true и листает дальше). */}
         <button
           type="button"
           onClick={() => triggerSwipe("right")}
-          aria-label="Следующее (→)"
-          title="→"
-          className="focus-ring absolute right-3 top-1/2 z-10 hidden h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-surface text-ink-muted shadow-card transition hover:bg-elevated hover:text-ink lg:inline-flex"
+          disabled={busy}
+          aria-label={mode === "cleanup" ? "Для блога" : "Оставить"}
+          title={
+            mode === "cleanup"
+              ? "Пометить «для блога» (→)"
+              : "Оставить и заполнить категорию/теги/оценку (→)"
+          }
+          className={clsx(
+            "focus-ring absolute right-4 top-1/2 z-10 hidden h-14 -translate-y-1/2 items-center gap-2 rounded-2xl border px-5 text-sm font-semibold shadow-card transition disabled:opacity-50 lg:inline-flex",
+            mode === "cleanup"
+              ? "border-emerald-200 bg-emerald-50/95 text-emerald-700 hover:bg-emerald-100"
+              : "border-accent bg-accent text-surface hover:bg-accent-hover",
+          )}
         >
-          <ChevronRight size={24} />
+          {mode === "cleanup" ? <BadgeCheck size={18} /> : <ArrowRight size={18} />}
+          {mode === "cleanup" ? "Для блога" : "Оставить"}
         </button>
 
         <div
@@ -436,8 +490,8 @@ export default function SwipeViewer({
       {/* Подсказка по управлению */}
       <div className="border-t border-line px-4 py-2 text-center text-xs text-ink-faint">
         {mode === "cleanup"
-          ? "← в закладки · → для блога · клавиши ← / → · Esc — закрыть"
-          : "← мимо · → следующее · клавиши ← / → · Esc — закрыть"}
+          ? "← в закладки · → для блога · кнопки по бокам · клавиши ← / → · Esc — закрыть"
+          : "Свайп / клавиши ← / → · кнопки по бокам · Esc — закрыть"}
       </div>
 
       {/* Воронка после свайпа вправо */}
