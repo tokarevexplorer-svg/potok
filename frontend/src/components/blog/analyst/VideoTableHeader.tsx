@@ -123,14 +123,11 @@ export default function VideoTableHeader({
                 <button
                   type="button"
                   onClick={() => onToggleGroupCollapsed(seg.group)}
-                  className="focus-ring flex h-full w-full flex-col items-center justify-center gap-1 px-1 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint transition hover:bg-line/30 hover:text-ink"
+                  className="focus-ring flex h-full w-full items-center justify-center text-ink-muted transition hover:bg-line/30 hover:text-ink"
                   aria-label={`Развернуть «${columnGroupLabels[seg.group]}»`}
-                  title="Развернуть"
+                  title={`Развернуть «${columnGroupLabels[seg.group]}»`}
                 >
                   <ChevronRight size={14} />
-                  <span className="[writing-mode:vertical-rl] rotate-180">
-                    {columnGroupLabels[seg.group]}
-                  </span>
                 </button>
               </th>
             );
@@ -159,6 +156,10 @@ export default function VideoTableHeader({
               style={{
                 width: it.width,
                 minWidth: it.width,
+                // maxWidth обязателен: без него table-layout: auto растягивает
+                // колонку под длинный контент — width/minWidth недостаточно,
+                // и line-clamp/truncate внутри ячеек не сработают.
+                maxWidth: it.width,
                 ...(sticky
                   ? {
                       ...stickyStyle(cumulativeOffsets[idx + 1], isLastFrozen),

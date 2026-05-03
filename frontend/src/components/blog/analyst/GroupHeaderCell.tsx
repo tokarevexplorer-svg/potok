@@ -39,6 +39,30 @@ export default function GroupHeaderCell({
 
   const label = columnGroupLabels[group];
 
+  // Свёрнутая шапка — узкая ячейка с одним только chevron-right. Название
+  // раздела ушло в title (тултип): полноразмерный заголовок в узком столбце
+  // выглядит уродливо, а вертикальный текст — ещё хуже на горизонтальной
+  // таблице.
+  if (collapsed) {
+    return (
+      <th
+        colSpan={colSpan}
+        style={style}
+        className="border-r border-line/70 bg-elevated/60 p-0 align-middle last:border-r-0"
+      >
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          className="focus-ring inline-flex h-full w-full items-center justify-center text-ink-muted transition hover:bg-line/40 hover:text-ink"
+          aria-label={`Развернуть «${label}»`}
+          title={`Развернуть «${label}»`}
+        >
+          <ChevronRight size={14} />
+        </button>
+      </th>
+    );
+  }
+
   return (
     <th
       colSpan={colSpan}
@@ -65,33 +89,26 @@ export default function GroupHeaderCell({
           type="button"
           onClick={onToggleCollapsed}
           className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded text-ink-muted transition hover:bg-line/40 hover:text-ink"
-          aria-label={collapsed ? `Развернуть «${label}»` : `Свернуть «${label}»`}
-          title={collapsed ? "Развернуть" : "Свернуть"}
+          aria-label={`Свернуть «${label}»`}
+          title="Свернуть"
         >
-          {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+          <ChevronDown size={14} />
         </button>
-        {!collapsed && (
-          <span
-            // HTML5 drag: handle с draggable=true. Включаем drag только за иконку,
-            // чтобы случайный drag по тексту шапки не запускал перенос группы.
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData("application/x-potok-group", group);
-              e.dataTransfer.effectAllowed = "move";
-            }}
-            className="inline-flex h-6 w-5 cursor-grab items-center justify-center text-ink-faint opacity-0 transition hover:text-ink-muted group-hover/grouphdr:opacity-100 active:cursor-grabbing"
-            title="Перетащить раздел"
-            aria-label={`Перетащить раздел «${label}»`}
-          >
-            <GripVertical size={14} />
-          </span>
-        )}
         <span
-          className={clsx(
-            "text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint",
-            collapsed && "[writing-mode:vertical-rl] rotate-180",
-          )}
+          // HTML5 drag: handle с draggable=true. Включаем drag только за иконку,
+          // чтобы случайный drag по тексту шапки не запускал перенос группы.
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("application/x-potok-group", group);
+            e.dataTransfer.effectAllowed = "move";
+          }}
+          className="inline-flex h-6 w-5 cursor-grab items-center justify-center text-ink-faint opacity-0 transition hover:text-ink-muted group-hover/grouphdr:opacity-100 active:cursor-grabbing"
+          title="Перетащить раздел"
+          aria-label={`Перетащить раздел «${label}»`}
         >
+          <GripVertical size={14} />
+        </span>
+        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
           {label}
         </span>
       </div>

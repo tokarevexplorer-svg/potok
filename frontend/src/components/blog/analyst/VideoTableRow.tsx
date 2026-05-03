@@ -407,6 +407,7 @@ export default function VideoTableRow({
           const style: CSSProperties = {
             width: it.width,
             minWidth: it.width,
+            maxWidth: it.width,
             ...(sticky
               ? {
                   position: "sticky",
@@ -433,6 +434,9 @@ export default function VideoTableRow({
         const style: CSSProperties = {
           width: it.width,
           minWidth: it.width,
+          // maxWidth обязателен: без него длинный текст растягивает колонку
+          // мимо заданной ширины и ломает line-clamp/truncate.
+          maxWidth: it.width,
           ...(sticky
             ? {
                 position: "sticky",

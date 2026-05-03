@@ -40,7 +40,7 @@ export const videoColumns: VideoColumn[] = [
   { key: "publishedAt", label: "Дата", group: "ref", defaultWidth: 112 },
   { key: "duration", label: "Хронометраж", group: "ref", defaultWidth: 120 },
   { key: "author", label: "Автор", group: "ref", defaultWidth: 160 },
-  { key: "caption", label: "Описание", group: "ref", defaultWidth: 200, isText: true },
+  { key: "caption", label: "Описание", group: "ref", defaultWidth: 180, isText: true },
 
   { key: "views", label: "Просмотры", group: "stats", defaultWidth: 96, align: "right" },
   { key: "likes", label: "Лайки", group: "stats", defaultWidth: 84, align: "right" },
