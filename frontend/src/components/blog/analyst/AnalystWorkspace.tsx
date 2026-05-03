@@ -22,6 +22,7 @@ import BulkActionBar from "./BulkActionBar";
 import BatchProgressBar from "./BatchProgressBar";
 import ConfirmDialog from "./ConfirmDialog";
 import SwipeViewer from "./SwipeViewer";
+import { useTableLayout } from "./useTableLayout";
 
 interface AnalystWorkspaceProps {
   initialVideos: Video[];
@@ -41,6 +42,7 @@ export default function AnalystWorkspace({
   const [myCategories, setMyCategories] = useState(initialMyCategories);
   const [tags, setTags] = useState(initialTags);
   const [filters, setFilters] = useState<FilterState>(initialFilterState);
+  const tableLayout = useTableLayout();
   const [fullscreen, setFullscreen] = useState(false);
   const [manageMode, setManageMode] = useState<"none" | "categories" | "tags">("none");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -536,6 +538,12 @@ export default function AnalystWorkspace({
             tags={tags}
             selectedIds={selectedIds}
             onToggleAll={handleToggleAll}
+            layoutState={tableLayout.state}
+            rendered={tableLayout.rendered}
+            onToggleGroupCollapsed={tableLayout.toggleGroupCollapsed}
+            onMoveGroup={tableLayout.moveGroup}
+            onResizeColumn={tableLayout.setColumnWidth}
+            onSetFrozenCount={tableLayout.setFrozenCount}
             onSelectMyCategory={handleSelectMyCategory}
             onCreateMyCategory={handleCreateMyCategory}
             onAttachTag={handleAttachTag}

@@ -7,8 +7,14 @@ export interface VideoColumn {
   key: string;
   label: string;
   group: ColumnGroup;
-  minWidth: string; // tailwind-класс min-w-*
+  // Ширина по умолчанию в px. Текстовые колонки — узкие, ExpandableText
+  // обрезает превью; пользователь раскроет полный текст в модалке либо
+  // расширит столбец сам через ручку resize.
+  defaultWidth: number;
   align?: "left" | "right";
+  // true для текстовых столбцов с длинным контентом — у них стоит line-clamp,
+  // и они особенно выигрывают от узкой ширины по умолчанию.
+  isText?: boolean;
 }
 
 export const columnGroupLabels: Record<ColumnGroup, string> = {
@@ -18,31 +24,42 @@ export const columnGroupLabels: Record<ColumnGroup, string> = {
   manual: "Мои пометки",
 };
 
+export const DEFAULT_GROUP_ORDER: ColumnGroup[] = ["ref", "stats", "ai", "manual"];
+
+// Минимальная ширина при ручном resize — чтобы столбец нельзя было сжать в ноль.
+export const MIN_COLUMN_WIDTH = 64;
+
+// Ширина свёрнутого столбца группы — узкая, помещает только название + chevron.
+export const COLLAPSED_GROUP_WIDTH = 48;
+
+// Ширина служебной колонки слева (чекбокс).
+export const CHECKBOX_COLUMN_WIDTH = 40;
+
 export const videoColumns: VideoColumn[] = [
-  { key: "thumbnail", label: "Превью", group: "ref", minWidth: "min-w-[120px]" },
-  { key: "publishedAt", label: "Дата", group: "ref", minWidth: "min-w-[112px]" },
-  { key: "duration", label: "Хронометраж", group: "ref", minWidth: "min-w-[120px]" },
-  { key: "author", label: "Автор", group: "ref", minWidth: "min-w-[160px]" },
-  { key: "caption", label: "Описание", group: "ref", minWidth: "min-w-[280px]" },
+  { key: "thumbnail", label: "Превью", group: "ref", defaultWidth: 120 },
+  { key: "publishedAt", label: "Дата", group: "ref", defaultWidth: 112 },
+  { key: "duration", label: "Хронометраж", group: "ref", defaultWidth: 120 },
+  { key: "author", label: "Автор", group: "ref", defaultWidth: 160 },
+  { key: "caption", label: "Описание", group: "ref", defaultWidth: 200, isText: true },
 
-  { key: "views", label: "Просмотры", group: "stats", minWidth: "min-w-[96px]", align: "right" },
-  { key: "likes", label: "Лайки", group: "stats", minWidth: "min-w-[84px]", align: "right" },
-  { key: "comments", label: "Коммент.", group: "stats", minWidth: "min-w-[92px]", align: "right" },
+  { key: "views", label: "Просмотры", group: "stats", defaultWidth: 96, align: "right" },
+  { key: "likes", label: "Лайки", group: "stats", defaultWidth: 84, align: "right" },
+  { key: "comments", label: "Коммент.", group: "stats", defaultWidth: 92, align: "right" },
   // «Шеры» убраны: Instagram не отдаёт этот показатель публично с 2023 г.
-  { key: "virality", label: "Вирусность", group: "stats", minWidth: "min-w-[108px]", align: "right" },
-  { key: "viralityLevel", label: "Уровень", group: "stats", minWidth: "min-w-[140px]" },
+  { key: "virality", label: "Вирусность", group: "stats", defaultWidth: 108, align: "right" },
+  { key: "viralityLevel", label: "Уровень", group: "stats", defaultWidth: 140 },
 
-  { key: "aiSummary", label: "Саммари", group: "ai", minWidth: "min-w-[280px]" },
-  { key: "transcript", label: "Транскрипция", group: "ai", minWidth: "min-w-[200px]" },
-  { key: "aiCategory", label: "Категория AI", group: "ai", minWidth: "min-w-[160px]" },
-  { key: "isReference", label: "Референс", group: "ai", minWidth: "min-w-[120px]" },
+  { key: "aiSummary", label: "Саммари", group: "ai", defaultWidth: 220, isText: true },
+  { key: "transcript", label: "Транскрипция", group: "ai", defaultWidth: 200, isText: true },
+  { key: "aiCategory", label: "Категория AI", group: "ai", defaultWidth: 160 },
+  { key: "isReference", label: "Референс", group: "ai", defaultWidth: 120 },
 
-  { key: "myCategory", label: "Категория Я", group: "manual", minWidth: "min-w-[160px]" },
-  { key: "tags", label: "Теги", group: "manual", minWidth: "min-w-[180px]" },
-  { key: "note", label: "Заметка", group: "manual", minWidth: "min-w-[220px]" },
+  { key: "myCategory", label: "Категория Я", group: "manual", defaultWidth: 160 },
+  { key: "tags", label: "Теги", group: "manual", defaultWidth: 180 },
+  { key: "note", label: "Заметка", group: "manual", defaultWidth: 200, isText: true },
 ];
 
-// Соседний столбец той же группы — для отрисовки сплошной шапки группы.
-export function getGroupSpan(group: ColumnGroup): number {
-  return videoColumns.filter((c) => c.group === group).length;
+// Возвращает столбцы группы в исходном порядке.
+export function columnsInGroup(group: ColumnGroup): VideoColumn[] {
+  return videoColumns.filter((c) => c.group === group);
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { type CSSProperties } from "react";
 import { Trash2 } from "lucide-react";
 import clsx from "clsx";
 import type {
@@ -11,7 +12,8 @@ import type {
   TranscriptStatus,
   Video,
 } from "@/lib/types";
-import { videoColumns } from "@/lib/videoTableColumns";
+import { CHECKBOX_COLUMN_WIDTH } from "@/lib/videoTableColumns";
+import { isFrozenAt, type RenderedColumn } from "@/lib/tableLayout";
 import { formatAiCategory } from "@/lib/aiCategories";
 import { ENTITY_COLORS } from "@/lib/tagColors";
 import { getViralityLevel } from "@/lib/viralityLevel";
@@ -32,7 +34,6 @@ const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   month: "short",
   year: "numeric",
 });
-
 const numberFormatter = new Intl.NumberFormat("ru-RU");
 
 function formatDate(iso: string | null): string {
@@ -43,7 +44,6 @@ function formatDate(iso: string | null): string {
     return "—";
   }
 }
-
 function formatNumber(n: number | null): string {
   return n === null || n === undefined ? "—" : numberFormatter.format(n);
 }
@@ -159,11 +159,9 @@ export interface VideoTableRowCallbacks {
   onCreateTag: (name: string) => Promise<Tag>;
   onSaveNote: (videoId: string, value: string | null) => Promise<void>;
   onUpdateRatings: (videoId: string, ratings: Rating[]) => Promise<void>;
-  // Toggle между null → true → false → null.
   onUpdateIsReference: (videoId: string, value: boolean | null) => Promise<void>;
   onManageMyCategories: () => void;
   onManageTags: () => void;
-  // Чекбокс выбора и удаление одной строки.
   onToggleSelected: (videoId: string) => void;
   onRequestDelete: (videoId: string) => void;
 }
@@ -173,6 +171,10 @@ interface VideoTableRowProps extends VideoTableRowCallbacks {
   myCategories: MyCategory[];
   tags: Tag[];
   selected: boolean;
+  rendered: RenderedColumn[];
+  cumulativeOffsets: number[];
+  frozenCount: number;
+  lastFrozenIdx: number;
 }
 
 export default function VideoTableRow({
@@ -180,6 +182,10 @@ export default function VideoTableRow({
   myCategories,
   tags,
   selected,
+  rendered,
+  cumulativeOffsets,
+  frozenCount,
+  lastFrozenIdx,
   onSelectMyCategory,
   onCreateMyCategory,
   onAttachTag,
@@ -198,6 +204,12 @@ export default function VideoTableRow({
     status === "error" && video.processingError
       ? `Ошибка: ${video.processingError}`
       : undefined;
+
+  // Цвет фона для sticky-ячеек: должен «закрашивать» содержимое, проезжающее
+  // под ними при горизонтальном скролле. surface — белый (как у таблицы),
+  // accent-soft — для выделенных строк. Hover-эффект под sticky не работает —
+  // у sticky-ячеек собственный фон.
+  const stickyBg = selected ? "#FFEDE4" : "#FFFFFF";
 
   function renderCell(key: string) {
     switch (key) {
@@ -226,7 +238,6 @@ export default function VideoTableRow({
           status,
         );
       case "duration": {
-        // Для фото/каруселей длительности нет — показываем эмодзи + подпись.
         if (video.contentType !== "video") {
           return (
             <span
@@ -239,9 +250,7 @@ export default function VideoTableRow({
           );
         }
         const formatted = formatDuration(video.duration);
-        if (formatted) {
-          return <span className="tabular-nums text-ink">{formatted}</span>;
-        }
+        if (formatted) return <span className="tabular-nums text-ink">{formatted}</span>;
         if (status === "done") return <Placeholder />;
         return <StatusHint status={status} />;
       }
@@ -359,7 +368,17 @@ export default function VideoTableRow({
       )}
       title={title}
     >
-      <td className="w-10 px-3 py-4 align-top">
+      <td
+        className="px-3 py-4 align-top"
+        style={{
+          position: "sticky",
+          left: 0,
+          zIndex: 5,
+          width: CHECKBOX_COLUMN_WIDTH,
+          minWidth: CHECKBOX_COLUMN_WIDTH,
+          background: stickyBg,
+        }}
+      >
         <div className="flex items-center justify-center">
           <input
             type="checkbox"
@@ -379,18 +398,67 @@ export default function VideoTableRow({
           <Trash2 size={14} />
         </button>
       </td>
-      {videoColumns.map((col) => (
-        <td
-          key={col.key}
-          className={[
-            "px-4 py-4 align-top text-sm",
-            col.minWidth,
-            col.align === "right" ? "text-right tabular-nums" : "",
-          ].join(" ")}
-        >
-          {renderCell(col.key)}
-        </td>
-      ))}
+      {rendered.map((it, idx) => {
+        if (it.kind === "collapsed") {
+          // Свёрнутая группа: пустая узкая ячейка. Если попадает в frozen-зону —
+          // тоже sticky, чтобы не «провалилась» через границу.
+          const sticky = isFrozenAt(rendered, idx, frozenCount);
+          const isLastFrozen = idx === lastFrozenIdx;
+          const style: CSSProperties = {
+            width: it.width,
+            minWidth: it.width,
+            ...(sticky
+              ? {
+                  position: "sticky",
+                  left: cumulativeOffsets[idx + 1],
+                  zIndex: 4,
+                  background: stickyBg,
+                  boxShadow: isLastFrozen
+                    ? "2px 0 4px rgba(15,16,17,0.06)"
+                    : undefined,
+                }
+              : {}),
+          };
+          return (
+            <td
+              key={`row-collapsed-${idx}`}
+              style={style}
+              className="border-r border-line/40"
+              aria-hidden
+            />
+          );
+        }
+        const sticky = isFrozenAt(rendered, idx, frozenCount);
+        const isLastFrozen = idx === lastFrozenIdx;
+        const style: CSSProperties = {
+          width: it.width,
+          minWidth: it.width,
+          ...(sticky
+            ? {
+                position: "sticky",
+                left: cumulativeOffsets[idx + 1],
+                zIndex: 4,
+                background: stickyBg,
+                boxShadow: isLastFrozen
+                  ? "2px 0 4px rgba(15,16,17,0.06)"
+                  : undefined,
+              }
+            : {}),
+        };
+        return (
+          <td
+            key={it.column.key}
+            style={style}
+            className={clsx(
+              "px-4 py-4 align-top text-sm",
+              it.column.align === "right" ? "text-right tabular-nums" : "",
+              it.column.isText ? "overflow-hidden" : "",
+            )}
+          >
+            {renderCell(it.column.key)}
+          </td>
+        );
+      })}
     </tr>
   );
 }
