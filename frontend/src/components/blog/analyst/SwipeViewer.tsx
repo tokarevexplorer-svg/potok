@@ -6,6 +6,8 @@ import {
   ArrowRight,
   BadgeCheck,
   Bookmark,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   Trash2,
   X,
@@ -45,8 +47,6 @@ interface SwipeViewerProps {
 const SWIPE_THRESHOLD = 110;
 const SWIPE_VELOCITY = 0.6;
 const ANIM_MS = 250;
-// Если iframe не вызвал onLoad за этот таймаут — показываем fallback c превью.
-const EMBED_TIMEOUT_MS = 5000;
 
 // Полноэкранный Tinder-режим: одна карточка по центру, свайп влево/вправо
 // (мышь, тач, клавиатура), счётчик прогресса. Влево → мини-меню «Удалить /
@@ -78,9 +78,6 @@ export default function SwipeViewer({
   // Воронка после правого свайпа — рендерится поверх карточки.
   const [rightFlowOpen, setRightFlowOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  // iframe не вызвал onLoad за 5 сек → переключаемся на fallback с превью.
-  // Для фото/каруселей iframe не показываем вовсе.
-  const [embedFailed, setEmbedFailed] = useState(false);
 
   const start = useRef<{ x: number; y: number; t: number } | null>(null);
 
@@ -102,7 +99,6 @@ export default function SwipeViewer({
     setDrag(null);
     setPostLeftMenu(false);
     setRightFlowOpen(false);
-    setEmbedFailed(false);
   }, [index]);
 
   const triggerSwipe = useCallback(
@@ -223,8 +219,12 @@ export default function SwipeViewer({
     }
   }
 
-  // Клавиатура: Esc закрывает (или скрывает меню), стрелки листают. Когда
-  // открыта воронка правого свайпа — стрелки игнорируем (Esc ловит сама воронка).
+  // Клавиатурная раскладка (одинаковая в default и cleanup):
+  //   ←        — в закладки (без подтверждения, без меню)
+  //   Shift+←  — удалить (без подтверждения)
+  //   →        — оставить: воронка (default) или markRef (cleanup)
+  //   Esc      — закрыть viewer (если открыто мини-меню — сначала закроет его)
+  // Когда открыта воронка правого свайпа — стрелки игнорируем, Esc ловит сама воронка.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (rightFlowOpen) return;
@@ -235,7 +235,12 @@ export default function SwipeViewer({
       }
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        triggerSwipe("left");
+        if (e.shiftKey) {
+          executeLeftAction("delete");
+        } else {
+          executeLeftAction("bookmark");
+        }
+        return;
       }
       if (e.key === "ArrowRight") {
         e.preventDefault();
@@ -244,6 +249,9 @@ export default function SwipeViewer({
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
+    // executeLeftAction замыкает текущие current/busy/etc — eslint жалуется,
+    // но триггер мгновенный, актуальность обеспечивается замыканием на момент вызова.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postLeftMenu, rightFlowOpen, onClose, triggerSwipe]);
 
   async function handleDelete() {
@@ -343,6 +351,7 @@ export default function SwipeViewer({
   const embedUrl = useEmbed ? buildInstagramEmbedUrl(current.url) : null;
   const author = current.author ?? "Автор не указан";
   const summary = current.aiSummary;
+  const caption = current.caption;
   const categoryLabel = formatAiCategory(
     current.aiCategory,
     current.aiCategorySuggestion,
@@ -444,15 +453,13 @@ export default function SwipeViewer({
             <CardMedia
               key={current.id}
               embedUrl={embedUrl}
-              videoId={current.id}
               videoUrl={current.url}
               thumbnailUrl={current.thumbnailUrl}
-              embedFailed={embedFailed}
-              onEmbedFail={() => setEmbedFailed(true)}
             />
 
             {/* Кнопка «Открыть в Instagram» — всегда видна поверх плеера/превью.
-                На мобиле URL открывает приложение Instagram автоматически. */}
+                Маленькая, полупрозрачная, не мешает просмотру. На мобиле URL
+                открывает приложение Instagram автоматически. */}
             <a
               href={current.url}
               target="_blank"
@@ -466,17 +473,22 @@ export default function SwipeViewer({
             </a>
           </div>
 
-          {/* Инфо-панель: автор, AI-саммари, категория */}
-          <div className="flex flex-col gap-2 border-t border-line p-4">
+          {/* Инфо-панель: автор, AI-саммари, описание, категория. Саммари и
+              описание раскрываются по клику — без модалки, чтобы не закрывать
+              видео. Скролл при необходимости — внутри панели. */}
+          <div className="flex max-h-[40vh] flex-col gap-2 overflow-y-auto border-t border-line p-4">
             <div className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
               {author}
             </div>
             {summary ? (
-              <p className="line-clamp-2 text-sm leading-snug text-ink">{summary}</p>
+              <InlineExpandableText label="Саммари" text={summary} clampLines={2} />
             ) : (
               <p className="text-sm italic text-ink-faint">
                 Саммари ещё не готово
               </p>
+            )}
+            {caption && (
+              <InlineExpandableText label="Описание" text={caption} clampLines={2} />
             )}
             {categoryLabel && (
               <div>
@@ -490,8 +502,8 @@ export default function SwipeViewer({
       {/* Подсказка по управлению */}
       <div className="border-t border-line px-4 py-2 text-center text-xs text-ink-faint">
         {mode === "cleanup"
-          ? "← в закладки · → для блога · кнопки по бокам · клавиши ← / → · Esc — закрыть"
-          : "Свайп / клавиши ← / → · кнопки по бокам · Esc — закрыть"}
+          ? "← в закладки · Shift+← удалить · → для блога · Esc закрыть"
+          : "← в закладки · Shift+← удалить · → оставить · Esc закрыть"}
       </div>
 
       {/* Воронка после свайпа вправо */}
@@ -553,34 +565,17 @@ export default function SwipeViewer({
 
 interface CardMediaProps {
   embedUrl: string | null;
-  videoId: string;
   videoUrl: string;
   thumbnailUrl: string | null;
-  embedFailed: boolean;
-  onEmbedFail: () => void;
 }
 
-// Внутренности карточки: iframe Instagram-плеера или fallback с превью.
-// Если iframe не успел загрузиться за EMBED_TIMEOUT_MS — переключаемся на превью.
-// Для фото/каруселей вызывающий код передаёт embedUrl=null, и мы сразу
-// показываем превью.
-function CardMedia({
-  embedUrl,
-  videoId,
-  videoUrl,
-  thumbnailUrl,
-  embedFailed,
-  onEmbedFail,
-}: CardMediaProps) {
-  // Таймер ставим при каждом новом video id; чистим при unmount/смене карточки.
-  useEffect(() => {
-    if (!embedUrl || embedFailed) return;
-    const timer = window.setTimeout(onEmbedFail, EMBED_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-    // videoId передан только чтобы гарантировать рестарт таймера на новой карточке.
-  }, [embedUrl, embedFailed, onEmbedFail, videoId]);
-
-  if (embedUrl && !embedFailed) {
+// Внутренности карточки. Для видео — iframe Instagram-плеера всегда виден
+// (раньше был агрессивный таймаут, который скрывал плеер при медленной
+// загрузке — убран). Кнопка «Instagram» сверху-справа доступна всегда —
+// если плеер не загрузился, пользователь откроет пост в Instagram.
+// Для фото/каруселей embedUrl=null — рисуем превью с центральной кнопкой.
+function CardMedia({ embedUrl, videoUrl, thumbnailUrl }: CardMediaProps) {
+  if (embedUrl) {
     return (
       <iframe
         src={embedUrl}
@@ -589,10 +584,6 @@ function CardMedia({
         allow="autoplay; encrypted-media; picture-in-picture; clipboard-write"
         allowFullScreen
         referrerPolicy="no-referrer"
-        // onLoad срабатывает один раз — отменять таймер не обязательно, но и не вредно.
-        onLoad={() => {
-          /* iframe загрузился — оставляем как есть */
-        }}
       />
     );
   }
@@ -626,4 +617,52 @@ function CardMedia({
       Не удалось определить ссылку на видео
     </div>
   );
+}
+
+// Inline-expandable текст внутри инфо-панели viewer'а: по клику line-clamp
+// снимается, текст раскрывается полностью на месте (не модалкой, чтобы
+// видео оставалось видно). Скроллится внутри инфо-панели через её max-h.
+function InlineExpandableText({
+  label,
+  text,
+  clampLines,
+}: {
+  label: string;
+  text: string;
+  clampLines: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="focus-ring flex items-center gap-1 rounded text-[11px] font-semibold uppercase tracking-wide text-ink-faint transition hover:text-ink-muted"
+        title={expanded ? "Свернуть" : "Развернуть полностью"}
+        aria-expanded={expanded}
+      >
+        {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        {label}
+      </button>
+      <p
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => setExpanded((v) => !v)}
+        className={clsx(
+          "cursor-pointer whitespace-pre-wrap break-words text-sm leading-snug text-ink",
+          !expanded && clampLineClass(clampLines),
+        )}
+      >
+        {text}
+      </p>
+    </div>
+  );
+}
+
+function clampLineClass(lines: number): string {
+  // Используем литеральные классы, чтобы Tailwind JIT их собрал.
+  if (lines <= 1) return "line-clamp-1";
+  if (lines === 2) return "line-clamp-2";
+  if (lines === 3) return "line-clamp-3";
+  return "line-clamp-4";
 }
