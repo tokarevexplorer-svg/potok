@@ -1117,6 +1117,110 @@ superapp/
 
 ---
 
+**Сессия 25: Команда — бэкенд-ядро сервисов (порт ДК Лурье)** (завершена 2026-05-04)
+
+**Эта сессия — Сессия 2 из 8 в roadmap-е этапа 1 раздела «Команда»**, в нумерации сессий Потока — Сессия 25. Базируется на инфраструктуре, поднятой в Сессии 24 (таблицы `team_*` и bucket'ы `team-*` в Supabase).
+
+Эта сессия — портирование с Python на Node.js трёх ключевых сервисов команды из локальной ДК Лурье плюс инфраструктурные клиенты Supabase для team_* таблиц и team-* buckets. Без задач пока, только инструменты.
+
+Локальные референсы (Python-исходники из ДК Лурье) лежат в `_reference_dkl/` в корне репо — папка добавлена в `.gitignore`, в Git не попадает.
+
+- **Зависимости** (`backend/package.json`): `@anthropic-ai/sdk` (^0.93) и `@google/generative-ai` (^0.24). OpenAI SDK уже был для Whisper/анализа Потока — переиспользуем тот же
+- **Новая папка** `backend/src/services/team/` с шестью файлами
+
+- **`teamSupabase.js`** — клиент Supabase для всех team_* таблиц, единственный singleton service-role клиента в этом разделе:
+  - `appendTaskSnapshot(snapshot)` — append-only паттерн из ДК Лурье. На каждое изменение состояния задачи — новая строка в `team_tasks` с тем же `id`, текущее = последний снапшот. Поля camelCase из JS превращает в snake_case БД (`modelChoice` → `model_choice`, `artifactPath` → `artifact_path` и т. д.), `costUsd` маппится в `cost_usd`
+  - `getTaskById(id)` — последний снапшот по id
+  - `getActiveTaskIds()` — id всех задач, у которых **последний** снапшот = status `running`. Реализация через клиентский DISTINCT ON: тащим всё, сортированное по `created_at desc`, проходим первый раз каждый id. Для команды это десятки строк, не нагрузка
+  - `getAllTasks()`, `getTasksByStatus(status|status[])` — текущие состояния всех задач
+  - `recordApiCall(payload)` — пишет в `team_api_calls`. **Не бросает на ошибке** — журнал не должен валить основной поток LLM-вызова, ошибку логируем и идём дальше
+  - `getApiCallsByTaskId(taskId)`, `getAllApiCalls()` — для агрегации расходов
+  - `getSetting(key)`, `setSetting(key, value)` — `team_settings` (jsonb), используется для `alert_threshold_usd` и потенциально для других настроек
+
+- **`teamStorage.js`** — клиент трёх buckets команды (team-database / team-prompts / team-config):
+  - `uploadFile(bucket, path, content)` — `content` принимает строку или Buffer. Авто-определение `content-type` по расширению (md/json/txt/html/pdf), `upsert: true` (повторная заливка перезаписывает). Использовалось бы при сохранении артефактов задач в Сессии 26 (Сессия 3 roadmap'а команды)
+  - `downloadFile(bucket, path)` — возвращает контент как UTF-8 строку (Storage SDK на Node 20+ возвращает Blob, конвертируем через `.text()`)
+  - `fileExists(bucket, path)` — true/false без бросков, для проверок «загружать или нет»
+  - `listFiles(bucket, prefix)` — `limit: 1000`, сортировка по имени для стабильного UI
+  - `deleteFile(bucket, path)` — best effort, ошибки логирует
+
+- **`keysService.js`** — управление ключами в таблице `team_api_keys`. Решение хранить в БД, а не в env, задокументировано в `STAGE1_ARCHITECTURE_v2.md` (раздел 3.3) — Влад сможет менять ключи через UI Админки без передеплоя:
+  - `getApiKey(provider)` с **кешем 30 секунд** в памяти процесса. Компромисс: не дёргаем БД на каждом LLM-вызове, но при смене ключа в Админке свежее значение подтянется максимум через 30 сек
+  - `setApiKey(provider, key)` / `deleteApiKey(provider)` — чистят кеш (следующий getApiKey прочитает из БД)
+  - `getAllKeysStatus()` — возвращает `{anthropic: bool, openai: bool, google: bool}` для UI «🟢 / 🔴» в Админке
+  - Поддерживаемые провайдеры — белый список (`anthropic | openai | google`), любой другой бросает «Неизвестный провайдер»
+  - `clearKeyCache()` — для тестов и ручного обновления
+
+- **`llmClient.js`** — порт `llm_client.py`. Унифицированный интерфейс на трёх провайдеров с одинаковым выходом `{text, inputTokens, outputTokens, cachedTokens}`:
+  - `LLMError extends Error` — отдельный класс, чтобы caller (taskRunner в Сессии 26 / Сессии 3 roadmap'а команды) мог отличить «упал провайдер» от «упала наша логика»
+  - `call({provider, model, systemPrompt, userPrompt, cacheableBlocks, maxTokens})` — главная функция, ветвится по провайдеру
+  - **Anthropic prompt caching** реализован: `cacheableBlocks` (обычно `context.md` и `concept.md`) оборачиваются в `system: [{type:"text", text, cache_control: {type:"ephemeral"}}]`. SDK сам разрулит cache_read и в Usage отдаст `cache_read_input_tokens` / `cache_creation_input_tokens`. Считаем `total_input = input_tokens + cache_read + cache_creation` — Anthropic'овский `input_tokens` НЕ включает кешированные, и costTracker должен видеть полную картину для разбиения по ставкам
+  - **OpenAI** — пробует сначала `max_completion_tokens` (новые модели), на `BadRequestError` про неподдерживаемый параметр фолбэчит на `max_tokens` (старые). Cached tokens забирает из `usage.prompt_tokens_details.cached_tokens` (если SDK прислал)
+  - **Google** — `systemInstruction` идёт в `getGenerativeModel(...)`, не как сообщение. У Google AI Studio пока нет publicly доступного prompt caching через generate_content, поэтому `cacheableBlocks` для Google игнорируется; `cachedContentTokenCount` из `usageMetadata` всё равно читаем (на случай будущей поддержки)
+  - **Обработка ошибок** — типизированная по классам SDK (`AuthenticationError`, `PermissionDeniedError`, `NotFoundError`, `RateLimitError`, `BadRequestError`, `APIConnectionError`), русские сообщения скопированы из Python-версии 1-в-1 (формулировки Влад уже видел в локальной ДК Лурье — оставляем привычными)
+  - Ключи — через `keysService.getApiKey(provider)`, **не из env Railway**
+
+- **`promptBuilder.js`** — порт `prompt_builder.py`:
+  - `buildPrompt(templateName, variables)` → `{system, user, cacheableBlocks, template}`
+  - Шаблоны читаются из bucket'а `team-prompts` через `teamStorage.downloadFile`. Имя без `.md` — добавляется автоматически
+  - Регексп плейсхолдеров — `\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g` (совпадает с Python-версией). Reset `lastIndex` перед каждым use — JS RegExp с флагом `g` сохраняет состояние между вызовами, забыть = плавающий баг
+  - Разбиение шаблона `## System` / `## User` через case-insensitive multi-line regex. Если `## System` нет — весь файл считается system-телом, `userBody = null`. Если `## User` нет — user-сообщение это `{{user_input}}` (или пусто)
+  - **Авто-загрузка `context.md` и `concept.md`** из team-database, если в шаблоне есть `{{context}}` / `{{concept}}` и эти переменные не переданы caller'ом. Файла нет (свежий проект, Влад ещё не написал) — пусто, не падаем
+  - Cacheable блоки (`context`, `concept`) кладутся в `cacheableBlocks` массив. Пустые/whitespace-only не попадают (Anthropic ругается на whitespace-only system-блоки)
+  - `listTemplates()` — список `.md` файлов в team-prompts, отсортирован
+
+- **`costTracker.js`** — порт `cost_tracker.py`:
+  - `loadPricing()` — читает `pricing.json` из bucket'а `team-config`, кеширует в памяти на 60 сек. Если файла нет / невалидный JSON — возвращает `{}` и логирует warning, стоимости будут 0
+  - `calculateCost({provider, model, inputTokens, outputTokens, cachedTokens, audioMinutes})` — считает USD по схеме pricing.json `{models: [{provider, id, input_per_million, output_per_million, cached_input_per_million}], audio: {provider: {model: {per_minute}}}}`
+  - **Биллинг кеша**: если есть `cached_input_per_million` (Anthropic) — `fresh = inputTokens - cachedTokens` оплачивается по обычному `input`, остальное по `cached_input`. Если нет (OpenAI/Google в pricing.json обычно не указывают) — все cached оплачиваются по полному `input` (как в Python-версии)
+  - Округление до 6 знаков (доли цента)
+  - `recordCall(...)` — считает стоимость + пишет в `team_api_calls` через `teamSupabase.recordApiCall`
+  - `getCostForTask(taskId)` — сумма по всем вызовам с этим task_id. Используется для биллинга `write_text + AI-правки фрагментов`: правки биллятся к родительской задаче без новой записи в team_tasks
+  - `getTotalSpending()` — агрегация по провайдерам и моделям + флаг `alert_triggered` (порог из team_settings.alert_threshold_usd). Структура ответа повторяет Python — фронт можно портировать 1-в-1
+  - `getAlertThreshold()` — из team_settings, поддерживает форматы `{value: number}` (jsonb с обёрткой) и `number` (просто число)
+
+- **`backend/scripts/testTeamLlm.js`** — тестовый CLI-скрипт:
+  - Запуск: `node scripts/testTeamLlm.js [provider] [model]` (дефолт `anthropic claude-sonnet-4-5`)
+  - Сначала вызывает `getAllKeysStatus()`, печатает статус всех трёх провайдеров (видно сразу, чего не хватает)
+  - Если ключа нет — exit 1
+  - Делает один вызов LLM с тестовым промптом «Скажи коротко: какой сегодня лучший способ начать день?»
+  - Печатает ответ + токены (input/output/cached) + стоимость
+  - Записывает вызов в `team_api_calls` через `recordCall`. taskId = null (это разовый тестовый, не задача из team_tasks)
+
+Решения, принятые намеренно:
+- **Singleton service-role клиента в `teamSupabase.js`**, не отдельный модуль клиента. У Потока уже есть `supabaseService.js` со своим клиентом (для videos), но мешать в один — связность хуже. Лучше повторить паттерн service-per-entity Потока, чем сэкономить пять строк
+- **`appendTaskSnapshot` мапит camelCase JS → snake_case БД явным проходом**, не через автоматический преобразователь. Лишняя страховка от опечаток в полях `team_tasks` (их 17 — одна ошибка имени и поле уйдёт в null без явной ошибки)
+- **getActiveTaskIds через клиентский DISTINCT ON.** Postgres позволяет `SELECT DISTINCT ON (id) ... ORDER BY id, created_at DESC`, но для этого нужен подзапрос с фильтром `WHERE status = 'running'` поверх — Supabase JS клиент не делает это удобно. Объёмы команды (десятки задач) — клиент-сайд группировка приемлема. Если станет узким местом — добавим Postgres-функцию
+- **Ключи в БД, кеш на 30 сек.** Альтернатива — env Railway. Спека настаивает на БД (UI Админки + смена без передеплоя), и это согласовано в архитектурном документе. 30 сек — компромисс между «свежестью» и «не дёргать БД на каждом вызове»
+- **`recordApiCall` не бросает.** Если запись в журнал упадёт (БД временно недоступна) — ломать LLM-вызов из-за лога нельзя. Клиент уже получил ответ модели, вернуть ему ошибку — потеря результата. Лог — журнал, а не критичная транзакция
+- **Pricing-кеш 60 сек** (а не TTL=∞). Влад может обновить pricing.json через Supabase Dashboard в любой момент; чтобы свежие ставки подхватились без рестарта бэкенда — короткий TTL. На стоимости вызовов это не сказывается
+- **Anthropic SDK errors через `instanceof`**, не через `name`-проверки. SDK экспортирует классы (`Anthropic.AuthenticationError` и т.д.) — `instanceof` устойчив к рефакторингам имён внутри SDK
+- **OpenAI fallback `max_completion_tokens` → `max_tokens`** один уровень. У SDK нет публичного флага «какие параметры поддерживает модель», и я не хочу делать таблицу. Один try-catch покрывает оба пути
+- **Google: `systemInstruction` через `getGenerativeModel`**, не через сообщения. Это правильный путь у Google AI Studio — system-инструкция не должна быть частью conversation history
+- **Имя файла теста — `testTeamLlm.js`, не `test_team_llm.js`.** Стилистика Потока (`videoProcessor.js`, `apifyService.js`) — camelCase для скриптов и сервисов
+
+Известные ограничения сессии 25:
+- **Кеш ключей в памяти процесса** — на нескольких репликах Railway (если когда-нибудь будут) рассинхронизируется максимум на 30 сек. Для одного процесса не критично
+- **Cleanup `team_tasks` отсутствует**. Журнал растёт линейно с числом задач — для команды это десятки в неделю, не проблема. Если когда-нибудь нужно будет архивировать — отдельная сессия с retention-политикой
+- **Pricing.json пока не залит**. До того как Влад положит файл в bucket `team-config`, `calculateCost` будет возвращать 0 для всех вызовов. Запись в `team_api_calls` всё равно создаётся — мы видим, что вызов был, просто без стоимости. После заливки следующие вызовы будут считаться корректно
+- **Recovery после рестарта пока не подключен**. `getActiveTaskIds()` готова, но дёрнет её только Сессия 26 (Сессия 3 roadmap'а команды) через `teamRecoveryService.js`. До тех пор задачи в running после рестарта останутся в running и не подхватятся
+- **`teamStorage.downloadFile` возвращает строку**. Бинарные файлы (например, PDF в `team-database/sources/`) пока через этот метод нормально не вытащить — для них в Сессии 26 / 27 (Сессии 3 / 4 roadmap'а команды) добавим `downloadBlob` или `downloadBuffer`. Сейчас все нужные файлы (md и json) текстовые
+
+Ручные шаги для Влада (после pull):
+1. **Зависимости бэкенда**: PowerShell в `backend/` → `& "C:\Program Files\nodejs\npm.cmd" install`. Поставит `@anthropic-ai/sdk` и `@google/generative-ai`
+2. **Залей конфиги в Storage** через Supabase Dashboard → Storage:
+   - `team-config/pricing.json` — скопируй из локальной ДК Лурье (`config/pricing.json`)
+   - `team-config/presets.json` — оттуда же
+   - В bucket `team-prompts` залей пять шаблонов: `ideas-free.md`, `ideas-questions.md`, `research-direct.md`, `write-text.md`, `edit-text-fragments.md` (все из `prompts/` локальной ДК Лурье)
+3. **Добавь ключи** через Supabase Dashboard → Table Editor → `team_api_keys`. Создай три строки:
+   - `provider=anthropic`, `key_value=твой Anthropic-ключ`
+   - `provider=openai`, `key_value=твой OpenAI-ключ` (можно тот же, что в Railway env)
+   - `provider=google`, `key_value=твой Google AI Studio ключ`
+4. **Локально проверь**: PowerShell в `backend/` → `& "C:\Program Files\nodejs\node.exe" scripts/testTeamLlm.js`. Должен напечатать статус ключей, ответ Claude и токены. В Supabase Dashboard → Table Editor → `team_api_calls` появится одна запись о вызове со стоимостью
+5. **Vercel/Railway** перезапускать не надо — функционального изменения снаружи (новых эндпоинтов, страниц) пока нет, новые сервисы используются только из тестового скрипта. Эндпоинты появятся в Сессии 26 (TaskRunner / Сессия 3 roadmap'а команды) и Сессии 27 (REST API / Сессия 4 roadmap'а)
+
+---
+
 ### 🔜 Отложено (v3+)
 - Скриншоты к заметкам (хранение на Google Drive) — когда станет понятно что без них не обойтись
 - Раздел "Закладки" на сайте с полноценным интерфейсом (пока доступ через Supabase Dashboard)
