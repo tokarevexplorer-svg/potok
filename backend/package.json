@@ -13,6 +13,8 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.93.0",
+    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.45.0",
     "apify-client": "^2.9.4",
     "cors": "^2.8.5",
