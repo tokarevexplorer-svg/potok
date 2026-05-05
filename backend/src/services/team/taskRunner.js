@@ -1,0 +1,714 @@
+// Оркестратор задач команды.
+//
+// Прямой портирование жизненного цикла задач из `dkl_tool/backend/services/task_runner.py`
+// на JS, с заменой:
+//   - локальный JSONL-журнал tasks.jsonl → таблица team_tasks (append-only).
+//     Каждое изменение состояния задачи = новая строка с тем же `id`.
+//     Текущее состояние = последний снапшот по id (через teamSupabase.getTaskById).
+//   - локальная файловая система → bucket team-database в Supabase Storage.
+//
+// Статусы (из миграции 0012, английские константы):
+//   running       — задача запущена, обработчик работает
+//   done          — задача завершена успешно (на проверке у пользователя)
+//   marked_done   — пользователь подтвердил готовность
+//   revision      — пользователь отметил «на доработке» (резерв на этап 2)
+//   archived      — задача архивирована
+//   error         — задача упала с ошибкой
+//
+// Изолированные статусы шагов закладываются на этапе 1 в полях самих
+// snapshot'ов (started_at, finished_at, error). На этапе 2, когда задачи
+// станут многошаговыми (агенты с self-review), это превратится в отдельные
+// поля типа `step_status`. Сейчас однофазные задачи — один шаг = один статус.
+
+import { randomBytes } from "node:crypto";
+import {
+  appendTaskSnapshot,
+  getTaskById,
+} from "./teamSupabase.js";
+import { downloadFile, uploadFile, listFiles } from "./teamStorage.js";
+import { call as llmCall } from "./llmClient.js";
+import { buildPrompt } from "./promptBuilder.js";
+import { fetchSource } from "./contentFetcher.js";
+import { recordCall, getCostForTask } from "./costTracker.js";
+import {
+  TASK_HANDLERS,
+  TASK_TITLES,
+  taskTemplateName,
+  buildPreviewVariables,
+  formatEdits,
+} from "./taskHandlers.js";
+import { enqueueTeamTask } from "../../queue/teamWorkerPool.js";
+
+const DATABASE_BUCKET = "team-database";
+const PRESETS_PATH = "presets.json";
+const PRICING_PATH = "pricing.json";
+const CONFIG_BUCKET = "team-config";
+
+// =========================================================================
+// helpers: ids, время
+// =========================================================================
+
+function nowIso() {
+  // ISO с локальным offset, как в Python (...isoformat(timespec="seconds")).
+  // Точность до секунды достаточна для журнала состояний.
+  return new Date().toISOString();
+}
+
+function newTaskId() {
+  return "tsk_" + randomBytes(6).toString("hex");
+}
+
+// Берёт текущий снапшот задачи, мерджит с update'ами, кладёт новую строку.
+// Используется для всех переходов статуса (started, done, error, archive,
+// rename, mark_done, refresh_cost). Возвращает обновлённый снапшот.
+async function appendUpdate(taskId, update) {
+  const current = await getTaskById(taskId);
+  if (!current) {
+    throw new Error(`Задача не найдена: ${taskId}`);
+  }
+  // current приходит из БД в snake_case — превращаем в camelCase для appendTaskSnapshot.
+  const merged = mergeSnapshot(current, update);
+  await appendTaskSnapshot(merged);
+  return merged;
+}
+
+// Снапшот, который теперь сохраняем — это «полная» картина в camelCase для
+// appendTaskSnapshot (он сам мапит в snake_case). Берём существующие поля
+// и накладываем update.
+function mergeSnapshot(current, update) {
+  return {
+    id: current.id,
+    type: current.type,
+    title: update.title ?? current.title,
+    status: update.status ?? current.status,
+    params: update.params ?? current.params,
+    modelChoice: update.modelChoice ?? current.model_choice,
+    provider: update.provider ?? current.provider,
+    model: update.model ?? current.model,
+    prompt: update.prompt ?? current.prompt,
+    promptOverrideUsed:
+      typeof update.promptOverrideUsed === "boolean"
+        ? update.promptOverrideUsed
+        : current.prompt_override_used,
+    result: update.result ?? current.result,
+    artifactPath: update.artifactPath ?? current.artifact_path,
+    tokens: update.tokens ?? current.tokens,
+    costUsd: typeof update.costUsd === "number" ? update.costUsd : current.cost_usd,
+    error: update.error === undefined ? current.error : update.error,
+    startedAt: update.startedAt ?? current.started_at,
+    finishedAt: update.finishedAt ?? current.finished_at,
+  };
+}
+
+// =========================================================================
+// presets.json и pricing.json — для resolveModelChoice
+// =========================================================================
+
+const PRESETS_TTL_MS = 60_000;
+let presetsCache = { value: null, expiresAt: 0 };
+let pricingCache = { value: null, expiresAt: 0 };
+
+async function loadPresets() {
+  const now = Date.now();
+  if (presetsCache.value && presetsCache.expiresAt > now) return presetsCache.value;
+  let parsed = {};
+  try {
+    const raw = await downloadFile(CONFIG_BUCKET, PRESETS_PATH);
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.warn(`[team] не удалось загрузить ${PRESETS_PATH}: ${err.message}`);
+    parsed = {};
+  }
+  presetsCache = { value: parsed, expiresAt: now + PRESETS_TTL_MS };
+  return parsed;
+}
+
+async function loadPricingForLookup() {
+  const now = Date.now();
+  if (pricingCache.value && pricingCache.expiresAt > now) return pricingCache.value;
+  let parsed = {};
+  try {
+    const raw = await downloadFile(CONFIG_BUCKET, PRICING_PATH);
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.warn(`[team] не удалось загрузить ${PRICING_PATH}: ${err.message}`);
+    parsed = {};
+  }
+  pricingCache = { value: parsed, expiresAt: now + PRESETS_TTL_MS };
+  return parsed;
+}
+
+// Ищет провайдера по id модели в pricing.json (поддерживает и новую структуру
+// с массивом models, и старую вложенную {provider: {model_id: {...}}}).
+async function providerForModel(modelId) {
+  const pricing = await loadPricingForLookup();
+  for (const entry of pricing.models ?? []) {
+    if (entry?.id === modelId) return entry.provider ?? null;
+  }
+  for (const [provider, models] of Object.entries(pricing)) {
+    if (!models || typeof models !== "object" || Array.isArray(models)) continue;
+    if (["_comment", "_units", "models", "audio"].includes(provider)) continue;
+    if (modelId in models) return provider;
+  }
+  return null;
+}
+
+// Резолвинг выбора модели:
+//   { preset: "fast"|"balanced"|"best" }      — из presets.json
+//   { model: "claude-..." }                   — провайдер находится по pricing.json
+//   { provider: "...", model: "..." }         — явный override
+//
+// taskType учитывается: presets.json может иметь per-task override
+// (presets[name][taskType]) — он приоритетнее presets[name].default.
+export async function resolveModelChoice(modelChoice, taskType = null) {
+  const presets = await loadPresets();
+  const choice = { ...(modelChoice || {}) };
+
+  const explicitProvider = (choice.provider || "").trim();
+  const explicitModel = (choice.model || "").trim();
+
+  if (explicitModel) {
+    if (explicitProvider) return { provider: explicitProvider, model: explicitModel };
+    const derived = await providerForModel(explicitModel);
+    if (!derived) {
+      throw new Error(
+        `Не удалось определить провайдера для модели '${explicitModel}'. ` +
+          `Добавь её в config/pricing.json (поле provider).`,
+      );
+    }
+    return { provider: derived, model: explicitModel };
+  }
+
+  const presetName = (choice.preset || "balanced").trim();
+  const preset = presets[presetName];
+  if (!preset) {
+    const available = Object.keys(presets)
+      .filter((k) => !k.startsWith("_"))
+      .join(", ");
+    throw new Error(`Неизвестный пресет: '${presetName}'. Доступны: ${available}.`);
+  }
+  if (typeof preset !== "object" || Array.isArray(preset)) {
+    throw new Error(`Пресет '${presetName}' в config/presets.json имеет неверную структуру.`);
+  }
+
+  let modelId = null;
+  if (taskType && typeof preset[taskType] === "string") {
+    modelId = preset[taskType];
+  }
+  if (!modelId && typeof preset.default === "string") {
+    modelId = preset.default;
+  }
+  if (!modelId && preset.models && typeof preset.models === "object") {
+    const legacyDefaultProvider = preset.default_provider;
+    if (legacyDefaultProvider && legacyDefaultProvider in preset.models) {
+      modelId = preset.models[legacyDefaultProvider];
+    } else {
+      const first = Object.values(preset.models)[0];
+      if (first) modelId = first;
+    }
+  }
+
+  if (!modelId) {
+    throw new Error(
+      `В пресете '${presetName}' не задана модель ни для типа '${taskType}', ни как default.`,
+    );
+  }
+
+  const provider = await providerForModel(modelId);
+  if (!provider) {
+    throw new Error(
+      `Модель '${modelId}' из пресета '${presetName}' не найдена в config/pricing.json.`,
+    );
+  }
+  return { provider, model: modelId };
+}
+
+// =========================================================================
+// publicAPI: createTask, runTaskInBackground, archive/rename/markDone
+// =========================================================================
+
+// Собирает промпт для предпросмотра через UI (без запуска задачи).
+// Используется эндпоинтом /api/team/tasks/preview-prompt.
+export async function previewPrompt(taskType, params) {
+  const template = taskTemplateName(taskType);
+  const variables = await buildPreviewVariables(taskType, params || {});
+  return await buildPrompt(template, variables);
+}
+
+// Создаёт новую задачу: пишет первый снапшот running, кладёт id в очередь.
+// Возвращает task id.
+//
+// Аргументы:
+//   - taskType: ключ TASK_HANDLERS
+//   - params: входные параметры задачи
+//   - modelChoice (опц.): выбор модели (preset или provider/model)
+//   - promptOverride (опц.): {system, user, cacheable_blocks?} — пользователь
+//     отредактировал промпт перед запуском
+//   - title (опц.): пользовательское название задачи
+export async function createTask({
+  taskType,
+  params,
+  modelChoice = null,
+  promptOverride = null,
+  title = null,
+}) {
+  if (!TASK_HANDLERS[taskType]) {
+    throw new Error(`Тип задачи не поддерживается: ${taskType}`);
+  }
+
+  const { provider, model } = await resolveModelChoice(modelChoice, taskType);
+
+  const overrideUsed = !!(promptOverride && promptOverride.system != null);
+  let prompt;
+  if (overrideUsed) {
+    // Пользователь отредактировал текст — берём его. Для cacheable_blocks
+    // фолбэк на стандартные context/concept (если в override не указано иначе).
+    let cacheableBlocks = promptOverride.cacheable_blocks ?? promptOverride.cacheableBlocks;
+    if (!Array.isArray(cacheableBlocks)) {
+      const standard = await previewPrompt(taskType, params || {});
+      cacheableBlocks = standard.cacheableBlocks ?? [];
+    }
+    prompt = {
+      system: promptOverride.system ?? "",
+      user: promptOverride.user || (params?.user_input ?? ""),
+      cacheable_blocks: cacheableBlocks,
+      template: taskTemplateName(taskType),
+    };
+  } else {
+    const built = await previewPrompt(taskType, params || {});
+    prompt = {
+      system: built.system,
+      user: built.user,
+      cacheable_blocks: built.cacheableBlocks,
+      template: built.template,
+    };
+  }
+
+  const taskId = newTaskId();
+  const now = nowIso();
+  const snapshot = {
+    id: taskId,
+    type: taskType,
+    title: title || TASK_TITLES[taskType] || taskType,
+    status: "running",
+    params: { ...(params || {}) },
+    modelChoice: { ...(modelChoice || {}) },
+    provider,
+    model,
+    prompt,
+    promptOverrideUsed: overrideUsed,
+    result: "",
+    artifactPath: null,
+    tokens: { input: 0, output: 0, cached: 0 },
+    costUsd: 0,
+    error: null,
+    startedAt: null,
+    finishedAt: null,
+  };
+
+  await appendTaskSnapshot(snapshot);
+  enqueueTeamTask(taskId);
+  return taskId;
+}
+
+// Главный воркер задачи. Дёргается из teamWorkerPool. Не должен бросать —
+// все ошибки записывает в БД как status=error.
+export async function runTaskInBackground(taskId) {
+  const task = await getTaskById(taskId);
+  if (!task) return;
+
+  const handler = TASK_HANDLERS[task.type];
+  const startedAt = nowIso();
+
+  try {
+    if (!handler) {
+      throw new Error(`Тип задачи не поддерживается: ${task.type}`);
+    }
+
+    // edit_text_fragments — особый случай: handler нуждается в parent artifact.
+    // Подкладываем его в params перед вызовом, чтобы handler был тупым.
+    if (task.type === "edit_text_fragments") {
+      const parentId = (task.params?.parent_task_id ?? "").trim();
+      if (!parentId) {
+        throw new Error("Не указан parent_task_id для правки фрагментов");
+      }
+      const parent = await getTaskById(parentId);
+      if (!parent) {
+        throw new Error(`Не найдена исходная задача (parent_task_id=${parentId})`);
+      }
+      if (!["write_text", "edit_text_fragments"].includes(parent.type)) {
+        throw new Error("Правки применяются только к задачам типа write_text");
+      }
+      if (!parent.artifact_path) {
+        throw new Error("У исходной задачи нет артефакта в Storage");
+      }
+      task.params = {
+        ...task.params,
+        parent_artifact_path: parent.artifact_path,
+      };
+    }
+
+    const outcome = await handler(task);
+
+    // record API call перед апдейтом задачи: получим cost_usd для записи.
+    const tokens = outcome.tokens || {};
+    const apiEntry = await recordCall({
+      provider: task.provider,
+      model: task.model,
+      inputTokens: Number(tokens.input ?? 0),
+      outputTokens: Number(tokens.output ?? 0),
+      cachedTokens: Number(tokens.cached ?? 0),
+      taskId,
+      success: true,
+    });
+
+    const update = {
+      status: "done",
+      result: outcome.result ?? "",
+      artifactPath: outcome.artifactPath ?? null,
+      tokens,
+      costUsd: Number(apiEntry?.cost_usd ?? 0),
+      startedAt,
+      finishedAt: nowIso(),
+    };
+    if (outcome.prompt) update.prompt = outcome.prompt;
+
+    await appendUpdate(taskId, update);
+  } catch (err) {
+    const message = err?.message ?? String(err);
+    const provider = task?.provider || "unknown";
+    const model = task?.model || "unknown";
+    // Лог об ошибке тоже идёт в team_api_calls (как в Python-версии),
+    // чтобы видеть статистику падений по моделям.
+    try {
+      await recordCall({
+        provider,
+        model,
+        taskId,
+        success: false,
+        error: message,
+      });
+    } catch (recErr) {
+      console.error("[team] recordCall (error) failed:", recErr);
+    }
+    try {
+      await appendUpdate(taskId, {
+        status: "error",
+        error: message,
+        startedAt,
+        finishedAt: nowIso(),
+      });
+    } catch (snapErr) {
+      console.error(
+        `[team] не удалось записать ошибочный снапшот для ${taskId}:`,
+        snapErr,
+      );
+    }
+  }
+}
+
+// =========================================================================
+// management: archive, rename, markDone, refreshCost
+// =========================================================================
+
+export async function archiveTask(taskId) {
+  return await appendUpdate(taskId, { status: "archived" });
+}
+
+export async function renameTask(taskId, title) {
+  return await appendUpdate(taskId, { title: (title ?? "").trim() });
+}
+
+export async function markTaskDone(taskId) {
+  return await appendUpdate(taskId, { status: "marked_done" });
+}
+
+// Пересчитывает cost_usd задачи как сумму всех её записей в team_api_calls.
+// Используется после AI-правки фрагментов: правка биллится против
+// родительской задачи (без новой записи в team_tasks).
+export async function refreshTaskCost(taskId) {
+  const total = await getCostForTask(taskId);
+  return await appendUpdate(taskId, { costUsd: total });
+}
+
+// =========================================================================
+// AI-правка фрагментов write_text — без новой записи в team_tasks
+// =========================================================================
+
+// Применяет AI-правки к артефакту write_text задачи. Создаёт новую версию
+// (vN+1) в той же папке точки. Стоимость записывается на parentTaskId через
+// team_api_calls — никакого нового team_tasks снапшота на саму правку.
+//
+// Аргументы:
+//   - parentTaskId: id родительской write_text (или edit_text_fragments) задачи
+//   - fullText: текущий текст (UI отдаёт то, что пользователь видел)
+//   - edits: [{fragment, instruction}, ...]
+//   - generalInstruction: общая инструкция (опц.)
+//   - modelChoice: выбор модели (resolveModelChoice → provider/model)
+//   - promptOverride: {system, user, cacheable_blocks?} (опц.)
+//
+// Возвращает {version, path, name, provider, model, tokens}.
+export async function applyFragmentEditsInline({
+  parentTaskId,
+  fullText,
+  edits,
+  generalInstruction,
+  modelChoice,
+  promptOverride = null,
+}) {
+  const parent = await getTaskById(parentTaskId);
+  if (!parent) throw new Error("Не найдена исходная задача (parent_task_id)");
+  if (!["write_text", "edit_text_fragments"].includes(parent.type)) {
+    throw new Error("Правки применяются только к задачам типа write_text");
+  }
+  if (!parent.artifact_path) {
+    throw new Error("У исходной задачи нет артефакта в Storage");
+  }
+
+  const parentPath = parent.artifact_path;
+  const pointDir = parentPath.includes("/")
+    ? parentPath.slice(0, parentPath.lastIndexOf("/"))
+    : "";
+  if (!pointDir) {
+    throw new Error(`Не удалось определить папку точки из пути ${parentPath}`);
+  }
+
+  const { provider, model } = await resolveModelChoice(modelChoice, "edit_text_fragments");
+
+  let usedPrompt;
+  if (promptOverride && promptOverride.system != null) {
+    usedPrompt = {
+      system: promptOverride.system ?? "",
+      user:
+        promptOverride.user ||
+        "Примени все перечисленные правки и верни обновлённый текст целиком.",
+      cacheable_blocks:
+        promptOverride.cacheable_blocks ?? promptOverride.cacheableBlocks ?? [],
+    };
+  } else {
+    const built = await buildPrompt("edit-text-fragments.md", {
+      full_text: fullText || "",
+      edits: formatEdits(edits || []),
+      general_instruction: (generalInstruction ?? "").trim(),
+      user_input:
+        "Примени все перечисленные правки и верни обновлённый текст целиком.",
+    });
+    usedPrompt = {
+      system: built.system,
+      user: built.user,
+      cacheable_blocks: built.cacheableBlocks,
+    };
+  }
+
+  const result = await llmCall({
+    provider,
+    model,
+    systemPrompt: usedPrompt.system,
+    userPrompt: usedPrompt.user,
+    cacheableBlocks: usedPrompt.cacheable_blocks,
+    maxTokens: 8192,
+  });
+
+  await recordCall({
+    provider,
+    model,
+    inputTokens: Number(result.inputTokens ?? 0),
+    outputTokens: Number(result.outputTokens ?? 0),
+    cachedTokens: Number(result.cachedTokens ?? 0),
+    taskId: parentTaskId,
+    success: true,
+  });
+
+  // Версионирование: ищем максимальный vN в pointDir.
+  const ts = (() => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return (
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+      `_${pad(d.getHours())}${pad(d.getMinutes())}`
+    );
+  })();
+  const version = await nextVersionInDir(pointDir);
+  const path = `${pointDir}/v${version}_${ts}.md`;
+
+  const headerLines = [
+    `<!-- ai edit · v${version} · ${ts} · based on task ${parentTaskId} · ${provider}/${model} -->`,
+  ];
+  await uploadFile(
+    DATABASE_BUCKET,
+    path,
+    [headerLines.join("\n"), "", result.text ?? ""].join("\n"),
+  );
+
+  await refreshTaskCost(parentTaskId);
+
+  const name = path.split("/").pop() || path;
+  return {
+    version,
+    path,
+    name,
+    provider,
+    model,
+    tokens: {
+      input: Number(result.inputTokens ?? 0),
+      output: Number(result.outputTokens ?? 0),
+      cached: Number(result.cachedTokens ?? 0),
+    },
+  };
+}
+
+// Прямое сохранение редактуры без LLM-вызова (пользователь сам отредактировал
+// текст в textarea). Просто новая версия в той же папке. Биллинг = 0.
+//
+// Возвращает {version, path, name}.
+export async function saveDirectEdit({ parentTaskId, content }) {
+  const parent = await getTaskById(parentTaskId);
+  if (!parent) throw new Error("Не найдена исходная задача");
+  if (!["write_text", "edit_text_fragments"].includes(parent.type)) {
+    throw new Error("Прямая правка доступна только для задач write_text");
+  }
+  if (!parent.artifact_path) {
+    throw new Error("У исходной задачи нет артефакта в Storage");
+  }
+  const pointDir = parent.artifact_path.includes("/")
+    ? parent.artifact_path.slice(0, parent.artifact_path.lastIndexOf("/"))
+    : "";
+  if (!pointDir) {
+    throw new Error(`Не удалось определить папку точки из пути ${parent.artifact_path}`);
+  }
+
+  const ts = (() => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return (
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+      `_${pad(d.getHours())}${pad(d.getMinutes())}`
+    );
+  })();
+  const version = await nextVersionInDir(pointDir);
+  const path = `${pointDir}/v${version}_${ts}.md`;
+  const headerLines = [
+    `<!-- direct edit · v${version} · ${ts} · based on task ${parentTaskId} -->`,
+  ];
+  await uploadFile(
+    DATABASE_BUCKET,
+    path,
+    [headerLines.join("\n"), "", content ?? ""].join("\n"),
+  );
+
+  const name = path.split("/").pop() || path;
+  return { version, path, name };
+}
+
+// =========================================================================
+// research: дополнительный вопрос (дописывает в существующий артефакт)
+// =========================================================================
+
+// Дополнительный вопрос к research_direct задаче. НЕ создаёт новую запись в
+// team_tasks — переиспользует артефакт родительской задачи и биллинг идёт
+// против её id. UI этой функцией пользуется в TaskViewerModal.
+//
+// Возвращает {success, appended_text, cost_usd}.
+export async function appendQuestionToResearch({
+  parentTaskId,
+  question,
+  modelChoice = null,
+}) {
+  const parent = await getTaskById(parentTaskId);
+  if (!parent) throw new Error("Не найдена исходная задача");
+  if (parent.type !== "research_direct") {
+    throw new Error("Дополнительный вопрос доступен только для задач research_direct");
+  }
+  const trimmed = (question ?? "").trim();
+  if (!trimmed) throw new Error("Пустой вопрос");
+  if (!parent.artifact_path) throw new Error("У исходной задачи нет артефакта в Storage");
+
+  // Модель: либо явный choice, либо ту же, что у родителя.
+  let provider, model;
+  if (modelChoice) {
+    ({ provider, model } = await resolveModelChoice(modelChoice, "research_direct"));
+  } else {
+    provider = parent.provider || "anthropic";
+    model = parent.model;
+    if (!model) {
+      ({ provider, model } = await resolveModelChoice(null, "research_direct"));
+    }
+  }
+
+  const params = parent.params || {};
+  const source = (params.source ?? "").trim();
+  if (!source) throw new Error("В исходной задаче не сохранён источник");
+
+  const fetched = await fetchSource(source);
+  const rebuilt = await buildPrompt("research-direct.md", {
+    user_input: trimmed,
+    source_label: fetched.label,
+    source_text: fetched.text,
+  });
+
+  const result = await llmCall({
+    provider,
+    model,
+    systemPrompt: rebuilt.system,
+    userPrompt: rebuilt.user,
+    cacheableBlocks: rebuilt.cacheableBlocks ?? [],
+  });
+
+  const apiEntry = await recordCall({
+    provider,
+    model,
+    inputTokens: Number(result.inputTokens ?? 0),
+    outputTokens: Number(result.outputTokens ?? 0),
+    cachedTokens: Number(result.cachedTokens ?? 0),
+    taskId: parentTaskId,
+    success: true,
+  });
+
+  // Дописываем в артефакт новый блок «## Вопрос» / «## Ответ».
+  const existing = await downloadFile(DATABASE_BUCKET, parent.artifact_path);
+  const ts = (() => {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}, ${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
+  })();
+  const appended =
+    "\n\n---\n\n" +
+    `## Вопрос (${ts})\n\n` +
+    `${trimmed}\n\n` +
+    "## Ответ\n\n" +
+    `${(result.text || "").trim()}\n`;
+  await uploadFile(DATABASE_BUCKET, parent.artifact_path, existing + appended);
+
+  await refreshTaskCost(parentTaskId);
+
+  return {
+    success: true,
+    appended_text: appended,
+    cost_usd: Number(apiEntry?.cost_usd ?? 0),
+  };
+}
+
+// =========================================================================
+// shared: nextVersionInDir
+// =========================================================================
+
+async function nextVersionInDir(pointDir) {
+  let files;
+  try {
+    files = await listFiles(DATABASE_BUCKET, pointDir);
+  } catch {
+    return 1;
+  }
+  let highest = 0;
+  const re = /^v(\d+)_/i;
+  for (const file of files) {
+    const m = (file?.name ?? "").match(re);
+    if (!m) continue;
+    const n = parseInt(m[1], 10);
+    if (Number.isFinite(n)) highest = Math.max(highest, n);
+  }
+  return highest + 1;
+}
+
+// Реэкспорт taskTemplateName для удобства роутов.
+export { taskTemplateName };
