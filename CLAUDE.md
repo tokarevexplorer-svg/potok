@@ -1221,6 +1221,119 @@ superapp/
 
 ---
 
+**Сессия 26: Команда — TaskRunner и handlers** (завершена 2026-05-05)
+
+**Эта сессия — Сессия 3 из 8 в roadmap-е этапа 1 раздела «Команда»**, в нумерации сессий Потока — Сессия 26. Базируется на сервисах из Сессии 25 (LLM-клиент, prompt builder, cost tracker, teamSupabase, teamStorage, keysService) и инфраструктуре Сессии 24 (таблицы `team_*` и buckets `team-*`).
+
+Эта сессия — оркестратор задач команды: TaskRunner с приёмами «append-only журнал состояний» и «изолированные статусы шагов», пять handler'ов под каждый тип задачи, очередь и recovery после рестарта. Без HTTP-роутов пока — они будут в Сессии 27 (Сессия 4 roadmap'а команды). Запуск задач сейчас идёт только из тестового скрипта `backend/scripts/testTeamTask.js`.
+
+- **Новая зависимость в `backend/`**: `pdf-parse` (^1.1.4) — для извлечения текста из PDF в `contentFetcher.js`. Бинарные превью/ассеты этим пакетом не вытаскиваются — он умеет только текст. Альтернатива (`pdf2json`) тяжелее и медленнее; pdf-parse даёт чистый text out-of-the-box
+
+- **`backend/src/services/team/contentFetcher.js`** — порт `content_fetcher.py` на JS:
+  - `fetchSource(source)` — единая точка входа. Если строка — URL (http/https) → `fetchUrl`, иначе пробуем как путь в bucket'е `team-database` (с авто-префиксом `sources/` если не указан).
+  - `fetchUrl(url)` через встроенный `fetch` (Node 20+) с браузерным User-Agent, таймаутом 30 сек через AbortController, `redirect: "follow"`. По content-type или расширению .pdf — переключается на pdf-парсер (через ленивый `import("pdf-parse")`), иначе вытаскивает текст HTML простыми регекспами
+  - **HTML-парсер регексповый, не JSDOM**. JSDOM весит ~50 МБ и медленный, для нашей задачи (вытащить читаемый текст) перебор. Регексп-подход покрывает 95% реальных страниц: удаляем шумные блоки (`<script>`, `<style>`, `<nav>`, `<footer>`, `<aside>`, и т.д.), сужаемся до `<article>` или `<main>` если найдены, превращаем блочные тэги в переводы строк, декодируем HTML-entities. Title из `<title>` идёт в шапку текста с `=`-разделителем. Свёртка пустых строк (3+ → 2)
+  - **PDF из storage** требует бинарные байты, а `teamStorage.downloadFile` отдаёт UTF-8 строку (через `Blob.text()`). Поэтому в `contentFetcher` свой helper `downloadFileAsBuffer(path)` — обращается напрямую к service-role клиенту через `getServiceRoleClient` и берёт `arrayBuffer`. `teamStorage.downloadFile` не трогаю — у него своё назначение (текстовые файлы), и менять его сигнатуру = менять везде, где он используется
+  - **MAX_TEXT_CHARS = 200_000** — обрезание длинного текста (≈50 тыс токенов), чтобы не разорвать промпт. Совпадает с Python-версией. Сообщение об обрезании добавляется в конец как `…[обрезано на 200000 символах из 587342]`
+  - Класс `FetchError extends Error` — отдельный тип, чтобы taskRunner мог отличить «упал источник» от «упала наша логика»
+
+- **`backend/src/services/team/taskHandlers.js`** — пять handler-функций + реестр + хелперы:
+  - `TASK_HANDLERS` реестр: `ideas_free`, `ideas_questions_for_research`, `research_direct`, `write_text`, `edit_text_fragments`. **Точная копия логики Python**: те же имена ключей, та же сигнатура `async (task) → {result, artifactPath, tokens, prompt?}`. Это критическая точка расширения для этапа 2 (новые типы под AI-агентов добавляются регистрацией в реестре + новый шаблон в `taskTemplateName`)
+  - `TASK_TITLES` — человекочитаемые названия для UI (используется как дефолт `task.title` если пользователь не задал свой)
+  - `taskTemplateName(taskType)` — маппинг типа на имя файла шаблона в bucket'е `team-prompts`
+  - `HIDDEN_TYPES_IN_LOG` — `Set(["edit_text_fragments"])`. AI-правки фрагментов привязаны к родительской write_text задаче и не должны показываться в канбане как самостоятельные карточки. На этапе 2 при добавлении технических типов под агентов — пополнить
+  - **Артефакты идут в bucket `team-database`**, а не на локальный диск (как было в ДК Лурье). `artifactPathFor(taskType, params)` строит путь относительно корня bucket'а: `ideas/<ts>_<slug>.md`, `research/<ts>_<slug>.md`, `texts/<slug>/v<N>_<ts>.md`. Этот путь и сохраняется в `team_tasks.artifact_path` — без bucket-префикса (он подразумевается)
+  - `slugify(text, 40)` — Unicode-aware: `[^\p{L}\p{N}\s_-]/gu` сохраняет кириллицу. Без флага `u` русские названия точек экскурсий превращались бы в "untitled-point" целиком — критично для UX
+  - `nextVersion(pointDir)` — для версионирования write_text. Через `teamStorage.listFiles(bucket, pointDir)` (Supabase API → `storage.list`) получаем все файлы папки, ищем максимальный `v<N>_` префикс, +1. Если папки нет (первая версия) — возвращаем 1
+  - **Особенность `edit_text_fragments`**: handler ожидает `params.parent_artifact_path` (полный путь до родительского артефакта в bucket'е). Сам он в БД не лезет — оркестратор `taskRunner.runTaskInBackground` подкладывает это значение в params **перед вызовом** handler'а после lookup'а родителя. Так handler остаётся «тупым» и тестируемым в изоляции
+  - `gatherResearch(paths)` — собирает блок исследований для write_text: проходит по списку путей в `team-database`, скачивает каждый файл через `downloadFile`, склеивает с разделителями `### Источник: <title>`. Ошибки и отсутствующие файлы пропускаются молча (как в Python — `try/except: continue`)
+  - `formatEdits(edits)` — порт Python `_format_edits`: рендерит структурированный список правок в numbered markdown-блок для шаблона. Экспортируется отдельно — нужен и в handler, и в taskRunner.applyFragmentEditsInline, и в previewPrompt
+  - `buildPreviewVariables(taskType, params)` — единый помощник для `previewPrompt` и handler'ов: автоматически разворачивает `research_paths` в `research`-блок для write_text и форматирует `edits` для edit_text_fragments. Это позволяет UI показать ровно тот промпт, который улетит в LLM
+
+- **`backend/src/services/team/taskRunner.js`** — оркестратор:
+  - `createTask({taskType, params, modelChoice, promptOverride, title})` — резолвит модель через `resolveModelChoice`, собирает или берёт из override промпт, генерирует id (`tsk_<random>` через `crypto.randomBytes(6)`), пишет первый `running` снапшот в `team_tasks` и кладёт id в `teamWorkerPool`. Возвращает task id (UI-эндпоинт ответит 202 с этим id)
+  - `runTaskInBackground(taskId)` — главный воркер задачи (вызывается из пула):
+    - Читает текущий снапшот из БД через `getTaskById`
+    - Для `edit_text_fragments` достаёт parent через `getTaskById(parent_task_id)`, валидирует тип/наличие артефакта и подкладывает `parent_artifact_path` в params текущей задачи (не сохраняя — чисто для handler'а)
+    - Дёргает handler из `TASK_HANDLERS`
+    - Записывает API-вызов в `team_api_calls` через `costTracker.recordCall` — это даёт `cost_usd`, который попадёт в сам снапшот `team_tasks`
+    - Пишет `done`-снапшот через `appendUpdate` (helper, который читает текущий снапшот и мерджит обновления — это сохраняет «append-only» паттерн)
+    - При ошибке — `recordCall(success: false, error)` + `appendUpdate(status: "error", error)`. **Не бросает наружу** — рекавери очереди/пул не должны падать из-за прикладной ошибки
+  - `appendUpdate(taskId, update)` — внутренний хелпер-апдейтер: каждый переход состояния (started, done, error, archive, rename, mark_done, refresh_cost) пишет новую строку с тем же `id`. Текущее состояние = последний снапшот (читается через `getTaskById` → `ORDER BY created_at DESC LIMIT 1`). Это и есть append-only журнал
+  - `mergeSnapshot(current, update)` — мапит snake_case БД → camelCase для `appendTaskSnapshot`. Поля, которые `update` не указывает, наследуются из текущего снапшота
+  - `archiveTask(taskId)`, `renameTask(taskId, title)`, `markTaskDone(taskId)` — каждая просто обёртка над `appendUpdate` со своим набором полей
+  - `refreshTaskCost(taskId)` — пересчитывает суммарный `cost_usd` задачи как `getCostForTask(taskId)` (сумма по всем `team_api_calls` с этим task_id) и пишет новый снапшот. Используется после AI-правок фрагментов
+  - **`applyFragmentEditsInline({parentTaskId, fullText, edits, generalInstruction, modelChoice, promptOverride})`** — особый путь: применяет AI-правки к артефакту write_text задачи. **Не создаёт новую запись в `team_tasks`** — только новую версию файла в той же папке точки + запись в `team_api_calls` с `task_id = parentTaskId`. После этого вызывается `refreshTaskCost(parentTaskId)`, и UI карточки родительской задачи показывает суммарную стоимость (write_text + все правки)
+  - **`saveDirectEdit({parentTaskId, content})`** — прямая правка от пользователя без LLM-вызова. Просто новая версия `vN+1_<ts>.md` в папке точки, биллинг = 0
+  - **`appendQuestionToResearch({parentTaskId, question, modelChoice})`** — дополнительный вопрос к research_direct задаче. Не создаёт запись в `team_tasks` — дописывает блок «## Вопрос (HH:MM, DD.MM)» в существующий артефакт + запись в `team_api_calls` к parent task id + `refreshTaskCost(parentTaskId)`. Источник (URL/файл) переиспользуется из `parent.params.source` — `fetchSource` качает повторно. Если хочется без перекачки источника — пользователь редактирует промпт перед запуском (overrideUsed)
+  - **`resolveModelChoice(modelChoice, taskType)`** — порт Python-функции:
+    - Кеш `presets.json` и `pricing.json` в памяти на 60 сек
+    - Поддерживает три формы: `{preset}`, `{model}` (провайдер ищется в pricing.json), `{provider, model}` (явный)
+    - Per-task override в presets: `presets[name][taskType]` приоритетнее `presets[name].default`
+    - Legacy nested form `{models: {provider: id}}` поддерживается для обратной совместимости со старыми presets.json
+  - **`previewPrompt(taskType, params)`** — собрать промпт без запуска задачи. Используется UI'ным эндпоинтом превью. Внутри: `taskTemplateName` → `buildPreviewVariables` → `buildPrompt`. Это даёт пользователю возможность увидеть и отредактировать ровно тот текст, который улетит в LLM
+
+- **`backend/src/queue/teamWorkerPool.js`** — отдельный пул задач команды:
+  - Структура копирует `workerPool.js` Потока 1-в-1 (queue + dedup Set + activeWorkers + concurrency + processFn)
+  - **Отдельный пул, не расширение существующего**. Видео-обработка (Apify+Whisper+OpenAI saммари) и команда (Anthropic/OpenAI write_text) не должны блокировать друг друга. Если оба разделят один пул с concurrency=2 — батч из 100 видео может встать в очередь перед задачей пользователя «напиши текст», и UI зависнет в `running` на часы
+  - **Дефолт concurrency=1** (через `TEAM_WORKER_CONCURRENCY`) — задачи команды длиннее (write_text идёт 30–60 сек) и дороже (один write_text ≈ $0.01–0.05 vs $0.001 за видео), параллельный запуск быстро упрётся в rate-limit Anthropic и неприятно ударит по биллингу
+
+- **`backend/src/services/team/teamRecoveryService.js`** — recovery после рестарта:
+  - `recoverUnfinishedTeamTasks()` — при старте бэкенда сканирует `team_tasks` через `getActiveTaskIds` (там работает client-side DISTINCT ON: для каждого id берётся последний снапшот, отбираются те, у кого status = `running`). Эти id заливаются в `teamWorkerPool` через `enqueueTeamTasks`
+  - Логика 1-в-1 с `recoveryService.js` Потока. Без recovery после рестарта Railway зависшие в `running` задачи остались бы там навсегда — состояние очереди только в памяти
+  - Ошибки логируются, но старт сервера не валят (recovery — не критичная функция)
+
+- **`backend/src/index.js`** обновлён: после конфигурации video-пула добавлены `configureTeamWorkerPool` (с `runTaskInBackground` как processFn и `env.teamWorkerConcurrency`) и `recoverUnfinishedTeamTasks()` после `app.listen`. В стартовых логах появилась строка `Team pool : concurrency=1`
+
+- **`backend/src/config/env.js`** обновлён: добавлено `teamWorkerConcurrency: parseInt(env.TEAM_WORKER_CONCURRENCY ?? "1")`. В `.env.example` появилась переменная с подробным комментарием про дефолт=1 и когда поднимать
+
+- **`backend/scripts/testTeamTask.js`** — тестовый CLI-скрипт:
+  - Конфигурирует teamWorkerPool с runTaskInBackground как processFn (без HTTP-сервера — нам нужна только сама очередь)
+  - Создаёт задачу `ideas_free` с тестовым вводом «Придумай 3 идеи коротких видео-сюжетов про необычные истории Санкт-Петербурга XIX века» и пресетом `balanced` (по умолчанию; можно переопределить через `node scripts/testTeamTask.js fast`)
+  - Поллит статус каждые 2 сек через `getTaskById`, печатает изменения статуса (`running` → `done`)
+  - Финальный вывод: статус, provider/model, токены, стоимость, путь до артефакта, первые 500 символов ответа
+  - Безопасно повторно запускать — каждый запуск это новая запись в `team_tasks` (две: running + done), артефакт в `team-database/ideas/`. Удалить можно через Dashboard
+
+Решения, принятые намеренно:
+- **TASK_HANDLERS реестр — точная копия Python.** Имена ключей (`ideas_free`, `ideas_questions_for_research`, `research_direct`, `write_text`, `edit_text_fragments`), сигнатура async-функции, формат outcome `{result, artifactPath, tokens, prompt?}` — всё совпадает. Это позволяет в этапе 2 портировать UI-флоу команды агентов, не переписывая ядро. Если поменять имена ключей — миграции за миграциями
+- **Append-only журнал, не in-place update.** Альтернатива — UPDATE одной строки в `team_tasks` при каждом переходе. Но историю состояний хорошо иметь: видеть, как задача шла (running → error vs running → done → marked_done → archived). На этапе 2 пригодится для ретроспективы агентов и для memory. Хранилище дешёвое — десятки строк на задачу не разорят бюджет
+- **Изолированные статусы шагов закладываются сейчас**, даже если задачи однофазные. Каждый снапшот хранит `started_at`, `finished_at`, `error` — это поля задачи, не шага, но архитектурно paving the way: на этапе 2 при многошаговых задачах добавится `step_status` или вынесется в отдельную таблицу `team_task_steps`. Пока избыточная инфраструктура не плодится
+- **Отдельный teamWorkerPool, не расширение existing'а.** См. выше. Кратко: видео-обработка и команда — независимые pipeline'ы с разными rate-limit'ами, разной конкурентностью и разными SLA. Один пул на двоих будет блокировать друг друга
+- **edit_text_fragments handler «тупой» — parent artifact пробрасывается через params оркестратором.** Альтернатива — handler сам делает getTaskById parent'а. Но handler должен быть чистой функцией от task → outcome, чтобы его можно было вызвать в разных контекстах (live-задача, replay, тестирование). Подкладывание parent_artifact_path в params оркестратором перед вызовом сохраняет это свойство
+- **`applyFragmentEditsInline` и `appendQuestionToResearch` не создают новый снапшот в `team_tasks`.** Биллинг идёт против `parentTaskId` через `team_api_calls`, и `refreshTaskCost` обновляет суммарный cost в parent'е. Альтернатива — отдельные карточки в канбане, что захламляет UI. AI-правки и follow-up вопросы — это интеракции в рамках одной задачи, не отдельные сущности
+- **HTML-парсер регексповый, не JSDOM/cheerio.** JSDOM ~50 МБ + медленный startup, cheerio лёгкий, но всё равно лишняя зависимость. 95% полезных страниц с историческим/культурным контентом (Wikipedia, статьи) хорошо парсятся регекспами. Если на каком-то источнике результат будет плохой — добавим cheerio точечно
+- **pdf-parse через ленивый `import()` внутри `extractPdfBytes`.** Если по каким-то причинам пакет не установлен или сломан, остальной функционал команды не упадёт — упадёт только PDF-источник. Раньше ловить такое = диагностика на проде
+- **Test-script конфигурирует пул сам, без поднятия Express.** Запуск scripts/testTeamTask.js не должен поднимать HTTP-сервер. Альтернатива — выносить `configureTeamWorkerPool` в `index.js` и заставлять тест запускать `npm start` параллельно — лишнее
+- **`crypto.randomBytes(6).toString("hex")` для task id.** 12 hex-символов = 48 бит энтропии. Для общего числа задач команды (тысячи в течение долгого времени) коллизия маловероятна. Если когда-нибудь понадобится больше — увеличить до 8 байт. UUID был бы избыточным
+
+Известные ограничения сессии 26:
+- **Если бэкенд перезапустится посреди обработки задачи команды — текущая LLM-вызов теряется**, статус снапшота останется `running`. После рестарта `teamRecoveryService` подхватит и **запустит её с нуля** (промпт пересоберётся, артефакт перезапишется в Storage с upsert: true). Чекпойнтов между шагами нет — для текущего масштаба перебор. Биллинг успевшего LLM-вызова всё равно записан в `team_api_calls` (если cost_tracker.recordCall успел) — деньги «потеряны»
+- **`appendQuestionToResearch` всегда заново качает источник.** Альтернатива — сохранять fetched-текст в `parent.params.source_text` после первого fetch'а. Но `params` могут быть большими (URL → 200 КБ текста), и хранить их в БД ради экономии второго fetch'а спорно. На 95% случаев пользователь задаёт follow-up через минуту — re-fetch упирается в кеш браузера/CDN сервера и быстрый
+- **HTML-парсер не понимает SPA.** Сайты, отдающие пустую `<body>` и наполняющие её через JS, дадут пустой текст. Это редкость для исторического/культурного контента (там обычно SSR), но если источник окажется SPA — пользователь увидит «(пусто)» и поймёт, что нужен другой источник
+- **Реальный фронт-эндпоинт для запуска задач ещё не подключен.** Запуск из браузера/UI заработает в Сессии 27 (Сессия 4 roadmap'а команды). Сейчас единственный способ запустить задачу — `node scripts/testTeamTask.js`
+
+Ручные шаги для Влада (после pull):
+1. **Обнови зависимости бэкенда**: PowerShell в `backend/` → `& "C:\Program Files\nodejs\npm.cmd" install`. Поставит `pdf-parse`
+2. **Проверь, что `team-database/context.md` лежит в Storage**: Supabase Dashboard → Storage → bucket `team-database`. Если файла нет — Upload → название `context.md`, содержимое (любой текст, например «Тестовый контекст блога»). Без этого файла шаблон `ideas-free.md` не рухнет (промпт-билдер вернёт пустой context при отсутствии), но у некоторых шаблонов это может вызвать проблемы — лучше сразу положить минимальный
+3. **Проверь, что в `team-prompts` лежит `ideas-free.md`**: Storage → `team-prompts`. Если ставил по инструкции из Сессии 25 — уже есть. Если нет — Upload `ideas-free.md` из локальной ДК Лурье или собственный шаблон
+4. **Проверь, что в `team-config` лежат `pricing.json` и `presets.json`**: Storage → `team-config`. Если их нет — Upload оба из локальной ДК Лурье. Без `presets.json` `resolveModelChoice` упадёт с «Неизвестный пресет: 'balanced'»; без `pricing.json` стоимость считаться не будет (не критично для теста, но нежелательно)
+5. **Опционально**: добавь в `backend/.env` строку `TEAM_WORKER_CONCURRENCY=1`. Если переменной нет — дефолт всё равно 1
+6. **Локально проверь TaskRunner**: PowerShell в `backend/` → `& "C:\Program Files\nodejs\node.exe" scripts/testTeamTask.js`. Жди до 1 минуты. Должен напечатать:
+   - `[test] preset=balanced, concurrency=1`
+   - `[test] task id = tsk_xxxxxxxxxxxx`
+   - `[poll] status=running`
+   - `[poll] status=done`
+   - `=== Результат ===` с провайдером/моделью, токенами, ценой и путём артефакта (`ideas/2026-05-05_HHMM_<slug>.md`)
+   - `=== Текст ответа ===` — первые 500 символов ответа модели
+7. **Проверь в Supabase Dashboard**:
+   - **Database → Table Editor → team_tasks**: появились **две** строки с одинаковым `id` (`tsk_xxx`). Первая — `status=running` (без result/artifact_path/cost_usd); вторая — `status=done` (с заполненными `result`, `artifact_path = ideas/...md`, `cost_usd`, `tokens`, `finished_at`). Это и есть append-only паттерн — каждое изменение состояния = новая строка
+   - **Database → Table Editor → team_api_calls**: появилась одна новая строка с `task_id = tsk_xxx` из шага 6, `provider/model`, `input_tokens/output_tokens/cached_tokens`, `cost_usd`, `success = true`
+   - **Storage → team-database → ideas/**: появился файл `<timestamp>_<slug>.md` с заголовком «Идеи (свободные)», запросом и ответом модели. Можно открыть и почитать
+8. **Vercel/Railway** перезапускать не надо вручную — push в `main` уже триггерит auto-deploy и Railway сам подтянет новые сервисы. После деплоя в логах Railway появится строка `Team pool : concurrency=1` и `[team-recovery] незавершённых задач нет` (или сколько было — не нулевое число тревожно: значит у тебя где-то висит задача с `status=running`, проверь в Dashboard)
+9. **Что дальше**: Сессия 27 (по нумерации Потока) / Сессия 4 (по roadmap'у команды) — REST-эндпоинты команды (`/api/team/tasks/run`, `/preview-prompt`, `/archive`, `/rename`, `/apply-ai-edit` и т.д.), upload файлов через multer, transcribe для голосовых заметок. После Сессии 27 задачи команды можно будет запускать через curl/Postman, до фронта (Сессия 28+) ещё пара шагов
+
+---
+
 ### 🔜 Отложено (v3+)
 - Скриншоты к заметкам (хранение на Google Drive) — когда станет понятно что без них не обойтись
 - Раздел "Закладки" на сайте с полноценным интерфейсом (пока доступ через Supabase Dashboard)
