@@ -15,6 +15,14 @@ import { NextResponse } from "next/server";
 const BACKEND_URL =
   process.env.BACKEND_URL ?? process.env.RAILWAY_BACKEND_URL ?? null;
 
+// Vercel function maxDuration. По дефолту Hobby даёт 10 секунд, чего мало
+// для LLM-вызовов apply-ai-edit / append-question (10–40 сек обычно). Pro
+// даёт до 60 сек. Если проект на Pro — поднимется до 60; на Hobby Vercel
+// возьмёт максимум, который позволяет план (т.е. 10), но хотя бы не урежет
+// дополнительно. Полное решение для долгих LLM-цепочек — апгрейд плана или
+// streaming-ответ.
+export const maxDuration = 60;
+
 // Один шаблон обработки на все методы — Next 15 ожидает named exports
 // per-method. Все они ведут в proxyRequest.
 async function proxyRequest(
