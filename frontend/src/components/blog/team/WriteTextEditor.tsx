@@ -94,7 +94,12 @@ export default function WriteTextEditor({
     setVersionsLoading(true);
     setVersionsError(null);
     try {
-      const list = await fetchTaskVersions(taskId);
+      const raw = await fetchTaskVersions(taskId);
+      // Фильтруем версии без path — иначе клик по такой кнопке отправит
+      // запрос с пустым query и бэкенд ответит «path обязателен».
+      const list = raw.filter(
+        (v) => typeof v.path === "string" && v.path.trim().length > 0,
+      );
       setVersions(list);
       if (list.length > 0 && !activePath) {
         // Самая свежая версия (наибольший N) — у неё контент уже есть в task.result.
@@ -219,6 +224,7 @@ export default function WriteTextEditor({
     }
     setAiBusy(true);
     setAiError(null);
+    const versionsBefore = versions.length > 0 ? versions[0].version : 0;
     try {
       const result = await applyAiEdit(taskId, {
         fullText: activeContent,
@@ -229,21 +235,55 @@ export default function WriteTextEditor({
         generalInstruction: generalInstruction.trim() || undefined,
         modelChoice: aiModel,
       });
+      // Защита от случая, когда backend вернул ответ без path — например,
+      // если applyFragmentEditsInline схватил ошибку до построения path.
+      const resultPath =
+        typeof result?.path === "string" ? result.path.trim() : "";
+      if (!resultPath) {
+        throw new Error(
+          "Бэкенд не вернул путь до новой версии. Перезагрузи страницу и проверь список версий.",
+        );
+      }
       // Получаем содержимое новой версии и переключаемся на неё.
-      const freshContent = await fetchVersionContent(taskId, result.path);
+      const freshContent = await fetchVersionContent(taskId, resultPath);
       onVersionCreated?.({
         content: freshContent,
         version: result.version,
-        path: result.path,
+        path: resultPath,
       });
       await loadVersions();
-      setActivePath(result.path);
-      setContentCache((prev) => ({ ...prev, [result.path]: freshContent }));
+      setActivePath(resultPath);
+      setContentCache((prev) => ({ ...prev, [resultPath]: freshContent }));
       setPendingEdits([]);
       setGeneralInstruction("");
       setMode("read");
     } catch (err) {
-      setAiError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      // Запрос мог упасть по таймауту, пока бэкенд успешно дописывал версию
+      // в Storage. Перепроверяем — если версий стало больше, тихо
+      // подхватываем последнюю и считаем операцию успешной.
+      try {
+        const fresh = await fetchTaskVersions(taskId);
+        if (fresh.length > 0 && fresh[0].version > versionsBefore) {
+          const latest = fresh[0];
+          const content = await fetchVersionContent(taskId, latest.path);
+          setVersions(fresh);
+          setActivePath(latest.path);
+          setContentCache((prev) => ({ ...prev, [latest.path]: content }));
+          onVersionCreated?.({
+            content,
+            version: latest.version,
+            path: latest.path,
+          });
+          setPendingEdits([]);
+          setGeneralInstruction("");
+          setMode("read");
+          return;
+        }
+      } catch {
+        // ignore — покажем исходную ошибку
+      }
+      setAiError(message);
     } finally {
       setAiBusy(false);
     }

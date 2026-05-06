@@ -242,6 +242,9 @@ export async function appendQuestion(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question, modelChoice: modelChoice ?? null }),
+    // Дополнительный вопрос делает повторный fetch источника + LLM-вызов.
+    // 30 сек по дефолту мало; синхронизируем с maxDuration прокси (60 сек).
+    timeoutMs: 60_000,
   });
   return data as AppendQuestionResult;
 }
@@ -274,6 +277,11 @@ export async function applyAiEdit(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    // LLM-вызов через write_text-цепочку: claude-haiku 5–15 сек, sonnet
+    // 10–40 сек, плюс Storage upload + recordCall + refreshTaskCost. Дефолт
+    // 30 сек обрезал ответ до того, как backend успевал записать новую
+    // версию. Синхронизируем с maxDuration прокси (60 сек).
+    timeoutMs: 60_000,
   });
   return data as ApplyAiEditResult;
 }
@@ -323,8 +331,15 @@ export async function fetchTaskVersions(
 }
 
 export async function fetchVersionContent(taskId: string, path: string): Promise<string> {
+  if (typeof path !== "string" || !path.trim()) {
+    // Защита от случая, когда caller потерял path где-то по пути (race
+    // условия в state, fallback после таймаута). Без этого ошибка ушла бы
+    // в backend и вернулась как «path обязателен» — пользователь увидел бы
+    // её в UI без понятной причины.
+    throw new Error("Внутренняя ошибка: пустой путь до версии");
+  }
   const data = await backendFetch(
-    `/api/team/tasks/${taskId}/version-content?path=${encodeURIComponent(path)}`,
+    `/api/team/tasks/${taskId}/version-content?path=${encodeURIComponent(path.trim())}`,
     { method: "GET" },
   );
   const obj = (data ?? {}) as { content?: string };
