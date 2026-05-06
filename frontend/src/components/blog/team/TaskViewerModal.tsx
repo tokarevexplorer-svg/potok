@@ -152,7 +152,7 @@ export default function TaskViewerModal({
         role="presentation"
       />
 
-      <div className="relative z-10 flex w-full max-w-3xl flex-col overflow-hidden bg-surface shadow-pop sm:rounded-2xl sm:border sm:border-line">
+      <div className="relative z-10 flex h-full max-h-screen w-full max-w-3xl flex-col overflow-hidden bg-surface shadow-pop sm:h-auto sm:max-h-[90vh] sm:rounded-2xl sm:border sm:border-line">
         {/* Шапка */}
         <div className="flex items-start justify-between gap-4 border-b border-line px-6 py-4">
           <div className="min-w-0 flex-1">
