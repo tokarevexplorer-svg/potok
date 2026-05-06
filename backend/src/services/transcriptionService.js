@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { readFile, rm, stat } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -149,4 +149,102 @@ export async function transcribeFromUrl(videoUrl) {
     await rm(videoPath, { force: true }).catch(() => {});
     await rm(audioPath, { force: true }).catch(() => {});
   }
+}
+
+// Транскрибирует аудио из in-memory буфера (например, multipart upload от
+// MediaRecorder в браузере). В отличие от transcribeFromUrl, ничего не качает
+// — пишет буфер во временный файл, прогоняет через ffmpeg для нормализации
+// формата (входной webm/ogg/wav/m4a → mp3 64 kbps моно), отправляет в Whisper.
+//
+// originalName — имя файла как пришло от клиента (для расширения и логов).
+// Если расширение неизвестно или missing — ffmpeg сам определит формат по содержимому.
+//
+// Возвращает { text, durationSeconds } — для команды нужен ещё хронометраж
+// аудио, чтобы costTracker мог посчитать стоимость Whisper по минутам.
+//
+// Бросает наружу любые ошибки (не возвращает no_speech-объект — для голосовой
+// заметки команда хочет получить текст или явную ошибку, а не молчаливое «нет речи»).
+export async function transcribeFromBuffer(buffer, originalName = "audio") {
+  if (!buffer || !buffer.length) {
+    throw new Error("Пустой аудио-буфер");
+  }
+
+  const id = randomUUID();
+  const ext = guessAudioExt(originalName);
+  const inputPath = join(tmpdir(), `potok-voice-${id}${ext}`);
+  const audioPath = join(tmpdir(), `potok-voice-${id}.mp3`);
+
+  try {
+    await writeFile(inputPath, buffer);
+    await extractAudio(inputPath, audioPath);
+
+    const audioStat = await stat(audioPath);
+    if (audioStat.size === 0) {
+      throw new Error("ffmpeg выдал пустой аудиофайл — в загруженном файле нет звуковой дорожки.");
+    }
+    if (audioStat.size > MAX_BYTES) {
+      throw new Error(
+        `Аудио слишком большое для Whisper (${(audioStat.size / 1024 / 1024).toFixed(1)} МБ).`,
+      );
+    }
+
+    const durationSeconds = await getMediaDurationSeconds(inputPath);
+
+    const audioBuffer = await readFile(audioPath);
+    const file = await toFile(audioBuffer, "audio.mp3", { type: "audio/mpeg" });
+
+    const transcription = await openai.audio.transcriptions.create({
+      file,
+      model: env.whisperModel,
+      language: "ru",
+      response_format: "text",
+    });
+
+    const text =
+      typeof transcription === "string" ? transcription : transcription?.text ?? "";
+    return {
+      text: text.trim(),
+      durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : 0,
+    };
+  } finally {
+    await rm(inputPath, { force: true }).catch(() => {});
+    await rm(audioPath, { force: true }).catch(() => {});
+  }
+}
+
+function guessAudioExt(name) {
+  const lower = (name || "").toLowerCase();
+  for (const ext of [".webm", ".ogg", ".oga", ".mp3", ".m4a", ".aac", ".wav", ".flac", ".mp4"]) {
+    if (lower.endsWith(ext)) return ext;
+  }
+  return ".bin";
+}
+
+// Запускает ffprobe-подобный режим ffmpeg для получения длительности.
+// ffmpeg-static включает только ffmpeg (без ffprobe), поэтому парсим stderr
+// — он печатает «Duration: 00:01:23.45» при чтении входного файла.
+function getMediaDurationSeconds(filePath) {
+  return new Promise((resolve) => {
+    if (!ffmpegPath) {
+      resolve(0);
+      return;
+    }
+    const ff = spawn(ffmpegPath, ["-i", filePath], { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    ff.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    ff.on("error", () => resolve(0));
+    ff.on("close", () => {
+      const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      if (!match) {
+        resolve(0);
+        return;
+      }
+      const h = parseInt(match[1], 10);
+      const m = parseInt(match[2], 10);
+      const s = parseFloat(match[3]);
+      resolve(h * 3600 + m * 60 + s);
+    });
+  });
 }

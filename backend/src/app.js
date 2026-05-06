@@ -4,6 +4,12 @@ import { env } from "./config/env.js";
 import videosRouter from "./routes/videos.js";
 import thumbnailsRouter from "./routes/thumbnails.js";
 import reprocessRouter from "./routes/reprocess.js";
+import teamTasksRouter from "./routes/team/tasks.js";
+import teamArtifactsRouter from "./routes/team/artifacts.js";
+import teamPromptsRouter from "./routes/team/prompts.js";
+import teamAdminRouter from "./routes/team/admin.js";
+import teamFilesRouter from "./routes/team/files.js";
+import teamVoiceRouter from "./routes/team/voice.js";
 
 export function createApp() {
   const app = express();
@@ -19,7 +25,10 @@ export function createApp() {
     }),
   );
 
-  app.use(express.json({ limit: "1mb" }));
+  // JSON-парсер увеличен до 5 МБ — write_text промпты с research-блоками
+  // и AI-правки фрагментов могут включать большие объёмы текста (контекст
+  // блога + транскрипции + полный текст для редактирования).
+  app.use(express.json({ limit: "5mb" }));
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true, service: "potok-backend" });
@@ -28,6 +37,15 @@ export function createApp() {
   app.use("/api/videos", videosRouter);
   app.use("/api/thumbnails", thumbnailsRouter);
   app.use("/", reprocessRouter);
+
+  // Раздел «Команда» (Сессии 24-27): задачи, артефакты, шаблоны промптов,
+  // админка ключей и расходов, загрузка файлов, голосовая транскрипция.
+  app.use("/api/team/tasks", teamTasksRouter);
+  app.use("/api/team/artifacts", teamArtifactsRouter);
+  app.use("/api/team/prompts", teamPromptsRouter);
+  app.use("/api/team/admin", teamAdminRouter);
+  app.use("/api/team/files", teamFilesRouter);
+  app.use("/api/team/voice", teamVoiceRouter);
 
   // Финальный обработчик ошибок — чтобы не падали сокеты.
   app.use((err, _req, res, _next) => {
