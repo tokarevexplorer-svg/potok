@@ -219,6 +219,7 @@ export default function WriteTextEditor({
     }
     setAiBusy(true);
     setAiError(null);
+    const versionsBefore = versions.length > 0 ? versions[0].version : 0;
     try {
       const result = await applyAiEdit(taskId, {
         fullText: activeContent,
@@ -243,7 +244,32 @@ export default function WriteTextEditor({
       setGeneralInstruction("");
       setMode("read");
     } catch (err) {
-      setAiError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      // Запрос мог упасть по таймауту, пока бэкенд успешно дописывал версию
+      // в Storage. Перепроверяем — если версий стало больше, тихо
+      // подхватываем последнюю и считаем операцию успешной.
+      try {
+        const fresh = await fetchTaskVersions(taskId);
+        if (fresh.length > 0 && fresh[0].version > versionsBefore) {
+          const latest = fresh[0];
+          const content = await fetchVersionContent(taskId, latest.path);
+          setVersions(fresh);
+          setActivePath(latest.path);
+          setContentCache((prev) => ({ ...prev, [latest.path]: content }));
+          onVersionCreated?.({
+            content,
+            version: latest.version,
+            path: latest.path,
+          });
+          setPendingEdits([]);
+          setGeneralInstruction("");
+          setMode("read");
+          return;
+        }
+      } catch {
+        // ignore — покажем исходную ошибку
+      }
+      setAiError(message);
     } finally {
       setAiBusy(false);
     }
