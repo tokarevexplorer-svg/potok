@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Archive,
   Check,
   ChevronDown,
   Cpu,
   Loader2,
+  MessageSquarePlus,
   Pencil,
   X,
 } from "lucide-react";
@@ -20,26 +21,26 @@ import {
   renameTask,
 } from "@/lib/team/teamBackendClient";
 import { formatRelative, statusBadge, taskTypeLabel } from "./taskTypeMeta";
+import WriteTextEditor from "./WriteTextEditor";
+import AppendQuestionModal from "./AppendQuestionModal";
 
 interface TaskViewerModalProps {
   task: TeamTask;
   onClose: () => void;
   // Когда задача обновлена через действие — caller получает свежую версию,
-  // оптимистично кладёт в локальный state. Если null — задача удалилась
-  // (пока такого сценария нет, но оставляем).
+  // оптимистично кладёт в локальный state.
   onTaskUpdated: (task: TeamTask) => void;
 }
 
-// Модалка просмотра одной задачи. Показывает:
-//   • заголовок + бейдж статуса + переименование (инлайн)
-//   • метаданные: тип, модель, токены, стоимость, времена
-//   • результат (markdown через react-markdown + remark-gfm для таблиц/списков)
-//   • ошибку (если status=error) — отдельным блоком
-//   • раскрывающийся блок «Промпт» — system+user, как улетели в LLM
-//   • действия: «Пометить готовой», «Архив»
+// Модалка просмотра одной задачи. Логика отображения тела зависит от типа:
+//   • write_text — встраиваем WriteTextEditor с тремя режимами (read/direct/ai)
+//     и переключателем версий.
+//   • research_direct — показываем результат + кнопку «Задать дополнительный
+//     вопрос», которая открывает AppendQuestionModal.
+//   • остальные — простой markdown-рендер результата.
 //
-// AI-правки фрагментов и доп.вопросы — оставлены на Сессию 8 (по roadmap'у),
-// здесь только базовый просмотр.
+// Действия снизу (архив / пометить готовой / переименовать) одинаковы
+// для всех типов.
 export default function TaskViewerModal({
   task,
   onClose,
@@ -50,18 +51,23 @@ export default function TaskViewerModal({
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(task.title ?? "");
   const [promptOpen, setPromptOpen] = useState(false);
+  // Локальный override task.result — после прямой правки или AI-правки
+  // показываем свежий контент, не дожидаясь поллинга. Сбрасывается на null
+  // при смене task.id.
+  const [localContent, setLocalContent] = useState<string | null>(null);
+  const [askOpen, setAskOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setTitleDraft(task.title ?? "");
+    setLocalContent(null);
   }, [task.id, task.title]);
 
-  // Esc + блокировка фона.
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !busy) {
+      if (e.key === "Escape" && !busy && !askOpen) {
         if (editingTitle) {
           setEditingTitle(false);
           setTitleDraft(task.title ?? "");
@@ -75,7 +81,7 @@ export default function TaskViewerModal({
       document.body.style.overflow = prev;
       document.removeEventListener("keydown", onKey);
     };
-  }, [busy, onClose, editingTitle, task.title]);
+  }, [busy, onClose, editingTitle, task.title, askOpen]);
 
   useEffect(() => {
     if (editingTitle) {
@@ -138,6 +144,9 @@ export default function TaskViewerModal({
 
   const tokens = task.tokens ?? {};
   const totalTokens = (tokens.input ?? 0) + (tokens.output ?? 0);
+  const isWriteText = task.type === "write_text";
+  const isResearch = task.type === "research_direct";
+  const displayContent = localContent ?? task.result ?? "";
 
   return (
     <div
@@ -148,7 +157,7 @@ export default function TaskViewerModal({
     >
       <div
         className="absolute inset-0 bg-ink/40 backdrop-blur-[2px]"
-        onClick={busy ? undefined : onClose}
+        onClick={busy || askOpen ? undefined : onClose}
         role="presentation"
       />
 
@@ -266,16 +275,43 @@ export default function TaskViewerModal({
             </div>
           )}
 
-          {task.result && (
-            <article className="prose-team mt-2">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{task.result}</ReactMarkdown>
-            </article>
+          {/* Тело результата зависит от типа задачи */}
+          {displayContent && task.status !== "running" && task.status !== "error" && (
+            <>
+              {isWriteText ? (
+                <WriteTextEditor
+                  taskId={task.id}
+                  initialContent={displayContent}
+                  onVersionCreated={(info) => {
+                    setLocalContent(info.content);
+                  }}
+                />
+              ) : (
+                <article className="prose-team mt-2">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
+                </article>
+              )}
+            </>
           )}
 
-          {!task.result && task.status !== "running" && task.status !== "error" && (
+          {!displayContent && task.status !== "running" && task.status !== "error" && (
             <p className="rounded-xl border border-dashed border-line bg-elevated/40 px-4 py-6 text-center text-sm text-ink-faint">
               У задачи нет результата.
             </p>
+          )}
+
+          {/* Кнопка «Задать дополнительный вопрос» — только для research_direct */}
+          {isResearch && task.status !== "running" && task.status !== "error" && (
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setAskOpen(true)}
+                className="focus-ring inline-flex h-10 items-center gap-2 rounded-xl border border-line bg-surface px-4 text-sm font-medium text-ink-muted transition hover:border-line-strong hover:text-ink"
+              >
+                <MessageSquarePlus size={14} />
+                Задать дополнительный вопрос
+              </button>
+            </div>
           )}
 
           {/* Промпт */}
@@ -311,7 +347,7 @@ export default function TaskViewerModal({
           {task.artifactPath && (
             <p className="mt-4 text-xs text-ink-faint">
               Артефакт сохранён в Storage:{" "}
-              <span className="font-mono">{task.artifactPath}</span>
+              <span className="font-mono break-all">{task.artifactPath}</span>
             </p>
           )}
         </div>
@@ -350,6 +386,21 @@ export default function TaskViewerModal({
           </div>
         </div>
       </div>
+
+      {/* Дополнительный вопрос — отдельная модалка поверх */}
+      {askOpen && isResearch && (
+        <AppendQuestionModal
+          taskId={task.id}
+          taskTitle={task.title || taskTypeLabel(task.type)}
+          onClose={() => setAskOpen(false)}
+          onAppended={({ appendedText }) => {
+            // Подмерджим дополнение к содержимому, чтобы пользователь увидел
+            // ответ сразу. Поллинг через ~3 сек подменит на серверный снапшот.
+            setLocalContent((displayContent ?? "") + appendedText);
+            setAskOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

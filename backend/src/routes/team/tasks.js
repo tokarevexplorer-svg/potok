@@ -23,6 +23,10 @@ import {
   saveDirectEdit,
   appendQuestionToResearch,
 } from "../../services/team/taskRunner.js";
+import { getTaskById } from "../../services/team/teamSupabase.js";
+import { listFiles, downloadFile } from "../../services/team/teamStorage.js";
+
+const DATABASE_BUCKET = "team-database";
 
 const router = Router();
 
@@ -245,6 +249,107 @@ router.post("/:taskId/save-direct-edit", async (req, res) => {
   } catch (err) {
     console.error(`[team] save-direct-edit ${taskId} failed:`, err);
     return res.status(400).json({ error: err.message ?? "Не удалось сохранить версию" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/tasks/:taskId/versions
+// Список версий артефакта write_text задачи. Сканирует папку точки в
+// bucket'е team-database, находит все файлы вида vN_<ts>.md, парсит номер
+// версии из имени, сортирует по убыванию.
+//
+// Query: ?withContent=1 — дополнительно скачивает содержимое каждой версии.
+// Без параметра — только метаданные (быстрее, для шапки модалки).
+// =========================================================================
+
+router.get("/:taskId/versions", async (req, res) => {
+  const taskId = ensureTaskId(req, res);
+  if (!taskId) return;
+
+  try {
+    const task = await getTaskById(taskId);
+    if (!task) return res.status(404).json({ error: "Задача не найдена" });
+    if (task.type !== "write_text" && task.type !== "edit_text_fragments") {
+      return res.json({ versions: [] });
+    }
+    if (!task.artifact_path) return res.json({ versions: [] });
+
+    const pointDir = task.artifact_path.includes("/")
+      ? task.artifact_path.slice(0, task.artifact_path.lastIndexOf("/"))
+      : "";
+    if (!pointDir) return res.json({ versions: [] });
+
+    const files = await listFiles(DATABASE_BUCKET, pointDir);
+    const versionRe = /^v(\d+)_(.+)\.md$/i;
+    const versions = [];
+    for (const file of files ?? []) {
+      const name = file?.name ?? "";
+      const match = name.match(versionRe);
+      if (!match) continue;
+      const version = parseInt(match[1], 10);
+      if (!Number.isFinite(version)) continue;
+      versions.push({
+        version,
+        name,
+        path: `${pointDir}/${name}`,
+        createdAt: file?.created_at ?? null,
+        updatedAt: file?.updated_at ?? null,
+        size: file?.metadata?.size ?? null,
+      });
+    }
+
+    versions.sort((a, b) => b.version - a.version);
+
+    const withContent = req.query.withContent === "1" || req.query.withContent === "true";
+    if (withContent) {
+      for (const v of versions) {
+        try {
+          v.content = await downloadFile(DATABASE_BUCKET, v.path);
+        } catch (err) {
+          console.warn(`[team] versions: не удалось прочитать ${v.path}:`, err.message);
+          v.content = null;
+        }
+      }
+    }
+
+    return res.json({ versions });
+  } catch (err) {
+    console.error(`[team] versions ${taskId} failed:`, err);
+    return res.status(500).json({ error: err.message ?? "Не удалось получить версии" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/tasks/:taskId/version-content?path=<storagePath>
+// Скачивает содержимое одной версии артефакта по её пути в Storage. Path
+// валидируется, что относится к папке исходной задачи — иначе можно было бы
+// вытащить любой файл bucket'а через подмену query.
+// =========================================================================
+
+router.get("/:taskId/version-content", async (req, res) => {
+  const taskId = ensureTaskId(req, res);
+  if (!taskId) return;
+  const path = typeof req.query.path === "string" ? req.query.path.trim() : "";
+  if (!path) return res.status(400).json({ error: "path обязателен" });
+  if (path.includes("..")) return res.status(400).json({ error: "Некорректный path" });
+
+  try {
+    const task = await getTaskById(taskId);
+    if (!task) return res.status(404).json({ error: "Задача не найдена" });
+    if (!task.artifact_path) {
+      return res.status(404).json({ error: "У задачи нет артефакта" });
+    }
+    const pointDir = task.artifact_path.includes("/")
+      ? task.artifact_path.slice(0, task.artifact_path.lastIndexOf("/"))
+      : "";
+    if (!path.startsWith(`${pointDir}/`)) {
+      return res.status(400).json({ error: "Запрошенный путь не принадлежит задаче" });
+    }
+    const content = await downloadFile(DATABASE_BUCKET, path);
+    return res.json({ path, content });
+  } catch (err) {
+    console.error(`[team] version-content ${taskId} failed:`, err);
+    return res.status(500).json({ error: err.message ?? "Не удалось прочитать версию" });
   }
 });
 

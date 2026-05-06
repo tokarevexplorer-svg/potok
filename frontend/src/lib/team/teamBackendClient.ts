@@ -297,6 +297,41 @@ export async function saveDirectEdit(
 }
 
 // =========================================================================
+// Версии артефакта write_text
+// =========================================================================
+
+export interface TaskVersion {
+  version: number;
+  name: string;
+  path: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  size: number | null;
+  content?: string | null;
+}
+
+export async function fetchTaskVersions(
+  taskId: string,
+  options: { withContent?: boolean } = {},
+): Promise<TaskVersion[]> {
+  const qs = options.withContent ? "?withContent=1" : "";
+  const data = await backendFetch(`/api/team/tasks/${taskId}/versions${qs}`, {
+    method: "GET",
+  });
+  const obj = (data ?? {}) as { versions?: TaskVersion[] };
+  return obj.versions ?? [];
+}
+
+export async function fetchVersionContent(taskId: string, path: string): Promise<string> {
+  const data = await backendFetch(
+    `/api/team/tasks/${taskId}/version-content?path=${encodeURIComponent(path)}`,
+    { method: "GET" },
+  );
+  const obj = (data ?? {}) as { content?: string };
+  return obj.content ?? "";
+}
+
+// =========================================================================
 // Голос: транскрипция через Whisper
 // =========================================================================
 
