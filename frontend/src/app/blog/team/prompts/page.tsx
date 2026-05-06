@@ -1,6 +1,7 @@
-import { BookOpen } from "lucide-react";
-import TeamComingSoon from "@/components/blog/team/TeamComingSoon";
 import TeamPageHeader from "@/components/blog/team/TeamPageHeader";
+import PromptsWorkspace from "@/components/blog/team/PromptsWorkspace";
+import { createSupabaseServerClient } from "@/lib/supabaseClient";
+import type { PromptTemplateEntry } from "@/lib/team/teamPromptsService";
 
 export const metadata = {
   title: "Промпты команды — Поток",
@@ -8,26 +9,46 @@ export const metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default function TeamPromptsPage() {
+async function loadPromptTemplates(): Promise<PromptTemplateEntry[]> {
+  try {
+    const supabase = createSupabaseServerClient();
+    const { data, error } = await supabase.storage.from("team-prompts").list("", {
+      limit: 1000,
+      sortBy: { column: "name", order: "asc" },
+    });
+    if (error) {
+      console.warn("[team] prompts list failed:", error.message);
+      return [];
+    }
+    return (data ?? [])
+      .filter((row) => row.name && row.name.endsWith(".md") && row.id !== null)
+      .map((row) => {
+        const md = (row.metadata ?? null) as { size?: number } | null;
+        return {
+          name: row.name,
+          updatedAt: row.updated_at ?? null,
+          size: md?.size ?? null,
+        };
+      });
+  } catch (err) {
+    console.warn("[team] prompts list error:", err);
+    return [];
+  }
+}
+
+export default async function TeamPromptsPage() {
+  const templates = await loadPromptTemplates();
   return (
     <div className="min-w-0">
       <TeamPageHeader
         title="Промпты"
-        description="Библиотека шаблонов промптов команды: 5 типов задач, переменные, разделение system/user, кешируемые блоки."
+        description="Шаблоны промптов для пяти типов задач команды. Слева — список, справа — markdown-редактор. {{плейсхолдеры}} заменяются на значения из формы запуска и из Базы (context, concept)."
         showBackLink
       />
 
-      <TeamComingSoon
-        icon={BookOpen}
-        title="Библиотека шаблонов"
-        plannedIn="Сессии 6"
-        items={[
-          "Список шаблонов: ideas-free, ideas-questions, research-direct, write-text, edit-text-fragments",
-          "Markdown-редактор с подсветкой плейсхолдеров {{variable}}",
-          "Превью собранного промпта с подставленными переменными",
-          "Создание нового шаблона + загрузка из файла",
-        ]}
-      />
+      <div className="mt-8">
+        <PromptsWorkspace initialTemplates={templates} />
+      </div>
     </div>
   );
 }

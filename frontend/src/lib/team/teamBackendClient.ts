@@ -319,3 +319,203 @@ export async function transcribeVoice(blob: Blob, filename = "voice.webm"): Prom
   });
   return data as TranscribeResult;
 }
+
+// =========================================================================
+// Артефакты в team-database
+// =========================================================================
+
+export async function uploadArtifact(path: string, content: string): Promise<void> {
+  await backendFetch("/api/team/artifacts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+}
+
+export async function deleteArtifact(path: string): Promise<void> {
+  await backendFetch("/api/team/artifacts", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+}
+
+export async function moveArtifact(fromPath: string, toPath: string): Promise<void> {
+  await backendFetch("/api/team/artifacts/move", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fromPath, toPath }),
+  });
+}
+
+export async function createArtifactFolder(path: string): Promise<void> {
+  await backendFetch("/api/team/artifacts/folders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+}
+
+export async function deleteArtifactFolder(path: string): Promise<void> {
+  await backendFetch("/api/team/artifacts/folders", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+}
+
+// =========================================================================
+// Шаблоны промптов
+// =========================================================================
+
+export async function savePromptTemplate(name: string, content: string): Promise<void> {
+  await backendFetch("/api/team/prompts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, content }),
+  });
+}
+
+export interface RefinePromptResult {
+  content: string;
+  tokens: { input: number; output: number; cached: number };
+  provider: string;
+  model: string;
+}
+
+export async function refinePromptTemplate(
+  content: string,
+  instruction: string,
+  modelChoice?: TeamTaskModelChoice | null,
+): Promise<RefinePromptResult> {
+  const data = await backendFetch("/api/team/prompts/refine", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, instruction, modelChoice: modelChoice ?? null }),
+    timeoutMs: 60_000,
+  });
+  return data as RefinePromptResult;
+}
+
+// =========================================================================
+// Загрузка файлов (multipart)
+// =========================================================================
+
+export interface UploadFileResult {
+  ok: boolean;
+  path: string;
+  name: string;
+  size: number;
+}
+
+// prefix — папка внутри team-database. Дефолт «uploads/». Имя файла бэкенд
+// санитизирует и дописывает timestamp перед расширением.
+export async function uploadFile(file: File, prefix?: string): Promise<UploadFileResult> {
+  const form = new FormData();
+  form.append("file", file);
+  if (prefix) form.append("prefix", prefix);
+  const data = await backendFetch("/api/team/files/upload", {
+    method: "POST",
+    body: form,
+    timeoutMs: 120_000,
+  });
+  return data as UploadFileResult;
+}
+
+// =========================================================================
+// Админка: ключи (полная инфа), расходы, порог алерта
+// =========================================================================
+
+export interface KeyInfo {
+  configured: boolean;
+  masked: string | null;
+  updatedAt: string | null;
+}
+
+export interface KeysFullStatus {
+  anthropic: KeyInfo;
+  openai: KeyInfo;
+  google: KeyInfo;
+}
+
+export async function fetchKeysFull(): Promise<KeysFullStatus> {
+  const data = await backendFetch("/api/team/admin/keys", { method: "GET" });
+  const obj = ((data ?? {}) as { keys?: KeysFullStatus }).keys;
+  const empty: KeyInfo = { configured: false, masked: null, updatedAt: null };
+  return {
+    anthropic: obj?.anthropic ?? empty,
+    openai: obj?.openai ?? empty,
+    google: obj?.google ?? empty,
+  };
+}
+
+export async function setApiKey(
+  provider: "anthropic" | "openai" | "google",
+  key: string,
+): Promise<void> {
+  await backendFetch("/api/team/admin/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, key }),
+  });
+}
+
+export async function deleteApiKey(
+  provider: "anthropic" | "openai" | "google",
+): Promise<void> {
+  await backendFetch("/api/team/admin/keys", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider }),
+  });
+}
+
+export interface SpendingByProvider {
+  cost_usd: number;
+  calls: number;
+}
+
+export interface SpendingByModel {
+  provider: string;
+  model: string;
+  cost_usd: number;
+  calls: number;
+}
+
+export interface SpendingResult {
+  total_usd: number;
+  calls: number;
+  failed: number;
+  by_provider: Record<string, SpendingByProvider>;
+  by_model: SpendingByModel[];
+  alert_threshold_usd: number | null;
+  alert_triggered: boolean;
+}
+
+export async function fetchSpending(): Promise<SpendingResult> {
+  const data = await backendFetch("/api/team/admin/spending", { method: "GET" });
+  return data as SpendingResult;
+}
+
+export async function fetchSpendingSafe(): Promise<SpendingResult | null> {
+  try {
+    return await fetchSpending();
+  } catch (err) {
+    console.warn("[teamBackendClient] spending недоступен:", err);
+    return null;
+  }
+}
+
+export async function fetchAlertThreshold(): Promise<number | null> {
+  const data = await backendFetch("/api/team/admin/alert-threshold", { method: "GET" });
+  const obj = (data ?? {}) as { value?: number | null };
+  return typeof obj.value === "number" ? obj.value : null;
+}
+
+export async function setAlertThreshold(value: number | null): Promise<void> {
+  await backendFetch("/api/team/admin/alert-threshold", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value }),
+  });
+}
