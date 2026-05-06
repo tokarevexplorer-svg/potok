@@ -58,8 +58,8 @@ export const navSections: NavSection[] = [
         icon: Users,
         items: [
           {
-            label: "Задачи",
-            href: "/blog/team/tasks",
+            label: "Инструменты",
+            href: "/blog/team/tools",
             icon: ListTodo,
           },
           {

@@ -18,6 +18,7 @@ import {
   getServiceRoleClient,
   setSetting,
 } from "../../services/team/teamSupabase.js";
+import { downloadFile } from "../../services/team/teamStorage.js";
 
 const router = Router();
 
@@ -172,6 +173,39 @@ router.post("/alert-threshold", async (req, res) => {
     console.error("[team] admin alert-threshold POST failed:", err);
     return res.status(500).json({ error: err.message ?? "Не удалось сохранить порог" });
   }
+});
+
+// =========================================================================
+// GET /api/team/admin/models-config
+// Возвращает содержимое team-config/presets.json и pricing.json + статус
+// ключей. UI ModelSelector рендерит пресеты и продвинутый выбор по этим
+// данным. Один эндпоинт — чтобы избежать тройного round-trip'а с фронта
+// на каждый рендер модалки запуска задачи.
+// =========================================================================
+
+router.get("/models-config", async (_req, res) => {
+  const result = { presets: {}, pricing: {}, keys: null };
+  // Каждый ресурс — best effort: одна ошибка не валит другой. Если конфигов
+  // нет (Влад ещё не загрузил) — возвращаем пустые объекты, UI покажет
+  // подсказку.
+  try {
+    const raw = await downloadFile("team-config", "presets.json");
+    result.presets = JSON.parse(raw);
+  } catch (err) {
+    console.warn("[team] models-config: presets.json не загружен:", err.message);
+  }
+  try {
+    const raw = await downloadFile("team-config", "pricing.json");
+    result.pricing = JSON.parse(raw);
+  } catch (err) {
+    console.warn("[team] models-config: pricing.json не загружен:", err.message);
+  }
+  try {
+    result.keys = await getAllKeysStatus();
+  } catch (err) {
+    console.warn("[team] models-config: keys-status не получен:", err.message);
+  }
+  return res.json(result);
 });
 
 export default router;
