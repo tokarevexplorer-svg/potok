@@ -1334,6 +1334,192 @@ superapp/
 
 ---
 
+**Сессия 27: Команда — REST API маршруты** (завершена 2026-05-05)
+
+**Эта сессия — Сессия 4 из 8 в roadmap-е этапа 1 раздела «Команда»**, в нумерации сессий Потока — Сессия 27. Базируется на сервисах из Сессий 25–26 (TaskRunner, handlers, teamSupabase, teamStorage, costTracker, keysService) и инфраструктуре Сессии 24 (таблицы `team_*` и buckets `team-*`).
+
+Эта сессия — связывание бэкенд-ядра команды с внешним миром через REST-эндпоинты Express. Фронт ещё не написан (Сессии 28-31), но после этой сессии все операции команды можно дёргать через curl/Postman, и сторонним инструментам (если когда-нибудь понадобятся) тоже доступен полный API.
+
+- **Новая зависимость в `backend/`**: `multer` (^2.1.1) для multipart-загрузки файлов и аудио. Альтернативу `formidable` рассматривал — multer проще интегрируется со стилем существующих роутов Потока (паттерн `upload.single("file")` через middleware).
+- Адаптация `backend/src/services/transcriptionService.js` — добавлена функция `transcribeFromBuffer(buffer, originalName)`. Существующая `transcribeFromUrl` оставлена без изменений (нужна для Whisper в видео-обработке Потока). Новая версия:
+  - Принимает буфер с аудио (webm/ogg/mp3/wav/m4a) от MediaRecorder API из браузера или multipart upload'а
+  - Пишет буфер во временный файл (расширение определяется по `originalName`, либо `.bin` если неизвестно — ffmpeg тогда определит формат по содержимому)
+  - Прогоняет через тот же `extractAudio` (mp3 64 kbps моно 16 kHz) — переиспользуем существующий ffmpeg-pipeline
+  - Дополнительно через `getMediaDurationSeconds` парсит stderr ffmpeg (`Duration: 00:01:23.45`) — нужно для биллинга Whisper по минутам, costTracker умножит на ставку из pricing.json
+  - Возвращает `{text, durationSeconds}`. **Не возвращает no_speech-объект** как сестринская URL-функция — для голосовой заметки команда хочет либо текст, либо явную ошибку, а не молчаливое «нет речи»
+- **Шесть новых роутов** в `backend/src/routes/team/`:
+  - **`tasks.js`** (8 эндпоинтов):
+    - `GET /api/team/tasks/templates` — список доступных типов задач (читает `TASK_HANDLERS` + `TASK_TITLES` + `HIDDEN_TYPES_IN_LOG`). UI рендерит кнопки «Идеи (свободные)» / «Исследовать напрямую» / etc по этому списку
+    - `POST /api/team/tasks/preview-prompt` — `{taskType, params}` → собранный промпт без запуска. Дёргает `taskRunner.previewPrompt`
+    - `POST /api/team/tasks/run` — `{taskType, params, modelChoice?, promptOverride?, title?}` → `{taskId}`. Создаёт задачу через `createTask`, пишет первый running-снапшот, кладёт id в очередь команды, возвращает 202
+    - `POST /api/team/tasks/:taskId/archive` — `{task}` (новый снапшот status=archived)
+    - `POST /api/team/tasks/:taskId/rename` — body `{title}`
+    - `POST /api/team/tasks/:taskId/mark-done` — для статуса `marked_done`
+    - `POST /api/team/tasks/:taskId/append-question` — body `{question, modelChoice?}`. Дёргает `appendQuestionToResearch` — дописывает в существующий артефакт research_direct, биллинг к родителю, без новой записи в team_tasks
+    - `POST /api/team/tasks/:taskId/apply-ai-edit` — body `{fullText, edits, generalInstruction?, modelChoice?, promptOverride?}`. Создаёт новую версию артефакта write_text, биллинг к родителю
+    - `POST /api/team/tasks/:taskId/save-direct-edit` — body `{content}`. Прямая правка без LLM, новая версия в той же папке точки, биллинг = 0
+    - **Валидация taskId через regex** `/^tsk_[A-Za-z0-9]+$/` — task id формата генерируется в `taskRunner.newTaskId()`, регэксп его покрывает. Защищает от path-injection в URL
+  - **`artifacts.js`** (5 эндпоинтов):
+    - `POST /api/team/artifacts` — `{path, content}` → upload в `team-database`
+    - `DELETE /api/team/artifacts` — `{path}` → удаление файла
+    - `POST /api/team/artifacts/move` — `{fromPath, toPath}` → download → upload to new → delete old. Дополнительно обновляет `artifact_path` во всех снапшотах `team_tasks`, ссылавшихся на старый путь — иначе UI старых задач не найдёт свой файл. Если `team_tasks` обновить не получилось (RLS, рассинхрон) — логируем warning, файл всё равно перенесён
+    - `POST /api/team/artifacts/folders` — `{path}` → создаёт «папку» через upload плейсхолдера `<path>/.keep` (Storage не имеет явных папок). Если плейсхолдер уже есть — возвращает `alreadyExists: true`
+    - `DELETE /api/team/artifacts/folders` — `{path}` → удаление **пустой** папки. Сначала через `listFiles` проверяем, что внутри ничего нет кроме `.keep`; если есть — 409 «Папка не пуста». Безопасный паттерн: пользователь не может одной кнопкой смести важные данные
+    - **Sanitize path-input** — функция `sanitizePath` отбрасывает пустые строки, ведущие слэши, `../` (path traversal), пробелы. Возвращает нормализованный путь или null
+  - **`prompts.js`** (1 эндпоинт):
+    - `POST /api/team/prompts` — `{name, content}` → upload в `team-prompts`. Имя проверяется regex `/^[A-Za-z0-9_-]+(?:\.md)?$/` (плоская структура шаблонов, никаких слэшей). Если расширения нет — добавляем `.md`. Чтение списка и контента шаблонов фронт делает напрямую через teamPromptsService — здесь только запись
+  - **`admin.js`** (6 эндпоинтов):
+    - `GET /api/team/admin/keys` — статус с маскированным preview (`{anthropic: {configured: bool, masked: "sk-anth***...***xyzv", updatedAt}, openai: {...}, google: {...}}`). Маскирование: первые 4 + `***` + последние 4 символа (для коротких ключей <8 знаков — `xx***`). Сами ключи никогда не отдаём из API
+    - `POST /api/team/admin/keys` — `{provider, key}`. Делегирует `keysService.setApiKey`, тот сбрасывает кеш на 30 сек. Поддерживаемые провайдеры — `anthropic | openai | google`
+    - `DELETE /api/team/admin/keys` — `{provider}`
+    - `GET /api/team/admin/keys-status` — компактная версия `{anthropic: bool, openai: bool, google: bool}` для индикатора в шапке
+    - `GET /api/team/admin/spending` — `costTracker.getTotalSpending()` (total/by_provider/by_model + alert_triggered)
+    - `GET /api/team/admin/alert-threshold` → `{value: number | null}` из team_settings
+    - `POST /api/team/admin/alert-threshold` — `{value: number | null}`. Валидация: положительное число или null (выключить алерт)
+  - **`files.js`** (1 эндпоинт через multer middleware):
+    - `POST /api/team/files/upload` — multipart/form-data: поле `file` (обязательно), поле `prefix` (опц., дефолт `uploads/`). Имя файла санитизируется через `sanitizeFilename` (basename без директорий, без NUL-байтов; кириллица сохраняется). Дописывается timestamp перед расширением (`файл-1714939200000.pdf`) — защита от коллизий имён при повторной загрузке
+    - **Лимиты multer**: 50 МБ на файл (PDF интервью, сканы — типичный размер), 1 файл за запрос. memoryStorage — буфер сразу в Storage без записи на диск
+    - Перехватчик ошибок multer возвращает понятный JSON `{error: "Файл слишком большой..."}` со статусом 413, иначе пользователь получил бы HTML-страницу Express
+  - **`voice.js`** (1 эндпоинт через multer middleware):
+    - `POST /api/team/voice/transcribe` — multipart/form-data: поле `audio`. Лимит 25 МБ (= лимит Whisper). Дёргает `transcribeFromBuffer`, пишет вызов в `team_api_calls` через `costTracker.recordCall` (provider=`openai`, model из `env.whisperModel`, audioMinutes из ffmpeg-stderr). Возвращает `{text, durationSeconds, costUsd}`
+    - На неудачу — пишет `recordCall(success: false, error)` для статистики падений Whisper, потом 500 с понятным сообщением
+
+- **Подключение в `backend/src/app.js`**: импорты + `app.use("/api/team/...", router)` для всех шести роутеров. Также увеличен лимит JSON-парсера с 1 МБ до **5 МБ** — write_text промпты с research-блоками (большие транскрипции + контекст блога + полный текст для редактирования) могут перешагивать 1 МБ. 5 МБ — щедрый запас, на JSON-API без файлов не давит, файлы и аудио идут через multer-stream и не зависят от json-parser-лимита
+
+Решения, принятые намеренно:
+- **Шесть отдельных файлов вместо одного `team.js`.** Каждый файл — одна логическая зона ответственности (задачи / артефакты / шаблоны / админка / файлы / голос). Файлы по 100-250 строк удобнее для нахождения нужного эндпоинта и для будущих правок (в Сессии 28+ фронт-сервисы будут добавлять новые маршруты — лучше точечно расширять файл, чем туда-сюда лазать в 1000-строчном модуле)
+- **Чтение через прямой Supabase, запись через бэкенд.** Прямой паттерн Потока: фронт читает `videos` из browser-supabase с RLS, а пишет через server actions / бэкенд. Списки задач, файлы артефактов, шаблоны промптов — всё чтение идёт мимо бэкенда. На бэкенде только тяжёлые операции, требующие service-role: запуск задач (запись team_tasks), ключи (RLS закрыта по соображениям безопасности), запуск Whisper, fetch URL/PDF
+- **Multer вместо formidable.** Multer проще интегрируется через middleware-паттерн `upload.single("file")` — это вписывается в стиль существующих Express-роутов. Formidable требует нетривиальной обработки потока вручную. На сравнимой функциональности multer выигрывает чистотой кода
+- **`transcribeFromBuffer` отдельная функция, не общая.** Альтернатива — обобщить `transcribeFromUrl` через перегрузку. Но это разные сценарии: для URL нужен Instagram CDN-санитайзинг + no_speech-эвристика (видео без речи бывает); для буфера — durationSeconds для биллинга. Совмещать = усложнять оба пути. Лучше две тонкие функции с общим helper'ом (`extractAudio`)
+- **Все эндпоинты под `/api/team/*`.** Чёткая граница с существующими `/api/videos`, `/api/thumbnails`, `/api/reprocess-references`. Также упрощает мониторинг и потенциальный rate-limiting: в будущем можно навесить middleware только на `/api/team/*` (например, общий auth-middleware), не трогая остальные пути
+- **Path traversal-защита через явный sanitize.** Альтернатива — доверять Supabase Storage в плане валидации путей. Но нет смысла полагаться на чужой клиент — лишний слой проверок дёшев и снимает целый класс атак
+- **JSON-лимит 5 МБ.** Альтернатива — оставить 1 МБ и заставить фронт резать write_text-вызовы. Но 5 МБ это всё равно меньше доли секунды на парсинг, и на JSON-API без больших файлов не давит. Разумная инвестиция в спокойствие
+- **`task_id`-validation regex `/^tsk_[A-Za-z0-9]+$/`.** Защита от path-injection через `:taskId` в URL. Если пользователь подсунет `../../../tasks/something` — regex отвергнет, не дав даже коснуться taskRunner. Возможность уязвимости минимальная (taskRunner внутри сам проверяет, существует ли задача), но дополнительная страховка дешевая
+
+Известные ограничения сессии 27:
+- **Нет аутентификации эндпоинтов**. RLS открыта на anon/authenticated в team_* таблицах (как и для videos/bookmarks), и бэкенд тоже открыт. Это согласовано на этапе модели «личный инструмент без auth» — Поток с самого начала так живёт. Если когда-нибудь понадобится auth — будем навешивать middleware на `/api/team/*`
+- **Загрузка файлов и аудио идут в memory.** При больших объёмах (≥50 МБ) бэкенд будет потреблять память пропорционально. На Railway free tier это потенциально упрётся в лимит памяти. Решение «когда заболит» — переключиться на disk-storage multer'а или streamingmode
+- **Move артефакта не атомарен**. Если между upload в новый путь и delete старого что-то упадёт (rare, но возможно) — останется два файла. Лечится повторным move или ручным удалением через Supabase Dashboard. Транзакций между Storage-операциями Supabase не предоставляет
+- **Нет endpoint'а для bulk-операций**. Удаление пачкой, перемещение пачкой — пока не добавил, потому что фронт ещё не написан. Если в Сессии 30 (Сессия 7 roadmap'а команды) UI потребует — допилим точечно
+- **Folder-плейсхолдер `.keep`**. Если пользователь зайдёт в Supabase Dashboard и создаст файл напрямую без `.keep` — папка появится в списке, но «удалить пустую папку» не сможет (плейсхолдера нет, удалять нечего). Это edge case, возникнет только при ручных правках через Dashboard
+
+Ручные шаги для Влада (после pull):
+1. **Обнови зависимости бэкенда**: PowerShell в `backend/` → `& "C:\Program Files\nodejs\npm.cmd" install`. Поставит `multer`. На Railway передеплой автоматически после push в `main` (см. ниже про время сборки)
+2. **Перезапусти локальный бэкенд** (`Ctrl+C` в окне бэкенда → `& "C:\Program Files\nodejs\npm.cmd" start` в `backend/`). При старте в логах должны быть прежние строки `Worker pool : concurrency=...` + `Team pool : concurrency=1`. Никаких новых логов про routers — Express их не печатает, но они подключены в `app.js`
+3. **Локальная проверка через curl** (PowerShell или bash). Базовый `BASE` — `http://127.0.0.1:3001`:
+   - Список типов задач:
+     ```
+     curl http://127.0.0.1:3001/api/team/tasks/templates
+     ```
+     В ответе JSON со списком всех 5 типов: `ideas_free`, `ideas_questions_for_research`, `research_direct`, `write_text`, `edit_text_fragments` (последний с `hiddenInLog: true`)
+   - Запуск простой задачи (требует ключи и шаблоны в Storage из Сессий 24-25):
+     ```
+     curl -X POST http://127.0.0.1:3001/api/team/tasks/run -H "Content-Type: application/json" -d '{"taskType":"ideas_free","params":{"user_input":"3 идеи про необычные истории Петербурга"}}'
+     ```
+     В ответе `{"taskId":"tsk_xxxxxxxxxxxx"}`. Через 30-60 секунд — задача в БД со статусом `done`, артефакт в Storage
+   - Пометить задачу готовой:
+     ```
+     curl -X POST http://127.0.0.1:3001/api/team/tasks/tsk_xxxxxxxxxxxx/mark-done
+     ```
+     В ответе обновлённый объект задачи с `status: "marked_done"`
+   - Статус ключей (без выдачи самих значений):
+     ```
+     curl http://127.0.0.1:3001/api/team/admin/keys-status
+     ```
+     В ответе `{"anthropic":true,"openai":true,"google":true}` (если все три настроены через Сессию 25)
+4. **Проверь в Supabase Dashboard**:
+   - **Database → Table Editor → team_tasks**: должна появиться новая задача с двумя/тремя снапшотами одного `id` — running, done, и (если ты дёрнул mark-done) marked_done
+   - **Database → Table Editor → team_api_calls**: новая запись с `task_id = tsk_xxx`, `provider/model`, токенами и стоимостью
+   - **Storage → team-database → ideas/**: новый md-файл с заголовком «Идеи (свободные)»
+
+Ниже — полная пошаговая инструкция, разделённая на блоки.
+
+### 📦 Локальная проверка
+1. Подгрузи новые зависимости: PowerShell в `backend/` → `& "C:\Program Files\nodejs\npm.cmd" install` — поставит `multer` (~175 пакетов вместе с зависимостями)
+2. Запусти бэкенд: `Ctrl+C` если уже работает, потом `& "C:\Program Files\nodejs\npm.cmd" start` в `backend/`. Должен запуститься без ошибок, никаких новых сообщений об отсутствующих ключах не появится (фронт не зависит от этой сессии)
+3. Дёрни два-три эндпоинта (см. шаги 3-4 выше)
+4. Открой Supabase Dashboard, убедись, что новые записи появляются. Если не появляются — глянь логи бэкенда в окне терминала (там будут стектрейсы от console.error)
+
+### 💾 Коммит и пуш через GitHub Desktop
+Эта и предыдущие сессии (24-26) идут на одной фиче-ветке: текущая ветка — `claude/upbeat-darwin-64005a` (видно в git status в начале этой сессии — это рабочее дерево worktree, ветка которой потом мерджится в main).
+
+**Если сейчас ты в обычной локальной копии репо (НЕ в worktree)** — Claude Code работает в worktree и автоматически создал её под нашу разработку. После сессии тебе нужно:
+1. Открыть **GitHub Desktop** → текущий репозиторий «potok»
+2. Если ты на **main** — переключись на ветку Claude (точное имя видно в выводе сессии: `claude/upbeat-darwin-64005a`)
+3. В разделе **Changes** должны быть видны изменённые файлы:
+   - **Изменены**: `backend/package.json`, `backend/package-lock.json`, `backend/src/app.js`, `backend/src/services/transcriptionService.js`, `CLAUDE.md`
+   - **Добавлены**: `backend/src/routes/team/tasks.js`, `backend/src/routes/team/artifacts.js`, `backend/src/routes/team/prompts.js`, `backend/src/routes/team/admin.js`, `backend/src/routes/team/files.js`, `backend/src/routes/team/voice.js`
+4. **Summary** (краткое описание): `Сессия 27: REST API маршруты команды`
+5. **Description** (тело коммита):
+   ```
+   Шесть REST-роутеров под /api/team/* для всех операций раздела «Команда»:
+   - tasks.js: запуск/архив/переименование/правки/доп.вопросы
+   - artifacts.js: запись/удаление/перемещение файлов и папок
+   - prompts.js: запись шаблонов промптов
+   - admin.js: ключи моделей, расходы, порог алерта
+   - files.js: multipart upload через multer
+   - voice.js: транскрипция аудио через Whisper
+
+   Адаптирован transcriptionService для работы с буфером (новая функция
+   transcribeFromBuffer для голосового ввода). JSON-лимит Express поднят до 5 МБ.
+   Новая зависимость: multer.
+   ```
+6. Кнопка **Commit to claude/upbeat-darwin-64005a** (или как там твоя ветка названа)
+7. После коммита — кнопка **Push origin** в шапке. Дождись зелёной галочки
+
+**Создание Pull Request на GitHub:**
+8. Зайди на https://github.com/tokarevexplorer-svg/potok-cloud (или твой URL репо)
+9. Сверху появится плашка с предложением «Compare & pull request» — нажми
+10. На странице PR проверь, что **base = main**, **compare = твоя ветка claude/...**
+11. Заголовок PR — то же что в Summary коммита. Описание тоже скопируется
+12. Кнопка **Create pull request** (без галочки **Draft**, обычный PR)
+13. Когда PR создан — кнопка **Merge pull request** → **Confirm merge**. После мерджа — кнопка **Delete branch** (опционально, но чисто)
+
+**Локально подтянуть main после мерджа:**
+14. В GitHub Desktop переключись на ветку `main`
+15. Кнопка **Pull origin** в шапке
+16. Удали локальную ветку Claude через **Branch → Delete...** (опционально)
+
+### 🚀 Проверка на Railway
+1. После push'а в `main` (через PR merge или прямой push, если ты так делал в прошлых сессиях) — Railway автоматически детектит изменения и запускает новый деплой. Открой https://railway.app → твой проект `potok` → сервис `backend`
+2. Перейди во вкладку **Deployments** — увидишь новый деплой со статусом **Building** (через ~30 секунд после пуша)
+3. Кликни на этот deployment → **View Logs**. Жди:
+   - Сначала Nixpacks ставит зависимости: `npm install` идёт **~50-90 секунд** (из-за нового пакета multer + его транзитивные зависимости — это дольше обычного, ~175 файлов)
+   - Потом запуск: должны появиться стандартные строки `[apify] worker pool: concurrency=...`, `Team pool : concurrency=1`, `[recovery] ...`, `[team-recovery] ...`
+   - В самом конце — `Listening on port 3001` (или другой порт от Railway)
+4. Когда статус деплоя сменится на **Active** (зелёная галочка) — деплой готов. Обычно 2-3 минуты от пуша до активного состояния
+5. Проверка работоспособности боевого бэкенда:
+   - **Healthcheck**: открой в браузере или curl'ом https://potok-production-a2dc.up.railway.app/health → должен ответить `{"ok":true,"service":"potok-backend"}`
+   - **Список типов задач** (новый эндпоинт): https://potok-production-a2dc.up.railway.app/api/team/tasks/templates → должен ответить JSON со списком пяти типов задач
+
+### 🆘 Если что-то сломалось
+**Деплой Railway упал (статус Failed):**
+1. Открой логи деплоя (View Logs из Deployments). Ошибка будет в самом низу логов сборки или старта
+2. **Самые частые причины**:
+   - `Cannot find module 'multer'` — значит `npm install` не отработал. Передеплой через **Redeploy** в меню деплоя (три точки) обычно лечит. Если повторяется — глянь, что `package.json` правильно закоммичен
+   - `Cannot find module './routes/team/tasks.js'` (или другие team-роуты) — значит файлы не закоммитились. Проверь GitHub в твоей ветке/main, что папка `backend/src/routes/team/` есть и содержит шесть файлов
+   - `Не задана переменная окружения SUPABASE_STORAGE_BUCKET` (или другая) — значит env-переменная пропала из настроек Railway. Настройки → Variables — добавить заново
+   - `Cannot find package '@anthropic-ai/sdk'` — значит зависимости из Сессии 25 не установлены, и сессия 25 не доехала до прода. Это маловероятно, но если так — повтори `npm install` локально и запушь
+3. После исправления — push в `main` или **Redeploy** в Railway
+
+**Эндпоинты возвращают 500:**
+1. Открой Railway → backend → **Logs** (вкладка Logs, не Deployments)
+2. Дёрни проблемный эндпоинт ещё раз
+3. В логах появится строка `[team] ... failed:` со стектрейсом — это console.error из роутеров. Соотнеси с конкретным файлом:
+   - `[team] tasks/run failed:` → `backend/src/routes/team/tasks.js`
+   - `[team] artifacts upload ... failed:` → `backend/src/routes/team/artifacts.js`
+   - `[team] admin keys POST failed:` → `backend/src/routes/team/admin.js`
+   - и т.д.
+4. **Самые частые причины 500**:
+   - `Не задан API-ключ для провайдера X` → не записан ключ в `team_api_keys`. Через UI Админки или Supabase Dashboard добавить
+   - `Не удалось загрузить ideas-free.md из bucket "team-prompts"` → шаблон не залит в Storage. Из Сессии 25 шаг 2 — залить пять шаблонов
+   - `Object not found` от Storage → файл не существует, проверь имя и путь в Storage Dashboard
+   - `Supabase ... failed: ...` → проблема с БД. Глянь Supabase Dashboard → Logs (там видно все запросы и ошибки)
+
+5. **Что дальше**: Сессия 28 (по нумерации Потока) / Сессия 5 (по roadmap'у команды) — фронтенд-каркас раздела «Команда»: меню, страницы-заглушки, сервисы чтения данных. Добавится клиент `teamBackendClient.ts` для дёргания всех эндпоинтов, созданных в этой сессии
+
+---
+
 ### 🔜 Отложено (v3+)
 - Скриншоты к заметкам (хранение на Google Drive) — когда станет понятно что без них не обойтись
 - Раздел "Закладки" на сайте с полноценным интерфейсом (пока доступ через Supabase Dashboard)
