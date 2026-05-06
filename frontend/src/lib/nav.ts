@@ -1,5 +1,14 @@
 import type { LucideIcon } from "lucide-react";
-import { BookmarkCheck, Newspaper, Users, Wrench } from "lucide-react";
+import {
+  BookmarkCheck,
+  BookOpen,
+  Folder,
+  ListTodo,
+  Newspaper,
+  Settings,
+  Users,
+  Wrench,
+} from "lucide-react";
 
 export interface NavLeaf {
   label: string;
@@ -47,7 +56,28 @@ export const navSections: NavSection[] = [
         id: "team",
         label: "Команда",
         icon: Users,
-        items: [{ label: "Скоро", comingSoon: true }],
+        items: [
+          {
+            label: "Задачи",
+            href: "/blog/team/tasks",
+            icon: ListTodo,
+          },
+          {
+            label: "Промпты",
+            href: "/blog/team/prompts",
+            icon: BookOpen,
+          },
+          {
+            label: "База",
+            href: "/blog/team/database",
+            icon: Folder,
+          },
+          {
+            label: "Админка",
+            href: "/blog/team/admin",
+            icon: Settings,
+          },
+        ],
       },
     ],
   },
