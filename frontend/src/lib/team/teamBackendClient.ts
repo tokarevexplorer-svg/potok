@@ -331,8 +331,15 @@ export async function fetchTaskVersions(
 }
 
 export async function fetchVersionContent(taskId: string, path: string): Promise<string> {
+  if (typeof path !== "string" || !path.trim()) {
+    // Защита от случая, когда caller потерял path где-то по пути (race
+    // условия в state, fallback после таймаута). Без этого ошибка ушла бы
+    // в backend и вернулась как «path обязателен» — пользователь увидел бы
+    // её в UI без понятной причины.
+    throw new Error("Внутренняя ошибка: пустой путь до версии");
+  }
   const data = await backendFetch(
-    `/api/team/tasks/${taskId}/version-content?path=${encodeURIComponent(path)}`,
+    `/api/team/tasks/${taskId}/version-content?path=${encodeURIComponent(path.trim())}`,
     { method: "GET" },
   );
   const obj = (data ?? {}) as { content?: string };
