@@ -169,7 +169,7 @@ export default function TaskRunnerModal({
         role="presentation"
       />
 
-      <div className="relative z-10 flex w-full max-w-2xl flex-col overflow-hidden bg-surface shadow-pop sm:rounded-2xl sm:border sm:border-line">
+      <div className="relative z-10 flex h-full max-h-screen w-full max-w-2xl flex-col overflow-hidden bg-surface shadow-pop sm:h-auto sm:max-h-[90vh] sm:rounded-2xl sm:border sm:border-line">
         <div className="flex items-center justify-between border-b border-line px-6 py-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
