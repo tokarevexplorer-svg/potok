@@ -1,6 +1,6 @@
-import { Folder } from "lucide-react";
-import TeamComingSoon from "@/components/blog/team/TeamComingSoon";
 import TeamPageHeader from "@/components/blog/team/TeamPageHeader";
+import DatabaseWorkspace from "@/components/blog/team/DatabaseWorkspace";
+import { createSupabaseServerClient } from "@/lib/supabaseClient";
 
 export const metadata = {
   title: "База команды — Поток",
@@ -8,26 +8,37 @@ export const metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default function TeamDatabasePage() {
+// Читает текстовый файл из team-database через сервер-supabase. Возвращает
+// null, если файла нет или прочитать не получилось — UI покажет пустой
+// AutosavingTextEditor, и первое сохранение создаст файл.
+async function loadDatabaseText(name: string): Promise<string | null> {
+  try {
+    const supabase = createSupabaseServerClient();
+    const { data, error } = await supabase.storage.from("team-database").download(name);
+    if (error || !data) return null;
+    return await data.text();
+  } catch {
+    return null;
+  }
+}
+
+export default async function TeamDatabasePage() {
+  const [context, concept] = await Promise.all([
+    loadDatabaseText("context.md"),
+    loadDatabaseText("concept.md"),
+  ]);
+
   return (
     <div className="min-w-0">
       <TeamPageHeader
         title="База"
-        description="Артефакты команды: исследования, тексты по точкам экскурсий, идеи, источники, контекст блога."
+        description="Контекст и концепция блога — это то, что подмешивается во все промпты команды. Артефакты задач (исследования, тексты, идеи) лежат в соответствующих папках."
         showBackLink
       />
 
-      <TeamComingSoon
-        icon={Folder}
-        title="Файлы артефактов"
-        plannedIn="Сессии 7"
-        items={[
-          "Папки: research/, texts/<точка>/, ideas/, sources/, uploads/",
-          "Корневые файлы: context.md, concept.md — общий контекст блога",
-          "Просмотр и редактирование markdown-артефактов прямо в браузере",
-          "Загрузка PDF/файлов как источников для будущих задач",
-        ]}
-      />
+      <div className="mt-8">
+        <DatabaseWorkspace initialContext={context} initialConcept={concept} />
+      </div>
     </div>
   );
 }

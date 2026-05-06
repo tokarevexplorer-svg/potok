@@ -1,6 +1,5 @@
-import { Settings } from "lucide-react";
-import TeamComingSoon from "@/components/blog/team/TeamComingSoon";
 import TeamPageHeader from "@/components/blog/team/TeamPageHeader";
+import AdminWorkspace from "@/components/blog/team/AdminWorkspace";
 
 export const metadata = {
   title: "Админка команды — Поток",
@@ -13,21 +12,13 @@ export default function TeamAdminPage() {
     <div className="min-w-0">
       <TeamPageHeader
         title="Админка"
-        description="Ключи моделей, пресеты, расходы по провайдерам и моделям, алерт по бюджету."
+        description="Ключи моделей, общие расходы, порог алерта. Всё хранится в Supabase — смена ключа не требует передеплоя."
         showBackLink
       />
 
-      <TeamComingSoon
-        icon={Settings}
-        title="Управление командой"
-        plannedIn="Сессии 7"
-        items={[
-          "Ключи Anthropic / OpenAI / Google: статус, добавление, удаление",
-          "Расходы: total, по провайдерам, по моделям, помесячно",
-          "Порог алерта: уведомление, когда суммарные расходы превысили лимит",
-          "Пресеты выбора модели (fast / balanced / best) — редактирование",
-        ]}
-      />
+      <div className="mt-8">
+        <AdminWorkspace />
+      </div>
     </div>
   );
 }
