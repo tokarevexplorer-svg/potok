@@ -35,4 +35,73 @@
   .focus-ring {
     @apply outline-none ring-0 focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
   }
+
+  /* Стили markdown-рендера в TaskViewerModal команды.
+     Минимальный аналог @tailwindcss/typography — без новой зависимости,
+     только тут используется. Если потом понадобится в других местах —
+     рассмотрим установку @tailwindcss/typography как отдельную сессию. */
+  .prose-team {
+    @apply text-base leading-relaxed text-ink;
+  }
+  .prose-team h1 {
+    @apply mt-6 mb-3 font-display text-2xl font-semibold tracking-tight text-ink;
+  }
+  .prose-team h2 {
+    @apply mt-5 mb-2 font-display text-xl font-semibold tracking-tight text-ink;
+  }
+  .prose-team h3 {
+    @apply mt-4 mb-2 font-display text-lg font-semibold tracking-tight text-ink;
+  }
+  .prose-team h4 {
+    @apply mt-4 mb-2 font-display text-base font-semibold tracking-tight text-ink;
+  }
+  .prose-team p {
+    @apply my-3 whitespace-pre-wrap;
+  }
+  .prose-team ul {
+    @apply my-3 list-disc pl-6;
+  }
+  .prose-team ol {
+    @apply my-3 list-decimal pl-6;
+  }
+  .prose-team li {
+    @apply my-1;
+  }
+  .prose-team li > p {
+    @apply my-0;
+  }
+  .prose-team a {
+    @apply text-accent underline underline-offset-4 hover:text-accent-hover;
+  }
+  .prose-team strong {
+    @apply font-semibold text-ink;
+  }
+  .prose-team em {
+    @apply italic;
+  }
+  .prose-team code {
+    @apply rounded bg-elevated px-1 py-0.5 font-mono text-[0.875em] text-ink;
+  }
+  .prose-team pre {
+    @apply my-3 overflow-x-auto rounded-lg border border-line bg-elevated p-3 font-mono text-sm leading-relaxed;
+  }
+  .prose-team pre code {
+    @apply bg-transparent p-0;
+  }
+  .prose-team blockquote {
+    @apply my-3 border-l-4 border-line-strong bg-elevated/40 px-4 py-2 italic text-ink-muted;
+  }
+  .prose-team hr {
+    @apply my-6 border-line;
+  }
+  .prose-team table {
+    @apply my-4 w-full border-collapse text-sm;
+  }
+  .prose-team th,
+  .prose-team td {
+    @apply border border-line px-3 py-2 text-left;
+  }
+  .prose-team th {
+    @apply bg-elevated font-semibold;
+  }
 }

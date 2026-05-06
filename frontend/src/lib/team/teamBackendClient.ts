@@ -1,46 +1,54 @@
-// Клиент для бэкенд-эндпоинтов команды (`/api/team/*`).
+// Изоморфный клиент для бэкенд-эндпоинтов команды (`/api/team/*`).
 //
-// Используется из server actions и server components для операций, которые
-// требуют service-role: запуск задач, управление ключами, запись артефактов,
-// транскрипция голосовых заметок. Чтение списков задач и журнала вызовов —
-// напрямую из Supabase через RLS, не сюда.
+// Из server components и server actions ходит напрямую через BACKEND_URL.
+// Из браузерных компонентов ходит через прокси /api/team-proxy/<path>
+// (см. frontend/src/app/api/team-proxy/[...path]/route.ts), потому что
+// BACKEND_URL — серверная переменная без NEXT_PUBLIC_ префикса.
 //
-// BACKEND_URL — переменная окружения сервера (без NEXT_PUBLIC_), значит этот
-// модуль не должен импортироваться в client components — компилятор Next
-// заэкранирует переменную как undefined и вызовы тихо упадут в console.warn.
-//
-// На этапе Сессии 28 (каркас фронта) реально дёргается только запрос статуса
-// ключей — для индикатора в шапке Админки. Полные обвязки (run, archive,
-// applyAiEdit, voiceTranscribe, …) появятся в Сессиях 6–7 этапа 1; для них
-// здесь оставлены тонкие функции, чтобы не плодить сервисов в каждой сессии.
+// Один модуль для обоих контекстов — выбор пути решается в runtime через
+// typeof window. Это убирает необходимость дублировать сигнатуры функций
+// в server-only и client-only файлах.
 
-import type { ApiKeysStatus } from "./types";
+import type { ApiKeysStatus, TeamTask, TeamTaskModelChoice, TeamTaskPrompt } from "./types";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? process.env.RAILWAY_BACKEND_URL ?? null;
 
-// Основа всех вызовов: единая обработка отсутствия BACKEND_URL и сетевых
-// ошибок. Возвращает разобранный JSON или бросает Error с понятным русским
-// сообщением — caller сам решит, что показывать пользователю.
+// Внутренний хелпер: выбирает путь и шлёт запрос. Возвращает разобранный
+// JSON (или null, если ответ пустой). Бросает Error со строкой из {error}
+// или с HTTP-статусом, чтобы caller всегда видел понятное сообщение.
 async function backendFetch(
   path: string,
   init: RequestInit & { timeoutMs?: number } = {},
 ): Promise<unknown> {
-  if (!BACKEND_URL) {
-    throw new Error(
-      "Бэкенд не настроен (нет переменной BACKEND_URL). Проверь Vercel → Settings → Environment Variables.",
-    );
-  }
-  const { timeoutMs = 15_000, ...rest } = init;
-  const url = `${BACKEND_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  const isBrowser = typeof window !== "undefined";
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
 
+  let url: string;
+  if (isBrowser) {
+    // Из браузера — относительный путь до своего же Next-сервера, который
+    // проксирует на Railway. URL начинается с /api/team/... — превращаем в
+    // /api/team-proxy/...
+    if (!normalizedPath.startsWith("/api/team/")) {
+      throw new Error(
+        `backendFetch: ожидался путь с префиксом /api/team/, получено ${normalizedPath}`,
+      );
+    }
+    url = `/api/team-proxy/${normalizedPath.slice("/api/team/".length)}`;
+  } else {
+    if (!BACKEND_URL) {
+      throw new Error(
+        "Бэкенд не настроен (нет переменной BACKEND_URL). Проверь Vercel → Settings → Environment Variables.",
+      );
+    }
+    url = `${BACKEND_URL}${normalizedPath}`;
+  }
+
+  const { timeoutMs = 30_000, ...rest } = init;
   let response: Response;
   try {
     response = await fetch(url, {
       ...rest,
       signal: AbortSignal.timeout(timeoutMs),
-      // В Next 15 server fetch'ы по умолчанию кешируются — для команды это
-      // вредно: ответ зависит от состояния БД и должен пересчитываться каждый
-      // раз. Явно отключаем.
       cache: "no-store",
     });
   } catch (err) {
@@ -54,7 +62,7 @@ async function backendFetch(
     try {
       parsed = JSON.parse(text);
     } catch {
-      // Оставляем null — caller увидит ошибку формата ниже, если ответ не JSON.
+      // Не JSON — оставляем null, ниже отрапортуем по статусу.
     }
   }
 
@@ -70,15 +78,11 @@ async function backendFetch(
 }
 
 // =========================================================================
-// Админка: ключи и расходы
+// Админка: ключи и статус
 // =========================================================================
 
-// Возвращает простой статус «есть/нет ключ» по каждому провайдеру.
-// На главной /blog/team используется в карточке «Админка» — если хоть один
-// ключ не настроен, рисуем предупреждение.
 export async function fetchKeysStatus(): Promise<ApiKeysStatus> {
   const data = await backendFetch("/api/team/admin/keys-status", { method: "GET" });
-  // На случай рассинхрона типов — нормализуем к булевому.
   const obj = (data ?? {}) as Record<string, unknown>;
   return {
     anthropic: Boolean(obj.anthropic),
@@ -87,8 +91,6 @@ export async function fetchKeysStatus(): Promise<ApiKeysStatus> {
   };
 }
 
-// Best-effort вариант: если бэкенд не отвечает, возвращает null (не бросает).
-// На главной /blog/team мы не хотим, чтобы упавший Railway уронил всю страницу.
 export async function fetchKeysStatusSafe(): Promise<ApiKeysStatus | null> {
   try {
     return await fetchKeysStatus();
@@ -96,4 +98,224 @@ export async function fetchKeysStatusSafe(): Promise<ApiKeysStatus | null> {
     console.warn("[teamBackendClient] keys-status недоступен:", err);
     return null;
   }
+}
+
+// =========================================================================
+// Конфиг моделей: пресеты + pricing + ключи
+// =========================================================================
+
+// Сырая структура pricing.json — не конкретизируем все поля, в UI
+// используется только список моделей с провайдером.
+export interface PricingModel {
+  id: string;
+  provider?: string | null;
+  label?: string | null;
+  input_per_million?: number | null;
+  output_per_million?: number | null;
+  cached_input_per_million?: number | null;
+}
+export interface PricingFile {
+  models?: PricingModel[];
+  // Старый формат — {provider: {model_id: {...}}}. UI понимает оба.
+  [provider: string]: unknown;
+}
+
+// Пресет ссылается на модель по id; per-task override приоритетнее default.
+export interface ModelPreset {
+  default?: string;
+  ideas_free?: string;
+  ideas_questions_for_research?: string;
+  research_direct?: string;
+  write_text?: string;
+  edit_text_fragments?: string;
+  // Прочие поля (label, description) — терпим.
+  label?: string;
+  description?: string;
+  [key: string]: unknown;
+}
+export type PresetsFile = Record<string, ModelPreset>;
+
+export interface ModelsConfig {
+  presets: PresetsFile;
+  pricing: PricingFile;
+  keys: ApiKeysStatus | null;
+}
+
+export async function fetchModelsConfig(): Promise<ModelsConfig> {
+  const data = await backendFetch("/api/team/admin/models-config", { method: "GET" });
+  const obj = (data ?? {}) as Record<string, unknown>;
+  return {
+    presets: (obj.presets ?? {}) as PresetsFile,
+    pricing: (obj.pricing ?? {}) as PricingFile,
+    keys: (obj.keys ?? null) as ApiKeysStatus | null,
+  };
+}
+
+// =========================================================================
+// Задачи: запуск, превью промпта, управление
+// =========================================================================
+
+export interface TaskTemplate {
+  type: string;
+  title: string;
+  hiddenInLog: boolean;
+}
+
+export async function fetchTaskTemplates(): Promise<TaskTemplate[]> {
+  const data = await backendFetch("/api/team/tasks/templates", { method: "GET" });
+  const obj = (data ?? {}) as { templates?: TaskTemplate[] };
+  return obj.templates ?? [];
+}
+
+export interface PreviewPromptResult {
+  system: string | null;
+  user: string | null;
+  cacheableBlocks?: unknown;
+  template: string | null;
+}
+
+export async function previewPrompt(
+  taskType: string,
+  params: Record<string, unknown>,
+): Promise<PreviewPromptResult> {
+  const data = await backendFetch("/api/team/tasks/preview-prompt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taskType, params }),
+  });
+  const obj = (data ?? {}) as { prompt?: PreviewPromptResult };
+  return obj.prompt ?? { system: null, user: null, cacheableBlocks: [], template: null };
+}
+
+export interface RunTaskParams {
+  taskType: string;
+  params: Record<string, unknown>;
+  modelChoice?: TeamTaskModelChoice | null;
+  promptOverride?: TeamTaskPrompt | null;
+  title?: string | null;
+}
+
+export async function runTask(input: RunTaskParams): Promise<string> {
+  const data = await backendFetch("/api/team/tasks/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const obj = (data ?? {}) as { taskId?: string };
+  if (!obj.taskId) {
+    throw new Error("Бэкенд не вернул taskId");
+  }
+  return obj.taskId;
+}
+
+export async function archiveTask(taskId: string): Promise<TeamTask> {
+  const data = await backendFetch(`/api/team/tasks/${taskId}/archive`, { method: "POST" });
+  return ((data ?? {}) as { task?: TeamTask }).task as TeamTask;
+}
+
+export async function renameTask(taskId: string, title: string): Promise<TeamTask> {
+  const data = await backendFetch(`/api/team/tasks/${taskId}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  return ((data ?? {}) as { task?: TeamTask }).task as TeamTask;
+}
+
+export async function markTaskDone(taskId: string): Promise<TeamTask> {
+  const data = await backendFetch(`/api/team/tasks/${taskId}/mark-done`, { method: "POST" });
+  return ((data ?? {}) as { task?: TeamTask }).task as TeamTask;
+}
+
+export interface AppendQuestionResult {
+  success: boolean;
+  appended_text: string;
+  cost_usd: number;
+}
+
+export async function appendQuestion(
+  taskId: string,
+  question: string,
+  modelChoice?: TeamTaskModelChoice | null,
+): Promise<AppendQuestionResult> {
+  const data = await backendFetch(`/api/team/tasks/${taskId}/append-question`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, modelChoice: modelChoice ?? null }),
+  });
+  return data as AppendQuestionResult;
+}
+
+export interface AiEdit {
+  fragment: string;
+  instruction: string;
+}
+
+export interface ApplyAiEditResult {
+  version: number;
+  path: string;
+  name: string;
+  provider: string;
+  model: string;
+  tokens: { input: number; output: number; cached: number };
+}
+
+export async function applyAiEdit(
+  taskId: string,
+  payload: {
+    fullText: string;
+    edits: AiEdit[];
+    generalInstruction?: string;
+    modelChoice?: TeamTaskModelChoice | null;
+    promptOverride?: TeamTaskPrompt | null;
+  },
+): Promise<ApplyAiEditResult> {
+  const data = await backendFetch(`/api/team/tasks/${taskId}/apply-ai-edit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return data as ApplyAiEditResult;
+}
+
+export interface SaveDirectEditResult {
+  version: number;
+  path: string;
+  name: string;
+}
+
+export async function saveDirectEdit(
+  taskId: string,
+  content: string,
+): Promise<SaveDirectEditResult> {
+  const data = await backendFetch(`/api/team/tasks/${taskId}/save-direct-edit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  return data as SaveDirectEditResult;
+}
+
+// =========================================================================
+// Голос: транскрипция через Whisper
+// =========================================================================
+
+export interface TranscribeResult {
+  text: string;
+  durationSeconds: number | null;
+  costUsd: number;
+}
+
+// Принимает Blob с аудио (webm/ogg/mp3/wav). Сам отправляет multipart.
+export async function transcribeVoice(blob: Blob, filename = "voice.webm"): Promise<TranscribeResult> {
+  const form = new FormData();
+  form.append("audio", blob, filename);
+  // Multipart требует, чтобы браузер сам выставил boundary — Content-Type
+  // не задаём.
+  const data = await backendFetch("/api/team/voice/transcribe", {
+    method: "POST",
+    body: form,
+    timeoutMs: 90_000, // Whisper может обрабатывать длинные записи
+  });
+  return data as TranscribeResult;
 }

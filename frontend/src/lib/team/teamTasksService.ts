@@ -5,8 +5,15 @@
 // Supabase JS клиент не предоставляет DISTINCT ON — делаем dedupe на клиенте,
 // сортируя по created_at desc и оставляя по одной записи на id. Для нашего
 // масштаба (десятки задач) это приемлемо.
+//
+// fetchTeamTasks() — серверная (для server components). fetchTeamTasksFromBrowser()
+// — клиентская, дёргается из useEffect-поллинга TeamWorkspace через
+// getSupabaseBrowserClient().
 
-import { createSupabaseServerClient } from "@/lib/supabaseClient";
+import {
+  createSupabaseServerClient,
+  getSupabaseBrowserClient,
+} from "@/lib/supabaseClient";
 import type {
   TeamTask,
   TeamTaskModelChoice,
@@ -84,18 +91,40 @@ function dedupeLatest(rows: TeamTaskRow[]): TeamTask[] {
     .map(mapTask);
 }
 
+const TASK_SELECT =
+  "id, type, title, status, params, model_choice, provider, model, prompt, prompt_override_used, result, artifact_path, tokens, cost_usd, error, created_at, updated_at, started_at, finished_at";
+
 // Все задачи (по последнему снапшоту), включая архивированные.
-// Используется в Сессии 6 для канбана; в Сессии 28 (этой) — для подсчёта
-// статистики на главной.
+// Используется на главной для подсчёта статистики и в Сессии 6 как
+// initial state канбана.
 export async function fetchTeamTasks(): Promise<TeamTask[]> {
   const supabase = createSupabaseServerClient();
   const { data, error } = await supabase
     .from("team_tasks")
-    .select(
-      "id, type, title, status, params, model_choice, provider, model, prompt, prompt_override_used, result, artifact_path, tokens, cost_usd, error, created_at, updated_at, started_at, finished_at",
-    )
+    .select(TASK_SELECT)
     .order("created_at", { ascending: false });
 
   if (error) throw new Error(`Не удалось загрузить задачи команды: ${error.message}`);
   return dedupeLatest((data ?? []) as TeamTaskRow[]);
+}
+
+// Браузерный вариант — для useEffect-поллинга в TeamWorkspace. Дёргает тот же
+// запрос через anon-клиент, RLS открыта. Возвращает все задачи (включая
+// архивированные) — компонент сам решает, какие показывать.
+export async function fetchTeamTasksFromBrowser(): Promise<TeamTask[]> {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = await supabase
+    .from("team_tasks")
+    .select(TASK_SELECT)
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(`Не удалось загрузить задачи команды: ${error.message}`);
+  return dedupeLatest((data ?? []) as TeamTaskRow[]);
+}
+
+// Вспомогательная: проверить, есть ли активные (running) задачи —
+// чтобы поллинг мог пропускать тики, когда ничего не меняется. На этапе 1
+// не используем (всегда поллим), оставляем готовой для оптимизации.
+export function hasActiveTasks(tasks: TeamTask[]): boolean {
+  return tasks.some((t) => t.status === "running");
 }
