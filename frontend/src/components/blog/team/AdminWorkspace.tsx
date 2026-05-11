@@ -11,12 +11,18 @@ import {
   X,
 } from "lucide-react";
 import {
+  type HardLimits,
   type KeysFullStatus,
+  type SecuritySettings,
   type SpendingResult,
   deleteApiKey,
   fetchAlertThreshold,
+  fetchHardLimits,
   fetchKeysFull,
+  fetchSecuritySettings,
   fetchSpending,
+  patchHardLimits,
+  patchSecuritySettings,
   setAlertThreshold,
   setApiKey,
 } from "@/lib/team/teamBackendClient";
@@ -46,6 +52,10 @@ export default function AdminWorkspace() {
   const [spendingError, setSpendingError] = useState<string | null>(null);
   const [threshold, setThreshold] = useState<number | null>(null);
   const [thresholdLoaded, setThresholdLoaded] = useState(false);
+  const [limits, setLimits] = useState<HardLimits | null>(null);
+  const [limitsError, setLimitsError] = useState<string | null>(null);
+  const [security, setSecurity] = useState<SecuritySettings | null>(null);
+  const [securityError, setSecurityError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const [editing, setEditing] = useState<Provider | null>(null);
@@ -53,10 +63,12 @@ export default function AdminWorkspace() {
   async function reloadAll() {
     setRefreshing(true);
     try {
-      const [k, sp, t] = await Promise.allSettled([
+      const [k, sp, t, lim, sec] = await Promise.allSettled([
         fetchKeysFull(),
         fetchSpending(),
         fetchAlertThreshold(),
+        fetchHardLimits(),
+        fetchSecuritySettings(),
       ]);
       if (k.status === "fulfilled") {
         setKeys(k.value);
@@ -73,6 +85,18 @@ export default function AdminWorkspace() {
       if (t.status === "fulfilled") {
         setThreshold(t.value);
         setThresholdLoaded(true);
+      }
+      if (lim.status === "fulfilled") {
+        setLimits(lim.value);
+        setLimitsError(null);
+      } else {
+        setLimitsError(lim.reason instanceof Error ? lim.reason.message : String(lim.reason));
+      }
+      if (sec.status === "fulfilled") {
+        setSecurity(sec.value);
+        setSecurityError(null);
+      } else {
+        setSecurityError(sec.reason instanceof Error ? sec.reason.message : String(sec.reason));
       }
     } finally {
       setRefreshing(false);
@@ -101,6 +125,15 @@ export default function AdminWorkspace() {
         </button>
       </div>
 
+      <SecuritySection
+        security={security}
+        error={securityError}
+        onChanged={(next) => {
+          setSecurity(next);
+          setSecurityError(null);
+        }}
+      />
+
       <KeysSection
         keys={keys}
         error={keysError}
@@ -122,6 +155,15 @@ export default function AdminWorkspace() {
         onChanged={(value) => {
           setThreshold(value);
           void reloadAll();
+        }}
+      />
+
+      <HardLimitsSection
+        limits={limits}
+        error={limitsError}
+        onChanged={(next) => {
+          setLimits(next);
+          setLimitsError(null);
         }}
       />
     </div>
@@ -584,6 +626,358 @@ function AlertSection({
           </p>
         )}
       </div>
+    </section>
+  );
+}
+
+// ---------- Security ----------
+
+function SecuritySection({
+  security,
+  error,
+  onChanged,
+}: {
+  security: SecuritySettings | null;
+  error: string | null;
+  onChanged: (next: SecuritySettings) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [savedHint, setSavedHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (editing && security) {
+      setDraft(security.db_email ?? security.effective_email ?? "");
+      setLocalError(null);
+    }
+  }, [editing, security]);
+
+  async function handleSave() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setLocalError("Введи email или нажми «Сбросить» для возврата к ENV");
+      return;
+    }
+    setBusy(true);
+    setLocalError(null);
+    try {
+      const next = await patchSecuritySettings(trimmed);
+      onChanged(next);
+      setEditing(false);
+      setSavedHint("Сохранено");
+      setTimeout(() => setSavedHint(null), 3000);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReset() {
+    if (!confirm("Сбросить email на значение из переменной окружения?")) return;
+    setBusy(true);
+    setLocalError(null);
+    try {
+      const next = await patchSecuritySettings(null);
+      onChanged(next);
+      setEditing(false);
+      setSavedHint("Сброшено — теперь действует ENV");
+      setTimeout(() => setSavedHint(null), 3000);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section>
+      <SectionHeader
+        title="Безопасность доступа"
+        description="Email из whitelist, которому открыт раздел Команды. Можно переопределить в БД или вернуться к значению из переменной окружения Vercel/Railway."
+      />
+
+      {error && (
+        <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+          {error}
+        </p>
+      )}
+
+      {!security && !error && (
+        <div className="mt-4 flex items-center gap-2 rounded-2xl border border-dashed border-line bg-elevated/40 px-4 py-10 text-sm text-ink-muted">
+          <Loader2 size={14} className="animate-spin" /> Грузим настройки доступа…
+        </div>
+      )}
+
+      {security && (
+        <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-line bg-surface p-5 sm:max-w-xl">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <span className="text-sm text-ink-muted">Текущий разрешённый email:</span>
+            <span className="font-mono text-sm text-ink">
+              {security.effective_email || "(не задан)"}
+            </span>
+            <span className="text-xs text-ink-faint">
+              {security.db_email
+                ? "(переопределено в БД)"
+                : "(из переменной окружения)"}
+            </span>
+          </div>
+
+          {!editing && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3 text-sm font-semibold text-canvas transition hover:bg-ink/90"
+              >
+                Изменить
+              </button>
+              {savedHint && (
+                <p className="inline-flex items-center gap-1.5 text-xs text-emerald-700">
+                  <Check size={12} /> {savedHint}
+                </p>
+              )}
+            </div>
+          )}
+
+          {editing && (
+            <div className="flex flex-col gap-2">
+              <input
+                type="email"
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void handleSave();
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setEditing(false);
+                  }
+                }}
+                placeholder="email@example.com"
+                className="focus-ring w-full rounded-lg border border-line bg-canvas px-3 py-2 font-mono text-sm text-ink"
+              />
+              {localError && <p className="text-xs text-rose-700">{localError}</p>}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleSave()}
+                  disabled={busy || !draft.trim()}
+                  className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-semibold text-surface transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                  Сохранить
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleReset()}
+                  disabled={busy}
+                  className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-surface px-3 text-sm text-ink-muted transition hover:text-ink disabled:opacity-50"
+                >
+                  Сбросить (вернуться к ENV)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditing(false)}
+                  disabled={busy}
+                  className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg border border-line bg-surface px-3 text-sm text-ink-muted transition hover:text-ink disabled:opacity-50"
+                >
+                  <X size={14} /> Отмена
+                </button>
+              </div>
+              <p className="text-xs text-ink-faint">
+                Защита от самоблокировки: можно установить только email текущей сессии.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------- Hard limits ----------
+
+function HardLimitsSection({
+  limits,
+  error,
+  onChanged,
+}: {
+  limits: HardLimits | null;
+  error: string | null;
+  onChanged: (next: HardLimits) => void;
+}) {
+  const [dailyDraft, setDailyDraft] = useState("");
+  const [taskDraft, setTaskDraft] = useState("");
+  const [dailyEnabled, setDailyEnabled] = useState(true);
+  const [taskEnabled, setTaskEnabled] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [savedHint, setSavedHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (limits) {
+      setDailyDraft(String(limits.daily.limit_usd));
+      setTaskDraft(String(limits.task.limit_usd));
+      setDailyEnabled(limits.daily.enabled);
+      setTaskEnabled(limits.task.enabled);
+    }
+  }, [limits]);
+
+  async function handleSave() {
+    const dailyNum = Number(dailyDraft.trim().replace(",", "."));
+    const taskNum = Number(taskDraft.trim().replace(",", "."));
+    if (!Number.isFinite(dailyNum) || dailyNum <= 0) {
+      setLocalError("Дневной лимит должен быть числом больше 0");
+      return;
+    }
+    if (!Number.isFinite(taskNum) || taskNum <= 0) {
+      setLocalError("Лимит задачи должен быть числом больше 0");
+      return;
+    }
+    setBusy(true);
+    setLocalError(null);
+    setSavedHint(null);
+    try {
+      const next = await patchHardLimits({
+        daily_limit_usd: dailyNum,
+        task_limit_usd: taskNum,
+        daily_enabled: dailyEnabled,
+        task_enabled: taskEnabled,
+      });
+      onChanged(next);
+      setSavedHint("Сохранено");
+      setTimeout(() => setSavedHint(null), 3000);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const dailySpent = limits?.daily_spent_usd ?? 0;
+  const dailyLimit = limits?.daily.limit_usd ?? 0;
+  const progress =
+    dailyLimit > 0 ? Math.min(100, Math.round((dailySpent / dailyLimit) * 100)) : 0;
+
+  return (
+    <section>
+      <SectionHeader
+        title="Жёсткие лимиты расходов"
+        description="Дневной лимит и лимит на одну задачу. В отличие от мягкого алерта выше, эти лимиты реально блокируют постановку и выполнение."
+      />
+
+      {error && (
+        <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+          {error}
+        </p>
+      )}
+
+      {!limits && !error && (
+        <div className="mt-4 flex items-center gap-2 rounded-2xl border border-dashed border-line bg-elevated/40 px-4 py-10 text-sm text-ink-muted">
+          <Loader2 size={14} className="animate-spin" /> Грузим лимиты…
+        </div>
+      )}
+
+      {limits && (
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:max-w-2xl lg:grid-cols-2">
+          {/* Дневной лимит */}
+          <div className="rounded-2xl border border-line bg-surface p-5">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-base font-semibold text-ink">Дневной лимит</h3>
+              <label className="inline-flex items-center gap-2 text-xs text-ink-muted">
+                <input
+                  type="checkbox"
+                  checked={dailyEnabled}
+                  onChange={(e) => setDailyEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded border-line text-accent focus:ring-accent"
+                />
+                Включён
+              </label>
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-sm text-ink-muted">$</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={dailyDraft}
+                onChange={(e) => setDailyDraft(e.target.value)}
+                placeholder="5"
+                className="focus-ring w-28 rounded-lg border border-line bg-canvas px-3 py-1.5 text-sm text-ink"
+              />
+            </div>
+            <p className="mt-3 text-xs text-ink-muted">
+              Сегодня потрачено: {formatUsd(dailySpent)} из {formatUsd(dailyLimit)}
+            </p>
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-elevated">
+              <div
+                className={`h-full transition-all ${
+                  progress >= 100 ? "bg-rose-500" : progress >= 80 ? "bg-amber-500" : "bg-accent"
+                }`}
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Лимит на задачу */}
+          <div className="rounded-2xl border border-line bg-surface p-5">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-base font-semibold text-ink">Лимит на задачу</h3>
+              <label className="inline-flex items-center gap-2 text-xs text-ink-muted">
+                <input
+                  type="checkbox"
+                  checked={taskEnabled}
+                  onChange={(e) => setTaskEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded border-line text-accent focus:ring-accent"
+                />
+                Включён
+              </label>
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-sm text-ink-muted">$</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={taskDraft}
+                onChange={(e) => setTaskDraft(e.target.value)}
+                placeholder="1"
+                className="focus-ring w-28 rounded-lg border border-line bg-canvas px-3 py-1.5 text-sm text-ink"
+              />
+            </div>
+            <p className="mt-3 text-xs text-ink-muted">
+              Превышение → задача переходит в ошибку, остальные продолжают.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 lg:col-span-2">
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={busy}
+              className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-semibold text-surface transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              Сохранить
+            </button>
+            {savedHint && (
+              <p className="inline-flex items-center gap-1.5 text-xs text-emerald-700">
+                <Check size={12} /> {savedHint}
+              </p>
+            )}
+            {localError && <p className="text-xs text-rose-700">{localError}</p>}
+          </div>
+
+          <p className="text-xs text-ink-faint lg:col-span-2">
+            При превышении дневного лимита новые задачи блокируются до конца суток UTC.
+            При превышении лимита задачи — задача переходит в ошибку, остальные продолжают.
+          </p>
+        </div>
+      )}
     </section>
   );
 }

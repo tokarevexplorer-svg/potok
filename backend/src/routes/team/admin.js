@@ -13,6 +13,7 @@ import {
 import {
   getTotalSpending,
   getAlertThreshold,
+  getDailySpentUsd,
 } from "../../services/team/costTracker.js";
 import {
   getServiceRoleClient,
@@ -20,6 +21,11 @@ import {
 } from "../../services/team/teamSupabase.js";
 import { downloadFile } from "../../services/team/teamStorage.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
+import { getLimits, updateLimits } from "../../services/team/limitsService.js";
+import {
+  getWhitelistedEmailSources,
+  clearWhitelistCache,
+} from "../../services/team/whitelistService.js";
 
 const router = Router();
 
@@ -209,6 +215,172 @@ router.get("/models-config", async (_req, res) => {
     console.warn("[team] models-config: keys-status не получен:", err.message);
   }
   return res.json(result);
+});
+
+// =========================================================================
+// GET /api/team/admin/limits
+// Жёсткие лимиты расходов (Сессия 2 этапа 2) + текущий дневной спенд.
+// =========================================================================
+
+router.get("/limits", async (_req, res) => {
+  try {
+    const limits = await getLimits();
+    const dailySpent = await getDailySpentUsd();
+    return res.json({
+      daily: {
+        limit_usd: limits.daily_limit_usd,
+        enabled: limits.daily_enabled,
+      },
+      task: {
+        limit_usd: limits.task_limit_usd,
+        enabled: limits.task_enabled,
+      },
+      daily_spent_usd: dailySpent,
+    });
+  } catch (err) {
+    console.error("[team] admin limits GET failed:", err);
+    return res.status(500).json({ error: err.message ?? "Не удалось прочитать лимиты" });
+  }
+});
+
+// =========================================================================
+// PATCH /api/team/admin/limits
+// Body: { daily_limit_usd?, daily_enabled?, task_limit_usd?, task_enabled? }
+// =========================================================================
+
+router.patch("/limits", async (req, res) => {
+  const body = req.body ?? {};
+  const patch = {};
+  if (body.daily_limit_usd !== undefined) {
+    const n = Number(body.daily_limit_usd);
+    if (!Number.isFinite(n) || n <= 0) {
+      return res.status(400).json({ error: "daily_limit_usd должен быть числом > 0" });
+    }
+    patch.daily_limit_usd = n;
+  }
+  if (body.task_limit_usd !== undefined) {
+    const n = Number(body.task_limit_usd);
+    if (!Number.isFinite(n) || n <= 0) {
+      return res.status(400).json({ error: "task_limit_usd должен быть числом > 0" });
+    }
+    patch.task_limit_usd = n;
+  }
+  if (body.daily_enabled !== undefined) {
+    if (typeof body.daily_enabled !== "boolean") {
+      return res.status(400).json({ error: "daily_enabled должен быть boolean" });
+    }
+    patch.daily_enabled = body.daily_enabled;
+  }
+  if (body.task_enabled !== undefined) {
+    if (typeof body.task_enabled !== "boolean") {
+      return res.status(400).json({ error: "task_enabled должен быть boolean" });
+    }
+    patch.task_enabled = body.task_enabled;
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: "Нет полей для обновления" });
+  }
+  try {
+    const limits = await updateLimits(patch);
+    const dailySpent = await getDailySpentUsd();
+    return res.json({
+      daily: {
+        limit_usd: limits.daily_limit_usd,
+        enabled: limits.daily_enabled,
+      },
+      task: {
+        limit_usd: limits.task_limit_usd,
+        enabled: limits.task_enabled,
+      },
+      daily_spent_usd: dailySpent,
+    });
+  } catch (err) {
+    console.error("[team] admin limits PATCH failed:", err);
+    return res.status(500).json({ error: err.message ?? "Не удалось сохранить лимиты" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/admin/security
+// Текущий whitelisted email + источник (БД / ENV).
+// =========================================================================
+
+router.get("/security", async (_req, res) => {
+  try {
+    const sources = await getWhitelistedEmailSources();
+    return res.json({
+      db_email: sources.db_email,
+      env_email: sources.env_email,
+      effective_email: sources.effective_email,
+    });
+  } catch (err) {
+    console.error("[team] admin security GET failed:", err);
+    return res.status(500).json({ error: err.message ?? "Не удалось прочитать настройки доступа" });
+  }
+});
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// =========================================================================
+// PATCH /api/team/admin/security
+// Body: { whitelisted_email: string | null }
+// Защита от самоблокировки: если задаём email отличный от текущей сессии —
+// отказ. Сброс в null (= откат к ENV) разрешён всегда.
+// =========================================================================
+
+router.patch("/security", async (req, res) => {
+  const body = req.body ?? {};
+  const value = body.whitelisted_email;
+  let normalized = null;
+  if (value !== null && value !== undefined) {
+    if (typeof value !== "string" || !EMAIL_REGEX.test(value.trim())) {
+      return res.status(400).json({ error: "whitelisted_email должен быть валидным email или null" });
+    }
+    normalized = value.trim().toLowerCase();
+  }
+  // Защита от самоблокировки: разрешено выставить либо null (= ENV fallback,
+  // мы НЕ знаем гарантированно совпадёт ли ENV с текущей сессией, но если
+  // не совпадёт — это уже было сломано до нас, и пользователь сам разрулит
+  // через Railway), либо email = email текущей сессии.
+  if (normalized !== null) {
+    const sessionEmail =
+      req.user && typeof req.user.email === "string"
+        ? req.user.email.trim().toLowerCase()
+        : null;
+    if (!sessionEmail || sessionEmail !== normalized) {
+      return res.status(400).json({
+        error:
+          "Чтобы избежать самоблокировки, можно установить только email текущей сессии. " +
+          "Войдите под нужным аккаунтом и потом изменяйте.",
+      });
+    }
+  }
+  try {
+    const client = getServiceRoleClient();
+    const { error } = await client
+      .from("team_settings")
+      .upsert(
+        {
+          key: "security",
+          whitelisted_email: normalized,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "key" },
+      );
+    if (error) {
+      throw new Error(error.message);
+    }
+    clearWhitelistCache();
+    const sources = await getWhitelistedEmailSources();
+    return res.json({
+      db_email: sources.db_email,
+      env_email: sources.env_email,
+      effective_email: sources.effective_email,
+    });
+  } catch (err) {
+    console.error("[team] admin security PATCH failed:", err);
+    return res.status(500).json({ error: err.message ?? "Не удалось сохранить настройки доступа" });
+  }
 });
 
 export default router;

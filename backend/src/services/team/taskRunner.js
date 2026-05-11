@@ -29,7 +29,7 @@ import { downloadFile, uploadFile, listFiles } from "./teamStorage.js";
 import { call as llmCall } from "./llmClient.js";
 import { buildPrompt } from "./promptBuilder.js";
 import { fetchSource } from "./contentFetcher.js";
-import { recordCall, getCostForTask } from "./costTracker.js";
+import { recordCall, getCostForTask, checkTaskLimit } from "./costTracker.js";
 import {
   TASK_HANDLERS,
   TASK_TITLES,
@@ -362,6 +362,32 @@ export async function runTaskInBackground(taskId) {
       success: true,
     });
 
+    // Жёсткий лимит стоимости одной задачи (Сессия 2 этапа 2). После каждого
+    // успешного LLM-вызова сверяем суммарную стоимость задачи с настройкой.
+    // При превышении — мягко прерываем со status='error': артефакт уже
+    // загружен в Storage (handler отработал), step_state в team_tasks не
+    // удаляется. Это даёт Владу возможность анализировать промежуточный
+    // результат или продолжить руками.
+    const taskCheck = await checkTaskLimit(taskId);
+    if (!taskCheck.allowed) {
+      const spent = Number(taskCheck.spent_usd ?? 0);
+      const limit = Number(taskCheck.limit_usd ?? 0);
+      await appendUpdate(taskId, {
+        status: "error",
+        error:
+          `Превышен лимит стоимости задачи: фактически потрачено $${spent.toFixed(2)} ` +
+          `из лимита $${limit.toFixed(2)}.`,
+        result: outcome.result ?? "",
+        artifactPath: outcome.artifactPath ?? null,
+        tokens,
+        costUsd: Number(apiEntry?.cost_usd ?? 0),
+        startedAt,
+        finishedAt: nowIso(),
+        ...(outcome.prompt ? { prompt: outcome.prompt } : {}),
+      });
+      return;
+    }
+
     const update = {
       status: "done",
       result: outcome.result ?? "",
@@ -471,6 +497,18 @@ export async function applyFragmentEditsInline({
     : "";
   if (!pointDir) {
     throw new Error(`Не удалось определить папку точки из пути ${parentPath}`);
+  }
+
+  // Жёсткий лимит стоимости задачи: правки фрагментов биллятся к родительской
+  // задаче, поэтому проверяем суммарную стоимость parent перед LLM-вызовом.
+  const preCheck = await checkTaskLimit(parentTaskId);
+  if (!preCheck.allowed) {
+    const spent = Number(preCheck.spent_usd ?? 0);
+    const limit = Number(preCheck.limit_usd ?? 0);
+    throw new Error(
+      `Превышен лимит стоимости задачи: фактически потрачено $${spent.toFixed(2)} ` +
+        `из лимита $${limit.toFixed(2)}.`,
+    );
   }
 
   const { provider, model } = await resolveModelChoice(modelChoice, "edit_text_fragments");
@@ -633,6 +671,18 @@ export async function appendQuestionToResearch({
     if (!model) {
       ({ provider, model } = await resolveModelChoice(null, "research_direct"));
     }
+  }
+
+  // Жёсткий лимит стоимости задачи: доп. вопрос биллится к parent — проверяем
+  // суммарную стоимость до LLM-вызова, чтобы не плодить лишних запросов.
+  const preCheck = await checkTaskLimit(parentTaskId);
+  if (!preCheck.allowed) {
+    const spent = Number(preCheck.spent_usd ?? 0);
+    const limit = Number(preCheck.limit_usd ?? 0);
+    throw new Error(
+      `Превышен лимит стоимости задачи: фактически потрачено $${spent.toFixed(2)} ` +
+        `из лимита $${limit.toFixed(2)}.`,
+    );
   }
 
   const params = parent.params || {};

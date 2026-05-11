@@ -5,6 +5,7 @@ import { ChevronDown, Loader2, Sparkles, X } from "lucide-react";
 import VoiceInput from "./VoiceInput";
 import ModelSelector from "./ModelSelector";
 import {
+  BackendApiError,
   previewPrompt,
   runTask,
   type PreviewPromptResult,
@@ -149,7 +150,18 @@ export default function TaskRunnerModal({
       });
       onCreated(taskId);
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : String(err));
+      // 409 — превышен дневной лимит расходов (Сессия 2 этапа 2). Показываем
+      // alert и подсказку, как поднять лимит. Форму не блокируем — пользователь
+      // может изменить лимит и сразу повторить.
+      if (err instanceof BackendApiError && err.status === 409) {
+        const message =
+          (err.message ?? "Достигнут дневной лимит расходов.") +
+          " Открой Админку → Жёсткие лимиты, чтобы поднять лимит.";
+        alert(message);
+        setSubmitError(message);
+      } else {
+        setSubmitError(err instanceof Error ? err.message : String(err));
+      }
       setSubmitting(false);
     }
   }

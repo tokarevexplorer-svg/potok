@@ -26,6 +26,7 @@ import {
 import { getTaskById } from "../../services/team/teamSupabase.js";
 import { listFiles, downloadFile } from "../../services/team/teamStorage.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
+import { checkDailyLimit } from "../../services/team/costTracker.js";
 
 const DATABASE_BUCKET = "team-database";
 
@@ -99,6 +100,22 @@ router.post("/run", async (req, res) => {
   }
 
   try {
+    // Жёсткий дневной лимит. Считаем сумму cost_usd в team_api_calls за
+    // текущие UTC-сутки и сверяем с настройкой в team_settings (запись
+    // key='limits'). При превышении возвращаем 409 — фронт покажет alert.
+    const dailyCheck = await checkDailyLimit();
+    if (!dailyCheck.allowed) {
+      const spent = Number(dailyCheck.spent_usd ?? 0);
+      const limit = Number(dailyCheck.limit_usd ?? 0);
+      return res.status(409).json({
+        error:
+          `Достигнут дневной лимит расходов: $${spent.toFixed(2)} из $${limit.toFixed(2)}. ` +
+          "Поднимите лимит в Админке или попробуйте завтра.",
+        spent_usd: spent,
+        limit_usd: limit,
+      });
+    }
+
     const taskId = await createTask({
       taskType,
       params: params || {},

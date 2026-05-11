@@ -16,9 +16,24 @@
 
 import type { ApiKeysStatus, TeamTask, TeamTaskModelChoice, TeamTaskPrompt } from "./types";
 
+// Ошибка от backend'а с HTTP-статусом и распарсенным телом. Нужна для тех
+// случаев, когда UI должен реагировать на конкретный код (например, 409 от
+// эндпоинта постановки задачи — превышен дневной лимит расходов).
+export class BackendApiError extends Error {
+  status: number;
+  data: unknown;
+  constructor(message: string, status: number, data: unknown) {
+    super(message);
+    this.name = "BackendApiError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
 // Внутренний хелпер: шлёт запрос через прокси и возвращает разобранный
-// JSON (или null, если ответ пустой). Бросает Error со строкой из {error}
-// или с HTTP-статусом, чтобы caller всегда видел понятное сообщение.
+// JSON (или null, если ответ пустой). Бросает BackendApiError со строкой
+// из {error} или с HTTP-статусом, чтобы caller всегда видел понятное
+// сообщение и при необходимости — статус и тело.
 async function backendFetch(
   path: string,
   init: RequestInit & { timeoutMs?: number } = {},
@@ -59,7 +74,7 @@ async function backendFetch(
       parsed && typeof parsed === "object" && parsed !== null && "error" in parsed
         ? String((parsed as { error: unknown }).error)
         : `HTTP ${response.status}`;
-    throw new Error(errorMsg);
+    throw new BackendApiError(errorMsg, response.status, parsed);
   }
 
   return parsed;
@@ -556,4 +571,57 @@ export async function setAlertThreshold(value: number | null): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ value }),
   });
+}
+
+// =========================================================================
+// Жёсткие лимиты и безопасность доступа (Сессия 2 этапа 2)
+// =========================================================================
+
+export interface HardLimits {
+  daily: { limit_usd: number; enabled: boolean };
+  task: { limit_usd: number; enabled: boolean };
+  daily_spent_usd: number;
+}
+
+export async function fetchHardLimits(): Promise<HardLimits> {
+  const data = await backendFetch("/api/team/admin/limits", { method: "GET" });
+  return data as HardLimits;
+}
+
+export interface HardLimitsPatch {
+  daily_limit_usd?: number;
+  daily_enabled?: boolean;
+  task_limit_usd?: number;
+  task_enabled?: boolean;
+}
+
+export async function patchHardLimits(patch: HardLimitsPatch): Promise<HardLimits> {
+  const data = await backendFetch("/api/team/admin/limits", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return data as HardLimits;
+}
+
+export interface SecuritySettings {
+  db_email: string | null;
+  env_email: string | null;
+  effective_email: string;
+}
+
+export async function fetchSecuritySettings(): Promise<SecuritySettings> {
+  const data = await backendFetch("/api/team/admin/security", { method: "GET" });
+  return data as SecuritySettings;
+}
+
+export async function patchSecuritySettings(
+  whitelisted_email: string | null,
+): Promise<SecuritySettings> {
+  const data = await backendFetch("/api/team/admin/security", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ whitelisted_email }),
+  });
+  return data as SecuritySettings;
 }

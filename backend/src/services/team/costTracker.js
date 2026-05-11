@@ -18,7 +18,14 @@
 // блок audio[provider][model] в pricing.json.
 
 import { downloadFile } from "./teamStorage.js";
-import { recordApiCall, getApiCallsByTaskId, getAllApiCalls, getSetting } from "./teamSupabase.js";
+import {
+  recordApiCall,
+  getApiCallsByTaskId,
+  getAllApiCalls,
+  getSetting,
+  getServiceRoleClient,
+} from "./teamSupabase.js";
+import { getLimits } from "./limitsService.js";
 
 const CONFIG_BUCKET = "team-config";
 const PRICING_PATH = "pricing.json";
@@ -238,4 +245,92 @@ export async function getAlertThreshold() {
   if (typeof value === "number") return value;
   if (typeof value === "object" && typeof value.value === "number") return value.value;
   return null;
+}
+
+// =========================================================================
+// Жёсткие лимиты расходов (Сессия 2 этапа 2)
+// =========================================================================
+//
+// Лимиты считаются и проверяются отдельно от «мягкого» месячного алерта
+// (`alert_threshold_usd`) — мягкий показывает баннер, жёсткие реально
+// блокируют постановку (`checkDailyLimit`) и выполнение (`checkTaskLimit`).
+
+// Сумма cost_usd из team_api_calls за текущие UTC-сутки.
+// Используется как до постановки задачи (предохранитель), так и для отображения
+// «Сегодня потрачено» в UI.
+export async function getDailySpentUsd() {
+  const client = getServiceRoleClient();
+  // 00:00 UTC сегодняшнего дня.
+  const now = new Date();
+  const startUtc = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
+  );
+  const { data, error } = await client
+    .from("team_api_calls")
+    .select("cost_usd")
+    .gte("timestamp", startUtc.toISOString());
+  if (error) {
+    console.warn("[costTracker] не удалось получить сумму расходов за день:", error.message);
+    return 0;
+  }
+  let total = 0;
+  for (const row of data ?? []) {
+    const v = Number(row?.cost_usd ?? 0);
+    if (Number.isFinite(v)) total += v;
+  }
+  return Math.round(total * 1_000_000) / 1_000_000;
+}
+
+// Сумма cost_usd по конкретной задаче. Дубликат getCostForTask, но с понятным
+// именем для интеграции с лимитом. Оставлено отдельно, чтобы при будущей
+// миграции на серверную агрегацию обе функции можно было поменять независимо.
+export async function getTaskSpentUsd(taskId) {
+  if (!taskId) return 0;
+  return await getCostForTask(taskId);
+}
+
+// Проверяет, можно ли запускать новую задачу.
+// Возвращает { allowed, spent_usd, limit_usd, enabled }.
+export async function checkDailyLimit() {
+  const limits = await getLimits();
+  const spent = await getDailySpentUsd();
+  if (!limits.daily_enabled) {
+    return {
+      allowed: true,
+      spent_usd: spent,
+      limit_usd: limits.daily_limit_usd,
+      enabled: false,
+    };
+  }
+  const limit = Number(limits.daily_limit_usd);
+  const allowed = !(Number.isFinite(limit) && spent >= limit);
+  return {
+    allowed,
+    spent_usd: spent,
+    limit_usd: Number.isFinite(limit) ? limit : null,
+    enabled: true,
+  };
+}
+
+// Проверяет, может ли конкретная задача продолжить тратить.
+// Возвращает { allowed, spent_usd, limit_usd, enabled }.
+export async function checkTaskLimit(taskId) {
+  const limits = await getLimits();
+  const spent = await getTaskSpentUsd(taskId);
+  if (!limits.task_enabled) {
+    return {
+      allowed: true,
+      spent_usd: spent,
+      limit_usd: limits.task_limit_usd,
+      enabled: false,
+    };
+  }
+  const limit = Number(limits.task_limit_usd);
+  const allowed = !(Number.isFinite(limit) && spent >= limit);
+  return {
+    allowed,
+    spent_usd: spent,
+    limit_usd: Number.isFinite(limit) ? limit : null,
+    enabled: true,
+  };
 }
