@@ -802,24 +802,34 @@ function MemorySection({ agentId }: { agentId: string }) {
         <h2 className="font-display text-lg font-semibold tracking-tight text-ink">
           Память
         </h2>
-        <div className="inline-flex rounded-xl border border-line bg-canvas p-1">
-          {[
-            { key: "rules" as const, label: "Правила" },
-            { key: "episodes" as const, label: "Эпизоды" },
-          ].map((it) => (
-            <button
-              key={it.key}
-              type="button"
-              onClick={() => setTab(it.key)}
-              className={`focus-ring rounded-lg px-3 py-1 text-xs font-medium transition ${
-                tab === it.key
-                  ? "bg-accent text-surface shadow-card"
-                  : "text-ink-muted hover:text-ink"
-              }`}
-            >
-              {it.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Сессия 15: ссылка на экран кандидатов в правила. */}
+          <Link
+            href="/blog/team/staff/candidates"
+            className="focus-ring inline-flex items-center gap-1 rounded-lg border border-line bg-surface px-2.5 py-1 text-xs font-medium text-ink-muted transition hover:border-line-strong hover:text-ink"
+            title="Сжатие эпизодов обратной связи в кандидаты в правила"
+          >
+            Кандидаты →
+          </Link>
+          <div className="inline-flex rounded-xl border border-line bg-canvas p-1">
+            {[
+              { key: "rules" as const, label: "Правила" },
+              { key: "episodes" as const, label: "Эпизоды" },
+            ].map((it) => (
+              <button
+                key={it.key}
+                type="button"
+                onClick={() => setTab(it.key)}
+                className={`focus-ring rounded-lg px-3 py-1 text-xs font-medium transition ${
+                  tab === it.key
+                    ? "bg-accent text-surface shadow-card"
+                    : "text-ink-muted hover:text-ink"
+                }`}
+              >
+                {it.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

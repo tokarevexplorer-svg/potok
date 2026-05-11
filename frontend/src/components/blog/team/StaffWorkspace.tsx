@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Archive, Loader2, Plus, User } from "lucide-react";
+import { AlertTriangle, Archive, Lightbulb, Loader2, Plus, User } from "lucide-react";
 import {
   DEPARTMENT_LABELS,
   listAgents,
@@ -10,6 +10,7 @@ import {
   type AgentStatus,
   type TeamAgent,
 } from "@/lib/team/teamAgentsService";
+import { fetchCandidates } from "@/lib/team/teamMemoryService";
 
 // Сессия 9 этапа 2: страница раздела «Сотрудники».
 //
@@ -125,6 +126,10 @@ export default function StaffWorkspace() {
   const [agents, setAgents] = useState<TeamAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Сессия 15: счётчик pending-кандидатов в правила для бейджа на ссылке
+  // «Кандидаты в правила». Загружаем один раз вместе с списком агентов;
+  // повторно не поллим — экран открывается редко.
+  const [candidatesCount, setCandidatesCount] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,6 +151,22 @@ export default function StaffWorkspace() {
       cancelled = true;
     };
   }, [statusFilter]);
+
+  // Кандидаты — отдельный запрос. Ошибки игнорируем (если бэкенд старый или
+  // эпизодов ещё нет — просто скрываем бейдж).
+  useEffect(() => {
+    let cancelled = false;
+    fetchCandidates({ pendingOnly: true })
+      .then((items) => {
+        if (!cancelled) setCandidatesCount(items.length);
+      })
+      .catch(() => {
+        if (!cancelled) setCandidatesCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isEmpty = useMemo(() => !loading && !error && agents.length === 0, [loading, error, agents.length]);
 
@@ -169,13 +190,28 @@ export default function StaffWorkspace() {
           ))}
         </div>
 
-        <Link
-          href="/blog/team/staff/create"
-          className="focus-ring inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-surface shadow-card transition hover:bg-accent-hover"
-        >
-          <Plus size={16} />
-          Добавить сотрудника
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/blog/team/staff/candidates"
+            className="focus-ring inline-flex items-center gap-2 rounded-xl border border-line bg-surface px-4 py-2 text-sm font-medium text-ink-muted shadow-card transition hover:border-line-strong hover:text-ink"
+            title="Сжатие эпизодов обратной связи в новые правила Memory"
+          >
+            <Lightbulb size={16} />
+            Кандидаты в правила
+            {typeof candidatesCount === "number" && candidatesCount > 0 && (
+              <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-accent px-1.5 text-xs font-semibold text-surface">
+                {candidatesCount}
+              </span>
+            )}
+          </Link>
+          <Link
+            href="/blog/team/staff/create"
+            className="focus-ring inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-surface shadow-card transition hover:bg-accent-hover"
+          >
+            <Plus size={16} />
+            Добавить сотрудника
+          </Link>
+        </div>
       </div>
 
       {loading && (

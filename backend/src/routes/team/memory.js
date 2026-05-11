@@ -19,11 +19,33 @@ import {
   addEpisode,
   updateMemory,
   archiveMemory,
+  getCandidates,
 } from "../../services/team/memoryService.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 
 const router = Router();
 router.use(requireAuth);
+
+// =========================================================================
+// GET /api/team/memory/candidates
+// (Сессия 15) Кандидаты в правила (type='rule', status='candidate') —
+// все агенты сразу, чтобы фронту удобно было группировать.
+// ?pending=false вернёт и одобренные/отклонённые (для архивов).
+// Важно: декларируем ДО /:agentId, иначе Express матчит 'candidates' как
+// agentId.
+// =========================================================================
+router.get("/candidates", async (req, res) => {
+  const pendingOnly = req.query.pending !== "false";
+  try {
+    const candidates = await getCandidates({ pendingOnly });
+    return res.json({ candidates });
+  } catch (err) {
+    console.error("[team/memory] candidates failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось получить кандидатов в правила" });
+  }
+});
 
 // =========================================================================
 // GET /api/team/memory/:agentId

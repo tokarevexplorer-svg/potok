@@ -232,6 +232,29 @@ export async function updateMemory(id, fields = {}) {
   if (!data) {
     throw new Error(`Запись памяти ${id} не найдена.`);
   }
+
+  // Сессия 15: при отклонении кандидата с привязанными эпизодами помечаем
+  // их dismissed в team_feedback_episodes, чтобы при следующем сжатии они
+  // не всплыли снова в новых кандидатах.
+  if (
+    fields.status === "rejected" &&
+    Array.isArray(data.source_episode_ids) &&
+    data.source_episode_ids.length > 0
+  ) {
+    const { error: dismissErr } = await client
+      .from("team_feedback_episodes")
+      .update({ status: "dismissed" })
+      .in("id", data.source_episode_ids)
+      .eq("status", "active");
+    if (dismissErr) {
+      // Не валим основной поток — кандидат уже отрицательно отрецензирован.
+      // Логируем для будущей диагностики.
+      console.warn(
+        `[memoryService] не удалось пометить source-эпизоды как dismissed: ${dismissErr.message}`,
+      );
+    }
+  }
+
   return data;
 }
 
@@ -285,6 +308,36 @@ export async function getMemoryStats(agentId) {
     if (r.status === "archived") stats.archivedCount += 1;
   }
   return stats;
+}
+
+// =========================================================================
+// Кандидаты в правила (Сессия 15)
+// =========================================================================
+
+// Все кандидаты в правила (status='candidate'), сгруппированы агентом.
+// Поле team_agents.display_name для отображения в шапке группы.
+// pending=true фильтрует только не отрецензированные; иначе — все кандидаты.
+export async function getCandidates({ pendingOnly = true } = {}) {
+  const client = getServiceRoleClient();
+  // Тащим всех кандидатов одним запросом + JOIN на team_agents для имени.
+  // PostgREST синтаксис: `team_agents!inner(display_name, role_title)`.
+  // !inner — INNER JOIN (кандидаты с удалённым агентом отвалятся, но это и
+  // правильно: каскад уже должен был удалить запись памяти при удалении агента).
+  let query = client
+    .from(TABLE)
+    .select(
+      "*, agent:team_agents!inner(id, display_name, role_title, avatar_url, department, status)",
+    )
+    .eq("type", "rule")
+    .order("created_at", { ascending: false });
+  if (pendingOnly) {
+    query = query.eq("status", "candidate");
+  }
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`Не удалось получить кандидатов в правила: ${error.message}`);
+  }
+  return data ?? [];
 }
 
 // Идемпотентная вставка правила: если у агента уже есть active-правило с

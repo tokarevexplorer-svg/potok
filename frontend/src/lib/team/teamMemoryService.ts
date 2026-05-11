@@ -120,3 +120,31 @@ export async function archiveMemoryItem(id: string): Promise<TeamMemoryItem> {
   if (!obj.item) throw new Error("Бэкенд не вернул запись памяти");
   return obj.item;
 }
+
+// =========================================================================
+// Сессия 15: кандидаты в правила (status='candidate')
+// =========================================================================
+
+// Кандидат + развёрнутая ссылка на агента (PostgREST join'ит team_agents
+// под ключ `agent` — см. memoryService.getCandidates).
+export interface CandidateAgentRef {
+  id: string;
+  display_name: string;
+  role_title: string | null;
+  avatar_url: string | null;
+  department: string | null;
+  status: string;
+}
+
+export type MemoryCandidate = TeamMemoryItem & {
+  agent: CandidateAgentRef;
+};
+
+export async function fetchCandidates(
+  { pendingOnly = true }: { pendingOnly?: boolean } = {},
+): Promise<MemoryCandidate[]> {
+  const qs = pendingOnly ? "" : "?pending=false";
+  const data = await fetchMemory(`/candidates${qs}`, { method: "GET" });
+  const obj = (data ?? {}) as { candidates?: MemoryCandidate[] };
+  return obj.candidates ?? [];
+}
