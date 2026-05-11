@@ -65,8 +65,8 @@ export async function getCurrentEmail(): Promise<string | null> {
 // Server-only: ходит напрямую в BACKEND_URL, подкладывая Authorization Bearer.
 // Возвращает «сырое» Response — caller сам разбирает JSON/обрабатывает статусы.
 //
-// Для клиентских компонентов используйте `teamBackendClient.ts` — он сам
-// сделает выбор пути (proxy vs direct) и распарсит ответ.
+// Для клиентских компонентов используйте `teamBackendClient.ts` — он идёт
+// через прокси `/api/team-proxy/*`, который сам подкладывает auth.
 export async function fetchBackend(
   path: string,
   init: RequestInit & { timeoutMs?: number } = {},
@@ -97,4 +97,20 @@ export async function fetchBackend(
     signal: AbortSignal.timeout(timeoutMs),
     cache: "no-store",
   });
+}
+
+// Удобный server-side хелпер: GET + JSON-парсинг + try/catch.
+// Возвращает null на любой ошибке (нет сессии, бэкенд не отвечает, не-OK
+// статус). Подходит для дашбордов, где «не получилось» = «показать —».
+export async function fetchBackendJsonSafe<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetchBackend(path, { method: "GET" });
+    if (!res.ok) return null;
+    const text = await res.text();
+    if (!text) return null;
+    return JSON.parse(text) as T;
+  } catch (err) {
+    console.warn(`[apiClient] fetchBackendJsonSafe(${path}) failed:`, err);
+    return null;
+  }
 }

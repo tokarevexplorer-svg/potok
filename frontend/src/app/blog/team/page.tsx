@@ -11,7 +11,8 @@ import TeamPageHeader from "@/components/blog/team/TeamPageHeader";
 import TeamSectionCard from "@/components/blog/team/TeamSectionCard";
 import TeamStatTile from "@/components/blog/team/TeamStatTile";
 import { formatUsd, pluralize } from "@/lib/team/format";
-import { fetchKeysStatusSafe } from "@/lib/team/teamBackendClient";
+import { fetchBackendJsonSafe } from "@/lib/apiClient";
+import type { ApiKeysStatus } from "@/lib/team/types";
 import { fetchTeamOverview } from "@/lib/team/teamOverviewService";
 
 export const metadata = {
@@ -27,7 +28,7 @@ export default async function TeamPage() {
   // через бэкенд: если Railway недоступен, страница всё равно отрендерится.
   const [overview, keysStatus] = await Promise.all([
     fetchTeamOverview(),
-    fetchKeysStatusSafe(),
+    fetchBackendJsonSafe<ApiKeysStatus>("/api/team/admin/keys-status"),
   ]);
 
   const allKeysOk =
