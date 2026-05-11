@@ -45,6 +45,7 @@
  */
 
 import { downloadFile, listFiles } from "./teamStorage.js";
+import { getRulesForAgent } from "./memoryService.js";
 
 // {{name}} — буквы латиницы, цифры и underscore. Регистр важен.
 // Пробелы внутри {{ name }} разрешены. Совпадает с Python-версией.
@@ -206,17 +207,25 @@ async function loadGoals() {
   return await loadStorageFile(GOALS_PATH);
 }
 
-// Memory — динамический слой из БД (таблица team_agent_memory, этап 1 пункт 3).
-// Сейчас заглушка: возвращает пустой массив, потому что таблицы ещё нет.
-// Когда появится — здесь будет SELECT * FROM team_agent_memory WHERE agent_id = ?
-// (а ошибка отсутствия таблицы по-прежнему молчаливо превратится в [] — try/catch
-// гарантирует, что промпт-сборка не падает).
+// Memory — динамический слой из БД (таблица team_agent_memory, миграция 0016,
+// Сессия 8). Берём только активные правила (status='active', type='rule') и
+// возвращаем массив строк-текстов для formatMemoryAsMarkdown.
+//
+// Эпизоды (type='episode') в промпт НЕ попадают — они нужны Curator'у
+// (этап 2, пункт 9) для формирования кандидатов в правила.
+//
+// Если agentId не передан или БД недоступна — возвращаем []. Слой пропускается
+// без шумных ошибок: промпт-сборка не должна падать из-за временной недоступности
+// памяти. Если ошибка регулярная, она всё равно вылезет в логах сервиса.
 async function loadMemoryRules(agentId) {
   if (!agentId) return [];
-  // TODO(этап 1 пункт 3, Сессия 7): SELECT rule_text FROM team_agent_memory
-  //   WHERE agent_id = $1 AND active = true ORDER BY created_at.
-  // Пока таблица не создана — возвращаем пусто, без логов.
-  return [];
+  try {
+    const rules = await getRulesForAgent(agentId);
+    return rules.map((r) => r?.content).filter((t) => typeof t === "string" && t.trim());
+  } catch (err) {
+    console.warn(`[promptBuilder] не удалось загрузить правила для ${agentId}: ${err?.message ?? err}`);
+    return [];
+  }
 }
 
 // Превращает массив правил в markdown-блок `## Правила из памяти\n- ...`.
