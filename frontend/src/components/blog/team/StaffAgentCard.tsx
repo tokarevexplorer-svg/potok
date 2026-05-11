@@ -36,6 +36,7 @@ import {
   Play,
   Plus,
   Save,
+  Sparkles,
   Trash2,
   User,
   X,
@@ -68,6 +69,7 @@ import {
   fetchModelsConfig,
   type FeedbackEpisode,
 } from "@/lib/team/teamBackendClient";
+import TaskCreationModal from "./TaskCreationModal";
 
 interface Props {
   agentId: string;
@@ -84,6 +86,8 @@ export default function StaffAgentCard({ agentId }: Props) {
   const [agent, setAgent] = useState<TeamAgent | null>(null);
   const [state, setState] = useState<LoadingState>("loading");
   const [error, setError] = useState<string | null>(null);
+  // Сессия 17: модалка постановки задачи с preset'ом этого агента.
+  const [launchOpen, setLaunchOpen] = useState(false);
 
   const reloadAgent = useCallback(async () => {
     try {
@@ -174,13 +178,26 @@ export default function StaffAgentCard({ agentId }: Props) {
         showBackLink
       />
       <div className="mt-8 flex flex-col gap-6">
-        <HeaderCard agent={agent} onUpdated={reloadAgent} />
+        <HeaderCard
+          agent={agent}
+          onUpdated={reloadAgent}
+          onLaunchTask={() => setLaunchOpen(true)}
+        />
         <AboutSection agent={agent} onUpdated={reloadAgent} />
         <RoleSection agent={agent} onSavedRole={reloadAgent} />
         <MemorySection agentId={agent.id} />
-        <AccessSection />
+        <AccessSection agent={agent} onUpdated={reloadAgent} />
         <HistorySection agentId={agent.id} />
       </div>
+
+      {launchOpen && (
+        <TaskCreationModal
+          open
+          presetAgentId={agent.id}
+          onClose={() => setLaunchOpen(false)}
+          onCreated={() => setLaunchOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -192,9 +209,11 @@ export default function StaffAgentCard({ agentId }: Props) {
 function HeaderCard({
   agent,
   onUpdated,
+  onLaunchTask,
 }: {
   agent: TeamAgent;
   onUpdated: () => Promise<void>;
+  onLaunchTask?: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -340,11 +359,16 @@ function HeaderCard({
           )}
           <button
             type="button"
-            disabled
-            title="Появится в следующем обновлении"
-            className="focus-ring inline-flex items-center gap-1.5 rounded-xl border border-dashed border-line bg-canvas px-3 py-1.5 text-sm text-ink-faint"
+            onClick={() => onLaunchTask?.()}
+            disabled={agent.status === "archived"}
+            title={
+              agent.status === "archived"
+                ? "Восстанови сотрудника, чтобы ставить задачи"
+                : "Открыть форму постановки задачи с этим агентом"
+            }
+            className="focus-ring inline-flex items-center gap-1.5 rounded-xl bg-accent px-3 py-1.5 text-sm font-semibold text-surface transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <ChevronRight size={14} />
+            <Sparkles size={14} />
             Поставить задачу
           </button>
         </div>
@@ -1290,22 +1314,157 @@ function episodeScoreBadgeClass(score: number | null): string {
 // Секция «Доступы» — placeholder
 // ---------------------------------------------------------------------------
 
-function AccessSection() {
+// Каталог шаблонов задач — фронт-only, чтобы не дёргать
+// /api/team/tasks/templates ради одного UI. Если в этап 3 добавятся новые
+// шаблоны, их нужно будет завести и сюда.
+const TASK_TEMPLATE_LABELS: Record<string, string> = {
+  research_direct: "Исследовать напрямую",
+  ideas_questions_for_research: "Идеи и вопросы (под исследование)",
+  ideas_free: "Идеи и вопросы (свободные)",
+  write_text: "Написать текст",
+  edit_text_fragments: "Правки фрагментов",
+};
+const ALL_TASK_TEMPLATE_KEYS = Object.keys(TASK_TEMPLATE_LABELS);
+
+function AccessSection({
+  agent,
+  onUpdated,
+}: {
+  agent: TeamAgent;
+  onUpdated: () => Promise<void>;
+}) {
   return (
     <section className="flex flex-col gap-3 rounded-2xl border border-line bg-elevated p-6 shadow-card">
       <h2 className="font-display text-lg font-semibold tracking-tight text-ink">
         Доступы
       </h2>
       <p className="text-xs text-ink-faint">
-        Тонкая настройка прав — в следующих этапах. Сейчас агенту доступно то
-        же, что и любой задаче из дашборда.
+        Тонкая настройка прав для базы данных и инструментов появится в
+        следующих обновлениях. Сейчас доступно — управление шаблонами задач,
+        которые сотрудник может выполнять.
       </p>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <PlaceholderBlock title="Базы данных" />
         <PlaceholderBlock title="Доступные инструменты" />
-        <PlaceholderBlock title="Доступные шаблоны задач" />
+        <TaskTemplatesBlock agent={agent} onUpdated={onUpdated} />
       </div>
     </section>
+  );
+}
+
+// Сессия 17: рабочий мультиселект шаблонов задач.
+// Пустой allowed_task_templates трактуется как «разрешено всё» (бэкенд тоже
+// так понимает в /tasks/run validation).
+function TaskTemplatesBlock({
+  agent,
+  onUpdated,
+}: {
+  agent: TeamAgent;
+  onUpdated: () => Promise<void>;
+}) {
+  const [selected, setSelected] = useState<string[]>(
+    Array.isArray(agent.allowed_task_templates) ? agent.allowed_task_templates : [],
+  );
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // При смене агента (между карточками) — сбрасываем локальный selected на
+  // актуальный из props.
+  useEffect(() => {
+    setSelected(
+      Array.isArray(agent.allowed_task_templates) ? agent.allowed_task_templates : [],
+    );
+  }, [agent.id, agent.allowed_task_templates]);
+
+  function toggle(key: string) {
+    setSelected((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
+  }
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await apiUpdateAgent(agent.id, { allowed_task_templates: selected });
+      await onUpdated();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const initial = Array.isArray(agent.allowed_task_templates)
+    ? agent.allowed_task_templates
+    : [];
+  const dirty =
+    initial.length !== selected.length ||
+    initial.some((k) => !selected.includes(k));
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line bg-canvas px-3 py-3">
+      <span className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
+        Шаблоны задач
+      </span>
+      <p className="text-[11px] text-ink-faint">
+        {selected.length === 0
+          ? "Не выбрано — сотруднику разрешены все шаблоны."
+          : `Разрешено: ${selected.length} из ${ALL_TASK_TEMPLATE_KEYS.length}.`}
+      </p>
+      <ul className="flex flex-col gap-1.5">
+        {ALL_TASK_TEMPLATE_KEYS.map((key) => {
+          const checked = selected.includes(key);
+          return (
+            <li key={key}>
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-ink">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(key)}
+                  className="accent-accent"
+                  disabled={saving}
+                />
+                {TASK_TEMPLATE_LABELS[key] ?? key}
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      {err && (
+        <p className="rounded-md bg-accent-soft px-2 py-1 text-[11px] text-accent">
+          {err}
+        </p>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        {dirty && (
+          <button
+            type="button"
+            onClick={() =>
+              setSelected(
+                Array.isArray(agent.allowed_task_templates)
+                  ? agent.allowed_task_templates
+                  : [],
+              )
+            }
+            disabled={saving}
+            className="focus-ring inline-flex h-8 items-center rounded-md border border-line bg-surface px-2.5 text-xs font-medium text-ink-muted transition hover:text-ink disabled:opacity-50"
+          >
+            Сбросить
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={save}
+          disabled={!dirty || saving}
+          className="focus-ring inline-flex h-8 items-center gap-1 rounded-md bg-accent px-2.5 text-xs font-semibold text-surface shadow-card transition hover:bg-accent-hover disabled:opacity-50"
+        >
+          {saving ? <Loader2 size={12} className="animate-spin" /> : null}
+          Сохранить
+        </button>
+      </div>
+    </div>
   );
 }
 

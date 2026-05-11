@@ -1,15 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, GitBranch, Loader2, Sparkles, X } from "lucide-react";
+import { ChevronDown, GitBranch, Loader2, Plus, Sparkles, X } from "lucide-react";
 import VoiceInput from "./VoiceInput";
 import ModelSelector from "./ModelSelector";
 import {
   BackendApiError,
+  createProject,
+  fetchProjects,
   previewPrompt,
   runTask,
   type PreviewPromptResult,
   type PromptLayersSummary,
+  type TeamProject,
 } from "@/lib/team/teamBackendClient";
 import { listAgents, type TeamAgent } from "@/lib/team/teamAgentsService";
 import type { SuggestedNextStep, TeamTaskModelChoice } from "@/lib/team/types";
@@ -37,6 +40,10 @@ interface TaskRunnerModalProps {
   onCreated: (taskId: string) => void;
   // Сессия 13: опц. handoff-контекст. Без него — обычный запуск задачи.
   handoff?: HandoffContext | null;
+  // Сессия 17: id агента, преданного из шага 2 TaskCreationModal или из
+  // кнопки «Поставить задачу» в карточке сотрудника. Если задан — селект
+  // агента в форме блокируется (Влад уже выбрал на предыдущем шаге).
+  presetAgentId?: string | null;
 }
 
 // Параметры задачи, которые UI собирает из формы. Снепшот специфичен для
@@ -53,11 +60,13 @@ export default function TaskRunnerModal({
   onClose,
   onCreated,
   handoff = null,
+  presetAgentId = null,
 }: TaskRunnerModalProps) {
   const [params, setParams] = useState<TaskParams>({});
   const [modelChoice, setModelChoice] = useState<TeamTaskModelChoice>(DEFAULT_MODEL);
   const [title, setTitle] = useState("");
   // Сессия 12: выбор сотрудника. null = «без агента» (старое поведение).
+  // Сессия 17: при presetAgentId — выставляется при mount и блокируется.
   const [agentId, setAgentId] = useState<string | null>(null);
   const [agents, setAgents] = useState<TeamAgent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
@@ -65,6 +74,14 @@ export default function TaskRunnerModal({
   // По умолчанию true: бриф без контекста почти всегда бесполезен новому
   // агенту. Влад может отключить, если хочет «чистую» задачу.
   const [attachParentArtifact, setAttachParentArtifact] = useState(true);
+  // Сессия 16/17: проект-тег задачи. null = «без проекта». При создании
+  // нового проекта inline сразу выставляется в state.
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<TeamProject[]>([]);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  // Сессия 17: чекбокс «Самопроверка» — заглушка до Сессии 29.
+  const [selfReview, setSelfReview] = useState(false);
 
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptPreview, setPromptPreview] = useState<PreviewPromptResult | null>(null);
@@ -90,8 +107,13 @@ export default function TaskRunnerModal({
       setParams(initialParams);
       setModelChoice(DEFAULT_MODEL);
       setTitle("");
-      setAgentId(null);
+      // Сессия 17: presetAgentId фиксирует агента, иначе старт без агента.
+      setAgentId(presetAgentId ?? null);
       setAttachParentArtifact(true);
+      setProjectId(null);
+      setCreatingProject(false);
+      setNewProjectName("");
+      setSelfReview(false);
       setPromptOpen(false);
       setPromptPreview(null);
       setPromptError(null);
@@ -101,7 +123,7 @@ export default function TaskRunnerModal({
       setSubmitError(null);
       setSubmitting(false);
     }
-  }, [open, taskType, handoff]);
+  }, [open, taskType, handoff, presetAgentId]);
 
   // Подтягиваем активных агентов при открытии — список нужен и до сборки
   // промпта, и при отправке. Ошибку не показываем как блокер — пустой
@@ -118,7 +140,10 @@ export default function TaskRunnerModal({
         // имя из Suggested Next Step с display_name активного агента
         // (case-insensitive, ищем подстроку в обе стороны — модель часто
         // даёт сокращённое имя «Маша» вместо полного «Маша-разведчик»).
-        if (handoff?.suggestion?.agent_name) {
+        // Сессия 17: presetAgentId выигрывает у Suggested.
+        if (presetAgentId) {
+          setAgentId(presetAgentId);
+        } else if (handoff?.suggestion?.agent_name) {
           const needle = handoff.suggestion.agent_name.trim().toLowerCase();
           const match = list.find((a) => {
             const name = a.display_name.toLowerCase();
@@ -133,10 +158,18 @@ export default function TaskRunnerModal({
       .finally(() => {
         if (!cancelled) setAgentsLoading(false);
       });
+    // Сессия 16/17: список проектов для select'а «Проект».
+    fetchProjects("active")
+      .then((items) => {
+        if (!cancelled) setProjects(items);
+      })
+      .catch(() => {
+        if (!cancelled) setProjects([]);
+      });
     return () => {
       cancelled = true;
     };
-  }, [open, handoff]);
+  }, [open, handoff, presetAgentId]);
 
   // Esc + блокировка скролла фона.
   useEffect(() => {
@@ -225,6 +258,8 @@ export default function TaskRunnerModal({
         // Сессия 13: handoff поля. Бэкенд игнорирует, если null.
         parentTaskId: handoff?.parentTaskId ?? null,
         attachParentArtifact: handoff ? attachParentArtifact : undefined,
+        // Сессия 16/17: проект-тег.
+        projectId,
       });
       onCreated(taskId);
     } catch (err) {
@@ -342,6 +377,7 @@ export default function TaskRunnerModal({
             agents={agents}
             loading={agentsLoading}
             value={agentId}
+            disabled={!!presetAgentId}
             onChange={(id) => {
               setAgentId(id);
               // Превью с другим агентом будет другим — сбрасываем кеш, чтобы
@@ -352,6 +388,47 @@ export default function TaskRunnerModal({
               setUserDraft("");
             }}
           />
+
+          {/* Сессия 16/17: проект-тег задачи. */}
+          <ProjectSelectField
+            projects={projects}
+            value={projectId}
+            onChange={setProjectId}
+            creating={creatingProject}
+            newName={newProjectName}
+            onCreatingChange={setCreatingProject}
+            onNewNameChange={setNewProjectName}
+            onCreate={async () => {
+              const name = newProjectName.trim();
+              if (!name) return;
+              try {
+                const project = await createProject({ name });
+                setProjects((prev) => [project, ...prev]);
+                setProjectId(project.id);
+                setCreatingProject(false);
+                setNewProjectName("");
+              } catch (err) {
+                setSubmitError(err instanceof Error ? err.message : String(err));
+              }
+            }}
+          />
+
+          {/* Сессия 17: «Самопроверка» — заглушка до Сессии 29. */}
+          <label className="flex items-center gap-2 text-sm text-ink-muted">
+            <input
+              type="checkbox"
+              checked={selfReview}
+              onChange={(e) => setSelfReview(e.target.checked)}
+              disabled
+              className="accent-accent"
+            />
+            <span className="opacity-70">
+              🔍 Самопроверка{" "}
+              <span className="text-xs italic">
+                (появится в Сессии 29 — пока флажок неактивен)
+              </span>
+            </span>
+          </label>
 
           <label className="flex flex-col gap-2">
             <span className="text-sm font-medium text-ink">
@@ -743,25 +820,33 @@ function AgentSelectField({
   loading,
   value,
   onChange,
+  disabled = false,
 }: {
   agents: TeamAgent[];
   loading: boolean;
   value: string | null;
   onChange: (id: string | null) => void;
+  disabled?: boolean;
 }) {
   const noAgents = !loading && agents.length === 0;
   return (
     <label className="flex flex-col gap-2">
       <span className="text-sm font-medium text-ink">
         Сотрудник
-        <span className="ml-2 text-xs font-normal text-ink-faint">
-          (необязательно — без выбора задача собирается как раньше)
-        </span>
+        {disabled ? (
+          <span className="ml-2 text-xs font-normal text-ink-faint">
+            (выбран на предыдущем шаге)
+          </span>
+        ) : (
+          <span className="ml-2 text-xs font-normal text-ink-faint">
+            (необязательно — без выбора задача собирается как раньше)
+          </span>
+        )}
       </span>
       <select
         value={value ?? ""}
         onChange={(e) => onChange(e.target.value || null)}
-        disabled={loading || noAgents}
+        disabled={disabled || loading || noAgents}
         className="focus-ring h-11 rounded-xl border border-line bg-canvas px-4 text-sm text-ink disabled:opacity-60"
       >
         <option value="">
@@ -782,6 +867,89 @@ function AgentSelectField({
         })}
       </select>
     </label>
+  );
+}
+
+// Сессия 16/17: select проекта-тега + inline-создание.
+function ProjectSelectField({
+  projects,
+  value,
+  onChange,
+  creating,
+  newName,
+  onCreatingChange,
+  onNewNameChange,
+  onCreate,
+}: {
+  projects: TeamProject[];
+  value: string | null;
+  onChange: (id: string | null) => void;
+  creating: boolean;
+  newName: string;
+  onCreatingChange: (v: boolean) => void;
+  onNewNameChange: (v: string) => void;
+  onCreate: () => void | Promise<void>;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-sm font-medium text-ink">
+        Проект
+        <span className="ml-2 text-xs font-normal text-ink-faint">
+          (необязательно — задача может быть «⚪ Без проекта»)
+        </span>
+      </span>
+      {creating ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => onNewNameChange(e.target.value)}
+            placeholder="Название нового проекта"
+            className="focus-ring h-11 flex-1 rounded-xl border border-line bg-canvas px-4 text-sm text-ink"
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => void onCreate()}
+            disabled={!newName.trim()}
+            className="focus-ring inline-flex h-11 items-center rounded-xl bg-accent px-4 text-sm font-semibold text-surface shadow-card transition hover:bg-accent-hover disabled:opacity-50"
+          >
+            Создать
+          </button>
+          <button
+            type="button"
+            onClick={() => onCreatingChange(false)}
+            className="focus-ring inline-flex h-11 items-center rounded-xl border border-line bg-surface px-3 text-sm font-medium text-ink-muted transition hover:text-ink"
+          >
+            Отмена
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={value ?? ""}
+            onChange={(e) => onChange(e.target.value || null)}
+            className="focus-ring h-11 flex-1 rounded-xl border border-line bg-canvas px-4 text-sm text-ink"
+          >
+            <option value="">⚪ Без проекта</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => onCreatingChange(true)}
+            title="Создать новый проект"
+            className="focus-ring inline-flex h-11 items-center gap-1 rounded-xl border border-line bg-surface px-3 text-sm font-medium text-ink-muted transition hover:border-line-strong hover:text-ink"
+          >
+            <Plus size={14} />
+            Новый
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bell } from "lucide-react";
+import { Bell, Sparkles } from "lucide-react";
 import type { TeamTask } from "@/lib/team/types";
 import { fetchTeamTasksFromBrowser } from "@/lib/team/teamTasksService";
 import { listAgents, type TeamAgent } from "@/lib/team/teamAgentsService";
@@ -15,6 +15,7 @@ import TaskLogFilters, {
   applyTaskFilters,
   type FilterState,
 } from "./TaskLogFilters";
+import TaskCreationModal from "./TaskCreationModal";
 import TaskRunnerModal from "./TaskRunnerModal";
 import TaskViewerModal from "./TaskViewerModal";
 
@@ -39,6 +40,8 @@ interface TeamWorkspaceProps {
 export default function TeamWorkspace({ initialTasks }: TeamWorkspaceProps) {
   const [tasks, setTasks] = useState<TeamTask[]>(initialTasks);
   const [runner, setRunner] = useState<{ taskType: string; title: string } | null>(null);
+  // Сессия 17: мастер из 3 шагов (выбор агента → шаблон → форма).
+  const [creationOpen, setCreationOpen] = useState(false);
   const [viewerTaskId, setViewerTaskId] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
 
@@ -208,6 +211,28 @@ export default function TeamWorkspace({ initialTasks }: TeamWorkspaceProps) {
         />
       )}
 
+      {/* Сессия 17: основная кнопка постановки задачи открывает 3-шаговый
+          мастер. ActionGrid остаётся как быстрый путь «по типу задачи». */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-5 py-4">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="font-display text-lg font-semibold tracking-tight text-ink">
+            Поставить задачу
+          </h2>
+          <p className="text-sm text-ink-muted">
+            Выбор сотрудника → шаблон → бриф. Старый быстрый запуск по типу
+            задачи — ниже.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setCreationOpen(true)}
+          className="focus-ring inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-5 text-sm font-semibold text-surface shadow-card transition hover:bg-accent-hover"
+        >
+          <Sparkles size={16} />
+          Поставить задачу
+        </button>
+      </div>
+
       <ActionGrid onLaunch={handleLaunch} />
 
       {pollError && (
@@ -268,6 +293,17 @@ export default function TeamWorkspace({ initialTasks }: TeamWorkspaceProps) {
           taskTitle={runner.title}
           onClose={() => setRunner(null)}
           onCreated={handleTaskCreated}
+        />
+      )}
+
+      {creationOpen && (
+        <TaskCreationModal
+          open
+          onClose={() => setCreationOpen(false)}
+          onCreated={(taskId) => {
+            setCreationOpen(false);
+            setViewerTaskId(taskId);
+          }}
         />
       )}
 

@@ -24,6 +24,7 @@ import {
   appendQuestionToResearch,
 } from "../../services/team/taskRunner.js";
 import { getTaskById, getChildTasks } from "../../services/team/teamSupabase.js";
+import { getAgent } from "../../services/team/agentService.js";
 import { listFiles, downloadFile } from "../../services/team/teamStorage.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { checkDailyLimit } from "../../services/team/costTracker.js";
@@ -154,6 +155,34 @@ router.post("/run", async (req, res) => {
     return res
       .status(400)
       .json({ error: "projectId должен быть строкой (id проекта) или null." });
+  }
+
+  // Сессия 17: если выбран агент и у него непустой allowed_task_templates,
+  // запрошенный taskType должен входить в этот список. Иначе 400 — иначе
+  // Влад мог бы запустить шаблон, который ему не разрешён в карточке агента.
+  // Пустой allowed_task_templates = «разрешено всё» (старое поведение
+  // этапа 1, когда поля ещё не было).
+  if (normalizedAgentId) {
+    try {
+      const agent = await getAgent(normalizedAgentId);
+      const allowed = Array.isArray(agent?.allowed_task_templates)
+        ? agent.allowed_task_templates
+        : [];
+      if (allowed.length > 0 && !allowed.includes(taskType)) {
+        return res.status(400).json({
+          error:
+            `Этот шаблон задачи не разрешён для сотрудника «${agent.display_name}». ` +
+            `Добавь его в раздел «Доступы → Шаблоны задач» в карточке сотрудника.`,
+        });
+      }
+    } catch (err) {
+      // Если агента не нашли — пускаем дальше, mergeSnapshot / FK даст
+      // понятную ошибку. Падать тут раньше времени не имеет смысла.
+      console.warn(
+        `[team/tasks] не удалось получить агента ${normalizedAgentId} для allowlist:`,
+        err?.message ?? err,
+      );
+    }
   }
 
   try {
