@@ -1,19 +1,30 @@
 "use client";
 
-import { ArrowLeftFromLine, Cpu, GitBranch, Loader2 } from "lucide-react";
+import { ArrowLeftFromLine, Cpu, GitBranch, Loader2, User } from "lucide-react";
 import type { TeamTask } from "@/lib/team/types";
+import type { TeamAgent } from "@/lib/team/teamAgentsService";
+import type { TeamProject } from "@/lib/team/teamBackendClient";
 import { formatUsd } from "@/lib/team/format";
 import { formatRelative, statusBadge, taskTypeLabel } from "./taskTypeMeta";
 
 interface TaskCardProps {
   task: TeamTask;
   onClick: () => void;
+  // Сессия 16: справочники, чтобы показать имя агента и плашку проекта
+  // на карточке. Оба опциональны — без них отрисуем без этих элементов.
+  agentsById?: Map<string, TeamAgent>;
+  projectsById?: Map<string, TeamProject>;
 }
 
 // Карточка одной задачи в канбане. Стиль повторяет TeamSectionCard и
 // TeamStatTile из Сессии 28: rounded-xl + border, hover-эффект — приподнимается.
 // Цветовое кодирование статуса — через бейдж сверху.
-export default function TaskCard({ task, onClick }: TaskCardProps) {
+export default function TaskCard({
+  task,
+  onClick,
+  agentsById,
+  projectsById,
+}: TaskCardProps) {
   const badge = statusBadge(task.status);
   const isRunning = task.status === "running";
   const isError = task.status === "error";
@@ -22,6 +33,10 @@ export default function TaskCard({ task, onClick }: TaskCardProps) {
   // markdown-разметки (## заголовки, **жирность* и т.д.) — на карточке нужен
   // чистый текст. Полный результат открывается в TaskViewerModal.
   const preview = task.result ? stripMarkdown(task.result).slice(0, 220) : null;
+
+  // Сессия 16: справочники имени агента и проекта для подписи под заголовком.
+  const agent = task.agentId ? agentsById?.get(task.agentId) ?? null : null;
+  const project = task.projectId ? projectsById?.get(task.projectId) ?? null : null;
 
   return (
     <button
@@ -49,6 +64,27 @@ export default function TaskCard({ task, onClick }: TaskCardProps) {
         <h3 className="line-clamp-2 font-display text-base font-semibold leading-snug tracking-tight text-ink">
           {task.title || "(без названия)"}
         </h3>
+        {/* Сессия 16: подпись агента + проект. Только если переданы
+            справочники. Project с db_type, name отдаём как chip. */}
+        {(agent || project || task.agentId) && (
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px]">
+            {(agent || task.agentId) && (
+              <span className="inline-flex items-center gap-1 text-ink-muted">
+                <User size={11} />
+                {agent?.display_name ?? task.agentId}
+              </span>
+            )}
+            {project ? (
+              <span className="inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent">
+                {project.name}
+              </span>
+            ) : task.projectId === null && task.agentId ? (
+              <span className="inline-flex items-center rounded-full bg-canvas px-2 py-0.5 text-ink-muted">
+                ⚪ Без проекта
+              </span>
+            ) : null}
+          </div>
+        )}
         {/* Сессия 13: визуальные пометки цепочки задач. ← для дочерней,
             🔗 если агент в финале предложил передать дальше. Подробности —
             в TaskViewerModal. */}

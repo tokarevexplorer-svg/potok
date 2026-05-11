@@ -3,12 +3,17 @@
 import { useMemo, useState } from "react";
 import { Archive, ChevronDown } from "lucide-react";
 import type { TeamTask } from "@/lib/team/types";
+import type { TeamAgent } from "@/lib/team/teamAgentsService";
+import type { TeamProject } from "@/lib/team/teamBackendClient";
 import TaskCard from "./TaskCard";
 import { KANBAN_COLUMNS, statusToColumn } from "./taskTypeMeta";
 
 interface KanbanLogProps {
   tasks: TeamTask[];
   onOpenTask: (task: TeamTask) => void;
+  // Сессия 16: справочники для подписей на карточках.
+  agentsById?: Map<string, TeamAgent>;
+  projectsById?: Map<string, TeamProject>;
 }
 
 // Канбан-лог задач: три колонки в верхней сетке (В работе / Готово к ревью /
@@ -18,7 +23,12 @@ interface KanbanLogProps {
 // Архивированные и hidden-типы (edit_text_fragments) сюда не попадают:
 // первые — потому что архив отдельным блоком, вторые — потому что они
 // биллятся к родительской write_text задаче и отдельной карточкой не нужны.
-export default function KanbanLog({ tasks, onOpenTask }: KanbanLogProps) {
+export default function KanbanLog({
+  tasks,
+  onOpenTask,
+  agentsById,
+  projectsById,
+}: KanbanLogProps) {
   const [archiveOpen, setArchiveOpen] = useState(false);
 
   const visible = useMemo(
@@ -76,7 +86,13 @@ export default function KanbanLog({ tasks, onOpenTask }: KanbanLogProps) {
                   </div>
                 ) : (
                   items.map((task) => (
-                    <TaskCard key={task.id} task={task} onClick={() => onOpenTask(task)} />
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      onClick={() => onOpenTask(task)}
+                      agentsById={agentsById}
+                      projectsById={projectsById}
+                    />
                   ))
                 )}
               </div>
@@ -104,7 +120,13 @@ export default function KanbanLog({ tasks, onOpenTask }: KanbanLogProps) {
           {archiveOpen && (
             <div className="grid gap-3 border-t border-line p-4 md:grid-cols-3">
               {archived.map((task) => (
-                <TaskCard key={task.id} task={task} onClick={() => onOpenTask(task)} />
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  onClick={() => onOpenTask(task)}
+                  agentsById={agentsById}
+                  projectsById={projectsById}
+                />
               ))}
             </div>
           )}

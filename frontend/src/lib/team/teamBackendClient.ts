@@ -237,6 +237,8 @@ export interface RunTaskParams {
   // в params.user_input как блок «## Контекст из задачи …».
   parentTaskId?: string | null;
   attachParentArtifact?: boolean;
+  // Сессия 16: проект-тег задачи. NULL = «без проекта».
+  projectId?: string | null;
 }
 
 export async function runTask(input: RunTaskParams): Promise<string> {
@@ -364,6 +366,53 @@ export async function fetchFeedbackEpisodes(
     { method: "GET" },
   );
   return ((data ?? {}) as { episodes?: FeedbackEpisode[] }).episodes ?? [];
+}
+
+// =========================================================================
+// Сессия 16: проекты (теги задач)
+// =========================================================================
+
+export interface TeamProject {
+  id: string;
+  name: string;
+  description: string | null;
+  status: "active" | "archived";
+  created_at: string;
+}
+
+export async function fetchProjects(
+  status: "active" | "archived" | "all" = "active",
+): Promise<TeamProject[]> {
+  const data = await backendFetch(
+    `/api/team/projects?status=${encodeURIComponent(status)}`,
+    { method: "GET" },
+  );
+  return ((data ?? {}) as { projects?: TeamProject[] }).projects ?? [];
+}
+
+export async function createProject(input: {
+  name: string;
+  description?: string | null;
+  id?: string;
+}): Promise<TeamProject> {
+  const data = await backendFetch("/api/team/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return ((data ?? {}) as { project?: TeamProject }).project as TeamProject;
+}
+
+export async function updateProject(
+  id: string,
+  patch: { name?: string; description?: string | null; status?: "active" | "archived" },
+): Promise<TeamProject> {
+  const data = await backendFetch(`/api/team/projects/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return ((data ?? {}) as { project?: TeamProject }).project as TeamProject;
 }
 
 export interface AppendQuestionResult {

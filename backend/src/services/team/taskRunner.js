@@ -111,6 +111,10 @@ function mergeSnapshot(current, update) {
       update.suggestedNextSteps !== undefined
         ? update.suggestedNextSteps
         : current.suggested_next_steps,
+    // project_id (Сессия 16) — тег задачи. Меняется только в админских
+    // действиях (rename/move project) — обычно фиксирован после createTask.
+    projectId:
+      update.projectId !== undefined ? update.projectId : current.project_id,
   };
 }
 
@@ -273,6 +277,7 @@ export async function createTask({
   title = null,
   agentId = null,
   parentTaskId = null,
+  projectId = null,
 }) {
   if (!TASK_HANDLERS[taskType]) {
     throw new Error(`Тип задачи не поддерживается: ${taskType}`);
@@ -334,6 +339,7 @@ export async function createTask({
     agentId: agentId || null,
     parentTaskId: parentTaskId || null,
     suggestedNextSteps: null,
+    projectId: projectId || null,
   };
 
   await appendTaskSnapshot(snapshot);

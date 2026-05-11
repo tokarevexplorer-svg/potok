@@ -95,6 +95,8 @@ export interface TeamTask {
   // Сессия 13: предложения агента передать задачу дальше. NULL если блок
   // не был распознан в ответе LLM.
   suggestedNextSteps: SuggestedNextStep[] | null;
+  // Сессия 16: id проекта (тега). NULL = «без проекта».
+  projectId: string | null;
 }
 
 // ---------- Журнал API-вызовов ----------

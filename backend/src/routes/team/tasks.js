@@ -106,6 +106,7 @@ router.post("/run", async (req, res) => {
     agentId,
     parentTaskId,
     attachParentArtifact,
+    projectId,
   } = req.body ?? {};
 
   if (typeof taskType !== "string" || !TASK_HANDLERS[taskType]) {
@@ -140,6 +141,19 @@ router.post("/run", async (req, res) => {
     return res
       .status(400)
       .json({ error: "parentTaskId должен быть строкой (id задачи) или null." });
+  }
+
+  // Сессия 16: projectId — опц. навигационный тег. Если не передан — задача
+  // без проекта (категория «⚪ Без проекта»). Невалидный id (несуществующий
+  // проект) даст ошибку при createTask через FK ON UPDATE — пока такие
+  // случаи возвращаем как 400.
+  let normalizedProjectId = null;
+  if (typeof projectId === "string" && projectId.trim()) {
+    normalizedProjectId = projectId.trim();
+  } else if (projectId !== null && projectId !== undefined && projectId !== "") {
+    return res
+      .status(400)
+      .json({ error: "projectId должен быть строкой (id проекта) или null." });
   }
 
   try {
@@ -193,6 +207,7 @@ router.post("/run", async (req, res) => {
       title: title ?? null,
       agentId: normalizedAgentId,
       parentTaskId: normalizedParentId,
+      projectId: normalizedProjectId,
     });
     return res.status(202).json({ taskId });
   } catch (err) {

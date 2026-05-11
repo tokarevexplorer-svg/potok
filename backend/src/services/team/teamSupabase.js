@@ -74,6 +74,8 @@ export async function appendTaskSnapshot(snapshot) {
     // — массив [{ agent_name, suggestion }]. Парсится из ответа LLM по
     // блоку **Suggested Next Steps:** (см. handoffParser.js).
     suggested_next_steps: snapshot.suggestedNextSteps ?? null,
+    // project_id — Сессия 16. Soft-ref на team_projects.id. NULL = «без проекта».
+    project_id: snapshot.projectId ?? null,
   };
 
   const { data, error } = await client
