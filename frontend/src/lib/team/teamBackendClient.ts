@@ -499,6 +499,121 @@ export async function setAgentTools(agentId: string, toolIds: string[]): Promise
   return ((data ?? {}) as { tool_ids?: string[] }).tool_ids ?? [];
 }
 
+// =========================================================================
+// Сессия 22/23: предложения от агентов
+// =========================================================================
+
+export type ProposalStatus = "pending" | "accepted" | "rejected" | "expired";
+export type ProposalKind = "regular" | "urgent" | "next_step";
+
+export interface TeamProposal {
+  id: string;
+  agent_id: string;
+  triggered_by: string;
+  kind: ProposalKind;
+  payload: {
+    what?: string;
+    why?: string;
+    benefit?: string;
+    estimated_cost?: string;
+    vlad_time?: string;
+    urgency?: "regular" | "urgent";
+    [k: string]: unknown;
+  };
+  status: ProposalStatus;
+  created_at: string;
+  decided_at: string | null;
+  resulting_task_id: string | null;
+}
+
+export interface AgentDiaryEntry {
+  id: string;
+  agent_id: string;
+  triggered_by: string;
+  reason_to_skip: string;
+  created_at: string;
+}
+
+export async function fetchProposals(
+  options: { agentId?: string; status?: ProposalStatus; limit?: number } = {},
+): Promise<TeamProposal[]> {
+  const qs = new URLSearchParams();
+  if (options.agentId) qs.set("agent_id", options.agentId);
+  if (options.status) qs.set("status", options.status);
+  if (typeof options.limit === "number") qs.set("limit", String(options.limit));
+  const path = qs.toString() ? `/api/team/proposals?${qs.toString()}` : "/api/team/proposals";
+  const data = await backendFetch(path, { method: "GET" });
+  return ((data ?? {}) as { proposals?: TeamProposal[] }).proposals ?? [];
+}
+
+export async function acceptProposal(
+  id: string,
+  overrides: {
+    brief?: string;
+    task_type?: string;
+    title?: string | null;
+    project_id?: string | null;
+  } = {},
+): Promise<{ proposal: TeamProposal; task_id: string }> {
+  const data = await backendFetch(
+    `/api/team/proposals/${encodeURIComponent(id)}/accept`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(overrides),
+    },
+  );
+  return data as { proposal: TeamProposal; task_id: string };
+}
+
+export async function rejectProposal(id: string): Promise<TeamProposal> {
+  const data = await backendFetch(
+    `/api/team/proposals/${encodeURIComponent(id)}/reject`,
+    { method: "PATCH" },
+  );
+  return ((data ?? {}) as { proposal?: TeamProposal }).proposal as TeamProposal;
+}
+
+export async function fetchAgentDiary(
+  agentId: string,
+  options: { limit?: number; offset?: number } = {},
+): Promise<AgentDiaryEntry[]> {
+  const qs = new URLSearchParams();
+  if (typeof options.limit === "number") qs.set("limit", String(options.limit));
+  if (typeof options.offset === "number") qs.set("offset", String(options.offset));
+  const path = `/api/team/proposals/by-agent/${encodeURIComponent(agentId)}/diary${
+    qs.toString() ? `?${qs.toString()}` : ""
+  }`;
+  const data = await backendFetch(path, { method: "GET" });
+  return ((data ?? {}) as { entries?: AgentDiaryEntry[] }).entries ?? [];
+}
+
+// =========================================================================
+// Сессия 23: глобальный тумблер «Проактивность команды»
+// =========================================================================
+
+export interface AutonomyStatus {
+  enabled: boolean;
+  spent_30d_usd: number;
+}
+
+export async function fetchAutonomyStatus(): Promise<AutonomyStatus> {
+  const data = await backendFetch("/api/team/admin/autonomy", { method: "GET" });
+  const obj = (data ?? {}) as Partial<AutonomyStatus>;
+  return {
+    enabled: !!obj.enabled,
+    spent_30d_usd: typeof obj.spent_30d_usd === "number" ? obj.spent_30d_usd : 0,
+  };
+}
+
+export async function setAutonomyEnabled(enabled: boolean): Promise<void> {
+  await backendFetch("/api/team/admin/autonomy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
 export interface AppendQuestionResult {
   success: boolean;
   appended_text: string;

@@ -450,4 +450,71 @@ router.post("/dev-mode", async (req, res) => {
   }
 });
 
+// =========================================================================
+// GET /api/team/admin/autonomy
+// Сессия 23: статус глобального тумблера автономности +
+// сводка расходов по purpose='autonomy_filter' / 'autonomy_propose'
+// за последние 30 дней (для подсказки в UI).
+// =========================================================================
+router.get("/autonomy", async (_req, res) => {
+  try {
+    const value = await getSetting("autonomy_enabled_globally");
+    let enabled = false;
+    if (typeof value === "boolean") enabled = value;
+    else if (typeof value === "string") enabled = value === "true";
+    else if (value && typeof value === "object" && typeof value.value === "boolean") {
+      enabled = value.value;
+    }
+
+    // Считаем расходы за 30 дней по двум purpose'ам автономности.
+    const client = (
+      await import("../../services/team/teamSupabase.js")
+    ).getServiceRoleClient();
+    const cutoff = new Date(
+      Date.now() - 30 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const { data, error } = await client
+      .from("team_api_calls")
+      .select("cost_usd, purpose")
+      .gte("timestamp", cutoff)
+      .in("purpose", ["autonomy_filter", "autonomy_propose"]);
+    let spent = 0;
+    if (!error) {
+      for (const row of data ?? []) {
+        const v = Number(row?.cost_usd ?? 0);
+        if (Number.isFinite(v)) spent += v;
+      }
+    }
+    return res.json({
+      enabled,
+      spent_30d_usd: Math.round(spent * 10_000) / 10_000,
+    });
+  } catch (err) {
+    console.error("[team] admin autonomy GET failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось прочитать статус автономности" });
+  }
+});
+
+// =========================================================================
+// POST /api/team/admin/autonomy
+// Body: { enabled: boolean }
+// =========================================================================
+router.post("/autonomy", async (req, res) => {
+  const body = req.body ?? {};
+  if (typeof body.enabled !== "boolean") {
+    return res.status(400).json({ error: "enabled должен быть boolean" });
+  }
+  try {
+    await setSetting("autonomy_enabled_globally", body.enabled);
+    return res.json({ enabled: body.enabled });
+  } catch (err) {
+    console.error("[team] admin autonomy POST failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось сохранить настройку автономности" });
+  }
+});
+
 export default router;

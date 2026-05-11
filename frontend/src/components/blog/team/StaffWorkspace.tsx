@@ -138,12 +138,15 @@ function AgentCard({
         )}
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <DepartmentBadge department={agent.department} />
+          {/* Сессия 23: бейдж «🎯 Инициативный» для агентов с
+              autonomy_level=1. Заменяет старый «Автономен», чтобы UI
+              был единым с инструкцией в Сессии 23. */}
           {agent.autonomy_level === 1 && (
             <span
-              className="inline-flex items-center rounded-full bg-canvas px-2 py-0.5 text-xs text-ink-muted"
-              title="Может предлагать самозадачи"
+              className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent"
+              title="Может предлагать задачи сам (cron и событийные триггеры)"
             >
-              Автономен
+              🎯 Инициативный
             </span>
           )}
           <span

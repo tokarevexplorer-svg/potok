@@ -65,11 +65,13 @@ import {
   type TeamMemoryItem,
 } from "@/lib/team/teamMemoryService";
 import {
+  fetchAgentDiary,
   fetchAgentTools,
   fetchFeedbackEpisodes,
   fetchModelsConfig,
   fetchTools,
   setAgentTools,
+  type AgentDiaryEntry,
   type FeedbackEpisode,
   type TeamTool,
 } from "@/lib/team/teamBackendClient";
@@ -189,7 +191,10 @@ export default function StaffAgentCard({ agentId }: Props) {
         />
         <AboutSection agent={agent} onUpdated={reloadAgent} />
         <RoleSection agent={agent} onSavedRole={reloadAgent} />
-        <MemorySection agentId={agent.id} />
+        <MemorySection
+          agentId={agent.id}
+          autonomyLevel={agent.autonomy_level ?? 0}
+        />
         <AccessSection agent={agent} onUpdated={reloadAgent} />
         <HistorySection agentId={agent.id} />
       </div>
@@ -447,7 +452,81 @@ function AboutSection({
       />
 
       <DefaultModelField agent={agent} onUpdated={onUpdated} />
+
+      <AutonomyLevelField agent={agent} onUpdated={onUpdated} />
     </section>
+  );
+}
+
+// Сессия 23: переключатель уровня автономности.
+//   0 — Реактивный (стандарт): задачи только по команде Влада.
+//   1 — С правом инициативы: cron триггеры и событийные триггеры дают
+//       такт 1 → 2, предложения попадают в Inbox.
+// Перед переключением на 1 проверяем, что в Role-файле есть нужные секции
+// (см. CLAUDE.md, Сессия 23 пункт 4). Сейчас — мягкое предупреждение
+// (без блокировки), потому что Role-файл может быть пустым у тестовых
+// агентов.
+function AutonomyLevelField({
+  agent,
+  onUpdated,
+}: {
+  agent: TeamAgent;
+  onUpdated: () => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const current = agent.autonomy_level ?? 0;
+
+  async function setLevel(next: 0 | 1) {
+    if (next === current || saving) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await apiUpdateAgent(agent.id, { autonomy_level: next });
+      await onUpdated();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
+        Уровень автономности
+      </span>
+      <div className="inline-flex rounded-xl border border-line bg-canvas p-1">
+        {[
+          { value: 0 as const, label: "Реактивный" },
+          { value: 1 as const, label: "С правом инициативы" },
+        ].map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => void setLevel(opt.value)}
+            disabled={saving}
+            className={`focus-ring rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
+              current === opt.value
+                ? "bg-accent text-surface shadow-card"
+                : "text-ink-muted hover:text-ink"
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-[11px] text-ink-faint">
+        {current === 1
+          ? "Агент может предлагать задачи сам (cron + событийные триггеры → Inbox)."
+          : "Агент работает только по прямым задачам Влада. Триггеры спят."}
+      </p>
+      {err && (
+        <p className="rounded-md bg-accent-soft px-2 py-1 text-[11px] text-accent">
+          {err}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -822,8 +901,24 @@ function RoleSection({
 // Секция «Память»: табы «Правила» / «Эпизоды»
 // ---------------------------------------------------------------------------
 
-function MemorySection({ agentId }: { agentId: string }) {
-  const [tab, setTab] = useState<"rules" | "episodes">("rules");
+function MemorySection({
+  agentId,
+  autonomyLevel,
+}: {
+  agentId: string;
+  autonomyLevel: number;
+}) {
+  type Tab = "rules" | "episodes" | "diary";
+  const [tab, setTab] = useState<Tab>("rules");
+  // Сессия 23: вкладка «Дневник» доступна только для агентов с
+  // autonomy_level>=1 (иначе записей нет — триггеры не запускаются).
+  const showDiary = autonomyLevel >= 1;
+  const tabs: { key: Tab; label: string }[] = [
+    { key: "rules", label: "Правила" },
+    { key: "episodes", label: "Эпизоды" },
+  ];
+  if (showDiary) tabs.push({ key: "diary", label: "Дневник" });
+
   return (
     <section className="flex flex-col gap-4 rounded-2xl border border-line bg-elevated p-6 shadow-card">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -840,10 +935,7 @@ function MemorySection({ agentId }: { agentId: string }) {
             Кандидаты →
           </Link>
           <div className="inline-flex rounded-xl border border-line bg-canvas p-1">
-            {[
-              { key: "rules" as const, label: "Правила" },
-              { key: "episodes" as const, label: "Эпизоды" },
-            ].map((it) => (
+            {tabs.map((it) => (
               <button
                 key={it.key}
                 type="button"
@@ -861,12 +953,81 @@ function MemorySection({ agentId }: { agentId: string }) {
         </div>
       </div>
 
-      {tab === "rules" ? (
-        <RulesTab agentId={agentId} />
-      ) : (
-        <EpisodesTab agentId={agentId} />
-      )}
+      {tab === "rules" && <RulesTab agentId={agentId} />}
+      {tab === "episodes" && <EpisodesTab agentId={agentId} />}
+      {tab === "diary" && showDiary && <DiaryTab agentId={agentId} />}
     </section>
+  );
+}
+
+// Сессия 23: read-only журнал пропусков такта 1 (фильтра).
+function DiaryTab({ agentId }: { agentId: string }) {
+  const [entries, setEntries] = useState<AgentDiaryEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setErr(null);
+    fetchAgentDiary(agentId, { limit: 100 })
+      .then((items) => {
+        if (cancelled) return;
+        setEntries(items);
+        setLoaded(true);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setErr(e instanceof Error ? e.message : String(e));
+        setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId]);
+
+  if (!loaded) {
+    return (
+      <div className="inline-flex items-center gap-2 text-sm text-ink-muted">
+        <Loader2 size={14} className="animate-spin" /> Загружаем дневник…
+      </div>
+    );
+  }
+  if (err) {
+    return (
+      <p className="inline-flex items-center gap-1.5 text-xs text-rose-700">
+        <AlertTriangle size={12} /> {err}
+      </p>
+    );
+  }
+  if (entries.length === 0) {
+    return (
+      <p className="text-sm text-ink-muted">
+        Записей в дневнике нет. Когда агент пропускает триггер на такте 1
+        (фильтр), сюда падает причина: «о чём подумал и почему решил
+        промолчать».
+      </p>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-2">
+      {entries.map((e) => (
+        <li
+          key={e.id}
+          className="flex flex-col gap-1 rounded-xl border border-line bg-canvas p-3"
+        >
+          <div className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+            <span className="inline-flex items-center rounded-full bg-elevated px-2 py-0.5 font-medium">
+              {e.triggered_by}
+            </span>
+            <span>{formatDate(e.created_at)}</span>
+          </div>
+          <p className="text-sm leading-relaxed text-ink whitespace-pre-wrap">
+            {e.reason_to_skip}
+          </p>
+        </li>
+      ))}
+    </ul>
   );
 }
 

@@ -11,6 +11,7 @@ import ToolsHeader from "./ToolsHeader";
 import ActionGrid from "./ActionGrid";
 import ActiveAgentsRow from "./ActiveAgentsRow";
 import InboxBlock from "./InboxBlock";
+import ProposalsPanel from "./ProposalsPanel";
 import KanbanLog from "./KanbanLog";
 import TaskLogFilters, {
   applyTaskFilters,
@@ -267,6 +268,10 @@ export default function TeamWorkspace({ initialTasks }: TeamWorkspaceProps) {
           />
         )}
       </div>
+
+      {/* Сессия 23: pending-предложения от автономных агентов (сам прячется,
+          если их нет). */}
+      <ProposalsPanel />
 
       {/* Сессия 18: Inbox внимания с реальными данными. */}
       <InboxBlock />
