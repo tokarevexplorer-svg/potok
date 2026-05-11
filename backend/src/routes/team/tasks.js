@@ -25,10 +25,15 @@ import {
 } from "../../services/team/taskRunner.js";
 import { getTaskById } from "../../services/team/teamSupabase.js";
 import { listFiles, downloadFile } from "../../services/team/teamStorage.js";
+import { requireAuth } from "../../middleware/requireAuth.js";
 
 const DATABASE_BUCKET = "team-database";
 
 const router = Router();
+
+// Все маршруты команды требуют валидного JWT (см. Сессию 1 этапа 2,
+// Claude_team_stage2.md). 401 без токена, 403 на чужой email.
+router.use(requireAuth);
 
 const TASK_ID_REGEX = /^tsk_[A-Za-z0-9]+$/;
 

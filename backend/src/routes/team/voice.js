@@ -13,8 +13,11 @@ import multer from "multer";
 import { transcribeFromBuffer } from "../../services/transcriptionService.js";
 import { recordCall } from "../../services/team/costTracker.js";
 import { env } from "../../config/env.js";
+import { requireAuth } from "../../middleware/requireAuth.js";
 
 const router = Router();
+
+router.use(requireAuth);
 
 const upload = multer({
   storage: multer.memoryStorage(),

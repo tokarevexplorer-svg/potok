@@ -19,8 +19,11 @@ import {
   setSetting,
 } from "../../services/team/teamSupabase.js";
 import { downloadFile } from "../../services/team/teamStorage.js";
+import { requireAuth } from "../../middleware/requireAuth.js";
 
 const router = Router();
+
+router.use(requireAuth);
 
 const SUPPORTED_PROVIDERS = new Set(["anthropic", "openai", "google"]);
 
