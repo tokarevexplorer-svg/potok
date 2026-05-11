@@ -991,3 +991,55 @@ export async function listTemplates() {
 
 // Экспортируем константы — могут пригодиться в скриптах валидации и тестах.
 export { LAYER_ORDER, LAYER_LABELS };
+
+// =========================================================================
+// Token summary — Сессия 28
+// =========================================================================
+//
+// Возвращает приблизительный размер слоёв промпта для конкретного агента
+// в токенах (грубая оценка: символы / 4). Используется компонентом
+// TokenSummary в шапке карточки сотрудника, чтобы Влад видел, как растёт
+// объём промпта по мере наполнения Role / Memory / Skills.
+//
+// Слой `task` сюда не входит — это динамический ввод пользователя.
+// Слой `author_profile` тоже опускаем — он не привязан к агенту и появится
+// одним файлом для всех (этап 2, пункт 9).
+//
+// Для всех слоёв используем тот же грубый эстимат `chars/4`, что и
+// `getPromptLayersSummary` — без зависимостей от tokenizer-пакетов на
+// бэкенде. Точный счёт делает фронтенд через js-tiktoken.
+export async function getAgentPromptBreakdown(agentId) {
+  if (!agentId) {
+    return {
+      total: 0,
+      breakdown: { mission: 0, role: 0, goals: 0, memory: 0, skills: 0 },
+    };
+  }
+
+  const [missionContent, roleContent, goalsContent, memoryRules, skillsContent] =
+    await Promise.all([
+      loadMission(),
+      loadRole({ agentId, agentName: null }),
+      loadGoals(),
+      loadMemoryRules(agentId),
+      loadSkills(agentId),
+    ]);
+
+  const memoryText = formatMemoryAsMarkdown(memoryRules);
+
+  const breakdown = {
+    mission: estimateTokens(missionContent),
+    role: estimateTokens(roleContent),
+    goals: estimateTokens(goalsContent),
+    memory: estimateTokens(memoryText),
+    skills: estimateTokens(skillsContent),
+  };
+
+  const total = Object.values(breakdown).reduce((acc, n) => acc + n, 0);
+  return { total, breakdown };
+}
+
+function estimateTokens(text) {
+  if (!text) return 0;
+  return Math.ceil(String(text).length / 4);
+}

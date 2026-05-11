@@ -13,6 +13,7 @@
     "@supabase/supabase-js": "^2.104.0",
     "@types/jsonwebtoken": "^9.0.10",
     "clsx": "2.1.1",
+    "js-tiktoken": "^1.0.21",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "0.454.0",
     "next": "15.3",

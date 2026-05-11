@@ -31,7 +31,10 @@ import {
 import { getServiceRoleClient } from "../../services/team/teamSupabase.js";
 import { call as llmCall, LLMError } from "../../services/team/llmClient.js";
 import { recordCall } from "../../services/team/costTracker.js";
-import { buildTestPrompt } from "../../services/team/promptBuilder.js";
+import {
+  buildTestPrompt,
+  getAgentPromptBreakdown,
+} from "../../services/team/promptBuilder.js";
 import { getApiKey } from "../../services/team/keysService.js";
 import { downloadFile } from "../../services/team/teamStorage.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
@@ -95,6 +98,30 @@ router.get("/:id", async (req, res) => {
   } catch (err) {
     console.error(`[team/agents] get ${id} failed:`, err);
     return res.status(statusForError(err)).json({ error: err.message ?? "Не удалось получить агента" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/agents/:id/token-summary
+// Сессия 28: приблизительный объём системного промпта для агента
+// в токенах. Используется в шапке карточки сотрудника как визуальный
+// сигнал «промпт растёт».
+//
+// Возвращает: { total, breakdown: { mission, role, goals, memory, skills } }.
+// Грубая оценка через `Math.ceil(text.length / 4)` — точный счёт делает
+// фронтенд через js-tiktoken для редакторов; здесь хватает для шапки.
+// =========================================================================
+router.get("/:id/token-summary", async (req, res) => {
+  const { id } = req.params;
+  try {
+    await getAgent(id); // 404, если агента нет
+    const summary = await getAgentPromptBreakdown(id);
+    return res.json(summary);
+  } catch (err) {
+    console.error(`[team/agents] token-summary ${id} failed:`, err);
+    return res
+      .status(statusForError(err))
+      .json({ error: err.message ?? "Не удалось получить сводку токенов" });
   }
 });
 

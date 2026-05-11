@@ -14,6 +14,7 @@ import {
   refinePromptTemplate,
   savePromptTemplate,
 } from "@/lib/team/teamBackendClient";
+import TokenBadge from "./TokenBadge";
 
 // Сессия 4 этапа 2: главная страница раздела «Инструкции» состоит из трёх
 // логических блоков, привязанных к подпапкам bucket'а team-prompts:
@@ -471,6 +472,8 @@ function FileEditorPanel({
               Есть несохранённые изменения
             </span>
           )}
+          {/* Сессия 28: индикатор объёма файла в токенах. */}
+          <TokenBadge text={content} />
         </div>
         <div className="flex items-center gap-2">
           {showRefine && (

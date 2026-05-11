@@ -218,6 +218,41 @@ export async function fetchAgentRole(id: string): Promise<string | null> {
   return obj.content ?? null;
 }
 
+// Сессия 28: сводка по объёму системного промпта агента.
+// Грубая оценка с бэкенда (chars/4) — для индикатора в шапке карточки.
+export interface AgentTokenSummary {
+  total: number;
+  breakdown: {
+    mission: number;
+    role: number;
+    goals: number;
+    memory: number;
+    skills: number;
+  };
+}
+
+export async function fetchAgentTokenSummary(
+  id: string,
+): Promise<AgentTokenSummary> {
+  const data = await fetchAgents(`/${encodeURIComponent(id)}/token-summary`, {
+    method: "GET",
+  });
+  const obj = (data ?? {}) as Partial<AgentTokenSummary>;
+  const breakdown = (obj.breakdown ?? {}) as Partial<
+    AgentTokenSummary["breakdown"]
+  >;
+  return {
+    total: typeof obj.total === "number" ? obj.total : 0,
+    breakdown: {
+      mission: breakdown.mission ?? 0,
+      role: breakdown.role ?? 0,
+      goals: breakdown.goals ?? 0,
+      memory: breakdown.memory ?? 0,
+      skills: breakdown.skills ?? 0,
+    },
+  };
+}
+
 export async function saveAgentRole(
   id: string,
   content: string,

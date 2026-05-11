@@ -81,6 +81,7 @@ import {
   type TeamTool,
 } from "@/lib/team/teamBackendClient";
 import TaskCreationModal from "./TaskCreationModal";
+import TokenSummary from "./TokenSummary";
 
 interface Props {
   agentId: string;
@@ -294,6 +295,11 @@ function HeaderCard({
             </span>
           )}
           <span className="text-xs text-ink-faint">id: {agent.id}</span>
+        </div>
+
+        {/* Сессия 28: компактная сводка по объёму системного промпта. */}
+        <div className="mt-3">
+          <TokenSummary agentId={agent.id} />
         </div>
 
         {err && (
