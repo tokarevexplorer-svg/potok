@@ -50,6 +50,7 @@ import { getAgent, getAgentRoster } from "./agentService.js";
 import { listDatabases } from "./customDatabaseService.js";
 import { getAwarenessVersion, bumpAwarenessVersion } from "./awarenessVersion.js";
 import { getAgentTools, getToolManifest } from "./toolService.js";
+import { getSkillsContentForPrompt } from "./skillService.js";
 
 // =========================================================================
 // Инвалидация prompt-кеша (Сессия 12 этапа 2)
@@ -632,31 +633,19 @@ function formatMemoryAsMarkdown(rules) {
   return lines.length > 1 ? lines.join("\n") : "";
 }
 
-// Skills — конкатенация всех .md из agent-skills/<agent_name>/ через `---`.
-// Если папки нет или агент не задан — пусто. Этап 4 (пункт 10) добавит
-// фильтрацию по релевантности — пока берём все.
-async function loadSkills(agentName) {
-  if (!agentName) return "";
-  const folder = `${SKILLS_FOLDER}/${agentName}`;
-  let files;
+// Skills — структурированные «рецепты» из agent-skills/<agent_id>/.
+// Сессия 25: фильтр по frontmatter.status (только active+pinned),
+// в промпт идут skill_name + when_to_apply + what_to_do (без
+// why_it_works — это для Влада).
+async function loadSkills(agentId) {
+  if (!agentId) return "";
   try {
-    files = await listFiles(PROMPTS_BUCKET, folder);
-  } catch {
+    const text = await getSkillsContentForPrompt(agentId);
+    return text ?? "";
+  } catch (err) {
+    console.warn(`[promptBuilder] не удалось загрузить skills для ${agentId}: ${err?.message ?? err}`);
     return "";
   }
-  if (!Array.isArray(files) || files.length === 0) return "";
-  const mdFiles = files.filter(
-    (f) => f && typeof f.name === "string" && f.name.toLowerCase().endsWith(".md"),
-  );
-  if (mdFiles.length === 0) return "";
-
-  const bodies = [];
-  for (const file of mdFiles) {
-    const body = await loadStorageFile(`${folder}/${file.name}`);
-    if (body && body.trim()) bodies.push(body.trim());
-  }
-  if (bodies.length === 0) return "";
-  return bodies.join("\n\n---\n\n");
 }
 
 // =========================================================================
@@ -874,7 +863,8 @@ export async function buildPrompt(templateName, variables = {}) {
         ? Promise.resolve(String(vars.concept ?? ""))
         : loadGoals(),
     loadMemoryRules(agentId),
-    loadSkills(agentName),
+    // Сессия 25: skills ключевые по agent_id (не display_name).
+    loadSkills(agentId),
   ]);
 
   const memoryContent = formatMemoryAsMarkdown(memoryRules);

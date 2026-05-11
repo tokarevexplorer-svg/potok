@@ -614,6 +614,111 @@ export async function setAutonomyEnabled(enabled: boolean): Promise<void> {
   });
 }
 
+// =========================================================================
+// Сессия 25: навыки агента (markdown в Storage с YAML frontmatter)
+// =========================================================================
+
+export type SkillStatus = "active" | "pinned" | "archived";
+
+export interface TeamSkill {
+  slug: string;
+  path: string;
+  skill_name: string;
+  status: SkillStatus;
+  use_count: number;
+  last_used: string | null;
+  created_at: string | null;
+  source_task_id: string | null;
+  when_to_apply: string;
+  what_to_do: string;
+  why_it_works: string;
+  raw_body: string;
+}
+
+export async function fetchAgentSkills(
+  agentId: string,
+  options: { statuses?: "all" | SkillStatus[] } = {},
+): Promise<TeamSkill[]> {
+  const param =
+    options.statuses === "all"
+      ? "all"
+      : Array.isArray(options.statuses)
+        ? options.statuses.join(",")
+        : "active,pinned";
+  const data = await backendFetch(
+    `/api/team/skills/${encodeURIComponent(agentId)}?statuses=${encodeURIComponent(param)}`,
+    { method: "GET" },
+  );
+  return ((data ?? {}) as { skills?: TeamSkill[] }).skills ?? [];
+}
+
+export async function createAgentSkill(
+  agentId: string,
+  input: {
+    skill_name: string;
+    when_to_apply: string;
+    what_to_do: string;
+    why_it_works?: string;
+    task_id?: string;
+    status?: SkillStatus;
+  },
+): Promise<TeamSkill> {
+  const data = await backendFetch(
+    `/api/team/skills/${encodeURIComponent(agentId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  return ((data ?? {}) as { skill?: TeamSkill }).skill as TeamSkill;
+}
+
+export async function updateAgentSkill(
+  agentId: string,
+  slug: string,
+  patch: Partial<{
+    skill_name: string;
+    when_to_apply: string;
+    what_to_do: string;
+    why_it_works: string;
+    status: SkillStatus;
+  }>,
+): Promise<TeamSkill> {
+  const data = await backendFetch(
+    `/api/team/skills/${encodeURIComponent(agentId)}/${encodeURIComponent(slug)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+  return ((data ?? {}) as { skill?: TeamSkill }).skill as TeamSkill;
+}
+
+export async function archiveAgentSkill(agentId: string, slug: string): Promise<TeamSkill> {
+  const data = await backendFetch(
+    `/api/team/skills/${encodeURIComponent(agentId)}/${encodeURIComponent(slug)}/archive`,
+    { method: "PATCH" },
+  );
+  return ((data ?? {}) as { skill?: TeamSkill }).skill as TeamSkill;
+}
+
+export async function pinAgentSkill(agentId: string, slug: string): Promise<TeamSkill> {
+  const data = await backendFetch(
+    `/api/team/skills/${encodeURIComponent(agentId)}/${encodeURIComponent(slug)}/pin`,
+    { method: "PATCH" },
+  );
+  return ((data ?? {}) as { skill?: TeamSkill }).skill as TeamSkill;
+}
+
+export async function deleteAgentSkill(agentId: string, slug: string): Promise<void> {
+  await backendFetch(
+    `/api/team/skills/${encodeURIComponent(agentId)}/${encodeURIComponent(slug)}`,
+    { method: "DELETE" },
+  );
+}
+
 export interface AppendQuestionResult {
   success: boolean;
   appended_text: string;
