@@ -46,6 +46,7 @@
 
 import { downloadFile, listFiles } from "./teamStorage.js";
 import { getRulesForAgent } from "./memoryService.js";
+import { getAgent } from "./agentService.js";
 
 // {{name}} — буквы латиницы, цифры и underscore. Регистр важен.
 // Пробелы внутри {{ name }} разрешены. Совпадает с Python-версией.
@@ -194,11 +195,39 @@ async function loadAuthorProfile() {
   return await loadStorageFile(AUTHOR_PROFILE_PATH);
 }
 
-// Role — заглушка для Сессии 6. Читает roles/<agent_name>.md, если задан.
-// Позже (этап 2, пункт 7) сюда будет встраиваться автогенерируемый блок Awareness.
-async function loadRole(agentName) {
-  if (!agentName) return "";
-  const path = `${ROLES_FOLDER}/${agentName}.md`;
+// Role — должностная инструкция конкретного агента.
+// Источник имени файла:
+//   1. Если передан agentId — резолвим display_name из team_agents
+//      (Сессия 9). Если агента в БД нет — слой пропускается без ошибки.
+//   2. Иначе fallback на agentName (старая Сессия 6 совместимость) —
+//      без обращения к БД.
+//   Путь в Storage: `roles/<имя>.md`. Папка `roles/` соответствует разделу
+//   «Должностные инструкции» в UI Инструкций; ключ в Storage оставлен на
+//   латинице, так как Supabase отбивает не-ASCII в путях.
+//
+// Если файла нет — пустая строка, слой пропускается без шумных логов:
+// агента уже создали, но Role ещё не написали — это норма на этапе 2.
+async function loadRole({ agentId, agentName }) {
+  let name = null;
+
+  if (agentId) {
+    try {
+      const agent = await getAgent(agentId);
+      name = agent?.display_name ?? null;
+    } catch (err) {
+      // Агента в БД нет (не успели создать / другой проект) — не падаем,
+      // пробуем fallback на agentName.
+      console.warn(
+        `[promptBuilder] не удалось получить агента ${agentId}: ${err?.message ?? err}`,
+      );
+    }
+  }
+  if (!name && agentName) {
+    name = agentName;
+  }
+  if (!name) return "";
+
+  const path = `${ROLES_FOLDER}/${name}.md`;
   return await loadStorageFile(path);
 }
 
@@ -474,7 +503,7 @@ export async function buildPrompt(templateName, variables = {}) {
         ? Promise.resolve(String(vars.context ?? ""))
         : loadMission(),
     loadAuthorProfile(),
-    loadRole(agentName),
+    loadRole({ agentId, agentName }),
     vars.goals !== undefined
       ? Promise.resolve(String(vars.goals ?? ""))
       : vars.concept !== undefined
