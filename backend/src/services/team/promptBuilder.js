@@ -46,7 +46,9 @@
 
 import { downloadFile, listFiles } from "./teamStorage.js";
 import { getRulesForAgent } from "./memoryService.js";
-import { getAgent } from "./agentService.js";
+import { getAgent, getAgentRoster } from "./agentService.js";
+import { listDatabases } from "./customDatabaseService.js";
+import { getAwarenessVersion } from "./awarenessVersion.js";
 
 // {{name}} — буквы латиницы, цифры и underscore. Регистр важен.
 // Пробелы внутри {{ name }} разрешены. Совпадает с Python-версией.
@@ -60,8 +62,13 @@ const MISSION_PATH = "strategy/mission.md";
 const GOALS_PATH = "strategy/goals.md";
 const AUTHOR_PROFILE_PATH = "strategy/author-profile.md";
 
-// Корни папок для агент-зависимых слоёв. Появятся в Сессии 7+ (этап 2).
-const ROLES_FOLDER = "roles"; // roles/<agent_name>.md
+// Корни папок для агент-зависимых слоёв.
+// «Должностные инструкции» — кириллица намеренно: путь видим в Dashboard,
+// файл — это та же сущность, что и Role-файл в карточке сотрудника.
+// Supabase Storage поддерживает не-ASCII в путях объектов (URL-encoded под
+// капотом). Раньше путь был на латинице (`roles/`); миграция мгновенная,
+// поскольку папка roles/ ещё пустая — никаких файлов не теряем.
+const ROLES_FOLDER = "Должностные инструкции"; // <папка>/<display_name>.md
 const SKILLS_FOLDER = "agent-skills"; // agent-skills/<agent_name>/*.md
 
 // Логический порядок слоёв (от общего к частному). Используется в превью,
@@ -195,28 +202,34 @@ async function loadAuthorProfile() {
   return await loadStorageFile(AUTHOR_PROFILE_PATH);
 }
 
-// Role — должностная инструкция конкретного агента.
+// Role — должностная инструкция конкретного агента + Awareness-блок
+// (Сессия 10 этапа 2, пункт 12).
+//
+// Логически: содержимое Role-файла + два под-блока Awareness (карта команды
+// и карта баз). Awareness — внутри Role-слоя, не отдельный слой: это
+// решение из пункта 7 (Сессия 10) — Awareness меняется только при
+// мутациях команды/баз, поэтому кешируется вместе с Role.
+//
 // Источник имени файла:
 //   1. Если передан agentId — резолвим display_name из team_agents
-//      (Сессия 9). Если агента в БД нет — слой пропускается без ошибки.
-//   2. Иначе fallback на agentName (старая Сессия 6 совместимость) —
-//      без обращения к БД.
-//   Путь в Storage: `roles/<имя>.md`. Папка `roles/` соответствует разделу
-//   «Должностные инструкции» в UI Инструкций; ключ в Storage оставлен на
-//   латинице, так как Supabase отбивает не-ASCII в путях.
+//      (Сессия 9). Если агента в БД нет — Role пропускается, но Awareness
+//      всё равно собирается (если roster не пуст) — это помогает test_run
+//      внутри мастера: агента ещё нет в БД, но командный контекст уже есть.
+//   2. Иначе fallback на agentName (старая Сессия 6 совместимость).
 //
-// Если файла нет — пустая строка, слой пропускается без шумных логов:
-// агента уже создали, но Role ещё не написали — это норма на этапе 2.
+// Путь в Storage: `Должностные инструкции/<имя>.md` — кириллица, совпадает
+// с местом сохранения мастером (agentService.saveRoleFile).
 async function loadRole({ agentId, agentName }) {
   let name = null;
+  let resolvedAgent = null;
 
   if (agentId) {
     try {
-      const agent = await getAgent(agentId);
-      name = agent?.display_name ?? null;
+      resolvedAgent = await getAgent(agentId);
+      name = resolvedAgent?.display_name ?? null;
     } catch (err) {
-      // Агента в БД нет (не успели создать / другой проект) — не падаем,
-      // пробуем fallback на agentName.
+      // Агента в БД нет (test_run в мастере, другой проект) — не падаем,
+      // пробуем fallback на agentName, и Awareness всё равно соберём.
       console.warn(
         `[promptBuilder] не удалось получить агента ${agentId}: ${err?.message ?? err}`,
       );
@@ -225,10 +238,233 @@ async function loadRole({ agentId, agentName }) {
   if (!name && agentName) {
     name = agentName;
   }
-  if (!name) return "";
 
-  const path = `${ROLES_FOLDER}/${name}.md`;
-  return await loadStorageFile(path);
+  let roleFile = "";
+  if (name) {
+    roleFile = await loadStorageFile(`${ROLES_FOLDER}/${name}.md`);
+  }
+
+  // Awareness — для всех агент-зависимых вызовов, даже если Role-файла нет.
+  // Если roster пуст И карт баз тоже нет — buildAwareness вернёт пустую
+  // строку, и в этом случае возвращаем roleFile как есть.
+  const awareness = await buildAwareness({
+    agentId,
+    currentAgent: resolvedAgent,
+  });
+  if (!awareness) return roleFile;
+  if (!roleFile) return awareness;
+  return `${roleFile.trim()}\n\n${awareness}`;
+}
+
+// =========================================================================
+// Awareness — карта команды + карта баз
+// =========================================================================
+//
+// Кеш per-agent: { version, text }. version сравнивается с глобальным
+// awarenessVersion (см. awarenessVersion.js) — счётчик инкрементируется на
+// каждое create / archive / restore / pause агента. Если version не
+// совпадает — пересобираем.
+//
+// Ключ кеша: agentId. Для test_run без agentId ключ — '__nobody__' (один
+// общий вход кеша для всех «безымянных» вызовов).
+//
+// Awareness содержит две секции:
+//   ## Awareness — Карта команды
+//   - <Имя> (<должность>, <департамент>)
+//
+//   ## Awareness — Доступные базы
+//   - <Имя базы> — <описание> [<уровень доступа>]
+//
+// Если roster пуст И список баз пуст — возвращаем пусто, чтобы не плодить
+// в промпте бессмысленные заголовки.
+
+const awarenessCache = new Map(); // agentId → { version, text }
+
+const DEPARTMENT_LABELS_RU = {
+  analytics: "Аналитика",
+  preproduction: "Предпродакшн",
+  production: "Продакшн",
+};
+
+const ACCESS_LEVEL_LABELS_RU = {
+  read: "чтение",
+  append: "чтение + добавление",
+  create: "полный доступ",
+};
+
+async function loadRosterSafe() {
+  try {
+    return await getAgentRoster();
+  } catch (err) {
+    console.warn(`[promptBuilder] roster недоступен: ${err?.message ?? err}`);
+    return [];
+  }
+}
+
+async function loadDatabasesSafe() {
+  try {
+    return await listDatabases();
+  } catch (err) {
+    console.warn(`[promptBuilder] список баз недоступен: ${err?.message ?? err}`);
+    return [];
+  }
+}
+
+function formatTeamRoster(roster) {
+  if (!Array.isArray(roster) || roster.length === 0) return "";
+  const lines = ["## Awareness — Карта команды"];
+  for (const m of roster) {
+    const name = String(m?.display_name ?? "").trim();
+    if (!name) continue;
+    const parts = [];
+    if (m?.role_title) parts.push(String(m.role_title).trim());
+    const deptLabel = DEPARTMENT_LABELS_RU[m?.department];
+    if (deptLabel) parts.push(deptLabel);
+    lines.push(parts.length > 0 ? `- ${name} (${parts.join(", ")})` : `- ${name}`);
+  }
+  return lines.length > 1 ? lines.join("\n") : "";
+}
+
+function formatDatabasesMap(databases, currentAgent) {
+  if (!Array.isArray(databases) || databases.length === 0) return "";
+  // database_access у агента — массив объектов { database_id, level }.
+  const accessMap = new Map();
+  const rawAccess = Array.isArray(currentAgent?.database_access)
+    ? currentAgent.database_access
+    : [];
+  for (const entry of rawAccess) {
+    if (entry && typeof entry === "object" && entry.database_id) {
+      accessMap.set(String(entry.database_id), String(entry.level ?? "read"));
+    }
+  }
+
+  const lines = ["## Awareness — Доступные базы"];
+  for (const db of databases) {
+    const name = String(db?.name ?? "").trim();
+    if (!name) continue;
+    const desc = db?.description ? String(db.description).trim() : "";
+    const accessLevel = accessMap.get(String(db.id));
+    const accessLabel = accessLevel
+      ? `[${ACCESS_LEVEL_LABELS_RU[accessLevel] ?? accessLevel}]`
+      : "[нет доступа]";
+    const descPart = desc ? ` — ${desc}` : "";
+    lines.push(`- ${name}${descPart} ${accessLabel}`);
+  }
+  return lines.length > 1 ? lines.join("\n") : "";
+}
+
+async function buildAwareness({ agentId, currentAgent }) {
+  const version = getAwarenessVersion();
+  const cacheKey = agentId || "__nobody__";
+  const cached = awarenessCache.get(cacheKey);
+  // Кеш отслеживает только смену состава (через awarenessVersion). Изменение
+  // database_access самого агента не бампает версию — но при следующем
+  // прогоне currentAgent уже свежий, текст пересоберётся. Чтобы не отдавать
+  // устаревший по доступам блок — учитываем сериализованные доступы в ключе.
+  const accessFingerprint = currentAgent?.database_access
+    ? JSON.stringify(currentAgent.database_access)
+    : "";
+  if (
+    cached &&
+    cached.version === version &&
+    cached.accessFingerprint === accessFingerprint
+  ) {
+    return cached.text;
+  }
+
+  const [roster, databases] = await Promise.all([
+    loadRosterSafe(),
+    loadDatabasesSafe(),
+  ]);
+
+  const teamBlock = formatTeamRoster(roster);
+  const dbBlock = formatDatabasesMap(databases, currentAgent);
+
+  const text = [teamBlock, dbBlock].filter((s) => s && s.trim()).join("\n\n");
+  awarenessCache.set(cacheKey, { version, accessFingerprint, text });
+  return text;
+}
+
+// Сброс in-memory кеша Awareness — для тестов и для случая, когда вызывающий
+// код хочет принудительно пересобрать (например, после ручного апдейта
+// database_access без bump'а версии). Обычно не нужен — bumpAwarenessVersion
+// плюс accessFingerprint в кеше покрывают все сценарии.
+export function clearAwarenessCache() {
+  awarenessCache.clear();
+}
+
+// =========================================================================
+// Сборка промпта без template-файла (Сессия 10, test-run в мастере)
+// =========================================================================
+//
+// Мастер создания агента (Сессия 10) запускает «тестовый полигон»: проверяет
+// будущего агента до того, как он создан. Mission/Goals — обычные, Role — из
+// тела запроса (мастер ещё не успел сохранить файл), seed_rules — массив
+// строк, query — пользовательский ввод вместо темплейта задачи.
+//
+// Сигнатура повторяет buildPrompt по форме возврата (system, user,
+// cacheableBlocks, layers...), чтобы callee можно было прокинуть в llmClient
+// тем же способом.
+
+export async function buildTestPrompt({ role, seedRules, query }) {
+  const roleText = String(role ?? "").trim();
+  const userText = String(query ?? "").trim();
+  const rules = Array.isArray(seedRules)
+    ? seedRules.map((r) => String(r ?? "").trim()).filter(Boolean)
+    : [];
+
+  const [missionContent, authorProfileContent, goalsContent] = await Promise.all([
+    loadMission(),
+    loadAuthorProfile(),
+    loadGoals(),
+  ]);
+
+  // Awareness — общий, не привязан к конкретному агенту: тестируем агента,
+  // которого ещё нет в БД. Передаём agentId=null → ключ кеша "__nobody__",
+  // currentAgent=null → доступы баз пишутся как «нет доступа».
+  const awarenessText = await buildAwareness({ agentId: null, currentAgent: null });
+
+  const roleWithAwareness = [roleText, awarenessText]
+    .filter((s) => s && s.trim())
+    .join("\n\n");
+
+  const memoryContent = formatMemoryAsMarkdown(rules);
+
+  const rawLayers = [
+    { key: "mission", content: missionContent, cacheable: true },
+    { key: "author_profile", content: authorProfileContent, cacheable: true },
+    { key: "role", content: roleWithAwareness, cacheable: true },
+    { key: "goals", content: goalsContent, cacheable: true },
+    { key: "memory", content: memoryContent, cacheable: false },
+    { key: "task", content: "", cacheable: false },
+  ];
+  const layers = rawLayers.map((l) => ({
+    ...l,
+    content: l.content ?? "",
+    loaded: !!(l.content && String(l.content).trim()),
+  }));
+
+  const cacheableBlocks = [];
+  const seenCache = new Set();
+  for (const layer of layers) {
+    if (!layer.cacheable || !layer.loaded) continue;
+    const text = String(layer.content);
+    if (seenCache.has(text)) continue;
+    cacheableBlocks.push(text);
+    seenCache.add(text);
+  }
+
+  const nonCacheableParts = layers
+    .filter((l) => !l.cacheable && l.loaded)
+    .map((l) => String(l.content).trim());
+  const systemText = nonCacheableParts.join("\n\n");
+
+  return {
+    system: systemText,
+    user: userText,
+    cacheableBlocks,
+    layers,
+  };
 }
 
 // Goals — обязательный слой, читается из strategy/goals.md.

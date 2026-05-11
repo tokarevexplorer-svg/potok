@@ -170,6 +170,11 @@ export async function getTasksByStatus(status) {
 //   success — boolean, по умолчанию true
 //   error — текст ошибки или null
 //   audioMinutes — длительность аудио в минутах для Whisper, иначе null
+//   agentId — slug агента или 'system' (нет FK на team_agents.id — допускаем
+//             псевдо-id и вызовы для ещё-не-созданного агента, напр. test_run
+//             внутри мастера); null, если вызов вне агентского контекста.
+//   purpose — назначение вызова: 'role_draft', 'test_run', 'task', и т.п.
+//             Используется в админке для разбора расходов по типу активности.
 export async function recordApiCall(payload) {
   const client = getServiceRoleClient();
   const row = {
@@ -184,6 +189,8 @@ export async function recordApiCall(payload) {
     success: payload.success ?? true,
     error: payload.error ?? null,
     audio_minutes: payload.audioMinutes ?? null,
+    agent_id: payload.agentId ?? null,
+    purpose: payload.purpose ?? null,
   };
 
   const { data, error } = await client

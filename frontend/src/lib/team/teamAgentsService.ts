@@ -6,7 +6,7 @@
 export type AgentStatus = "active" | "paused" | "archived";
 export type AgentDepartment = "analytics" | "preproduction" | "production";
 
-// Поля совпадают со схемой team_agents (миграция 0017). Все опц.
+// Поля совпадают со схемой team_agents (миграция 0017 + 0018). Все опц.
 // поля приходят с бэкенда null'ом — оставлено как есть для прозрачности.
 export interface TeamAgent {
   id: string;
@@ -22,6 +22,10 @@ export interface TeamAgent {
   orchestration_mode: boolean;
   autonomy_level: number;
   default_model: string | null;
+  // Поля из миграции 0018 — обязательны при создании через мастер.
+  // В промпт не идут, нужны для самоконтроля «зачем нужен агент».
+  purpose: string | null;
+  success_criteria: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -142,6 +146,14 @@ export interface CreateAgentInput {
   orchestration_mode?: boolean;
   autonomy_level?: 0 | 1;
   comment?: string | null;
+  // Сессия 10 — поля мастера создания.
+  purpose?: string | null;
+  success_criteria?: string | null;
+  // Опц.: текст Role-файла (мастер передаёт — бэкенд сохранит в Storage).
+  role_content?: string | null;
+  // Опц.: массив seed-правил (одно правило — одна строка). Бэкенд добавит в
+  // team_agent_memory с source='seed'.
+  seed_rules?: string[];
 }
 
 export async function createAgent(input: CreateAgentInput): Promise<TeamAgent> {
@@ -201,6 +213,59 @@ export async function restoreAgent(id: string, comment?: string): Promise<TeamAg
   const obj = (data ?? {}) as { agent?: TeamAgent };
   if (!obj.agent) throw new Error("Бэкенд не вернул агента");
   return obj.agent;
+}
+
+// =========================================================================
+// Мастер создания (Сессия 10)
+// =========================================================================
+
+export interface DraftRoleMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface DraftRoleResult {
+  response: string;
+  tokens?: { input: number; output: number; cached: number };
+}
+
+// Чат с LLM для черновика Role на шаге 2 мастера. Сервер собирает системный
+// промпт сам — фронт передаёт только историю диалога и метаданные агента.
+export async function draftRole(input: {
+  messages: DraftRoleMessage[];
+  display_name: string;
+  role_title?: string;
+}): Promise<DraftRoleResult> {
+  const data = await fetchAgents("/draft-role", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    timeoutMs: 60_000,
+  });
+  return (data ?? {}) as DraftRoleResult;
+}
+
+export interface TestRunResult {
+  response: string;
+  tokens?: { input: number; output: number; cached: number };
+}
+
+// Тестовый полигон на шаге 3 мастера. Прогон НЕ записывается в team_tasks —
+// это разовый sanity-check. Расход уходит в team_api_calls с purpose='test_run'.
+export async function testRunAgent(input: {
+  role: string;
+  seed_rules: string[];
+  model: string;
+  provider?: string;
+  query: string;
+}): Promise<TestRunResult> {
+  const data = await fetchAgents("/test-run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    timeoutMs: 60_000,
+  });
+  return (data ?? {}) as TestRunResult;
 }
 
 // =========================================================================

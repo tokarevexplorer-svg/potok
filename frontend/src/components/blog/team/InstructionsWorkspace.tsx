@@ -33,6 +33,10 @@ import {
 
 const STRATEGY_FOLDER = "strategy";
 const TEMPLATES_FOLDER = "task-templates";
+// Сессия 10 этапа 2: Role-файлы агентов лежат в «Должностные инструкции/»
+// (см. agentService.saveRoleFile). Кириллица в пути — намеренно, чтобы Влад
+// в Supabase Dashboard сразу узнавал нужную папку.
+const ROLES_FOLDER = "Должностные инструкции";
 
 // Маппинг latin-slug → человекочитаемое название для UI. В Storage файл
 // называется `mission.md`, но в интерфейсе показываем «Миссия».
@@ -100,7 +104,7 @@ interface InstructionsWorkspaceProps {
   initialTree: InstructionsTree;
 }
 
-type ActiveKind = "strategy" | "template";
+type ActiveKind = "strategy" | "template" | "role";
 interface ActiveFile {
   kind: ActiveKind;
   /** latin-slug файла без расширения .md (то же, что имя в Storage) */
@@ -160,12 +164,24 @@ function SectionGrid({
 
       <SectionBlock
         title="Должностные инструкции"
-        description="Появятся в этапе 2 — после того, как добавим агентов в команду."
+        description="Role-файлы агентов. Создаются мастером «+ Добавить сотрудника» и редактируются здесь или в карточке агента."
       >
-        <EmptyHint
-          text="Здесь появятся должностные инструкции агентов после этапа 2. Сейчас сотрудников ещё нет."
-          subtle
-        />
+        {tree.roles.length === 0 ? (
+          <EmptyHint
+            text="Файлов пока нет. Создайте первого сотрудника на странице «Сотрудники»."
+            subtle
+          />
+        ) : (
+          <FileList
+            items={tree.roles.map((slug) => ({
+              slug,
+              path: `${ROLES_FOLDER}/${slug}.md`,
+              kind: "role" as ActiveKind,
+            }))}
+            activePath={active?.path ?? null}
+            onSelect={onSelect}
+          />
+        )}
       </SectionBlock>
 
       <SectionBlock
@@ -363,7 +379,11 @@ function FileEditorPanel({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-wide text-ink-faint">
-            {file.kind === "template" ? "Шаблон задачи" : "Стратегия команды"}
+            {file.kind === "template"
+              ? "Шаблон задачи"
+              : file.kind === "role"
+                ? "Должностная инструкция"
+                : "Стратегия команды"}
           </p>
           <h3 className="truncate text-base font-semibold text-ink">{displayLabel(file.slug)}</h3>
         </div>

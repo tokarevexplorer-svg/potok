@@ -15,9 +15,22 @@
 // Все сообщения об ошибках — на русском.
 
 import { getServiceRoleClient } from "./teamSupabase.js";
+import { uploadFile, downloadFile } from "./teamStorage.js";
+import { ensureRule } from "./memoryService.js";
+import { bumpAwarenessVersion } from "./awarenessVersion.js";
 
 const TABLE = "team_agents";
 const HISTORY_TABLE = "team_agent_history";
+const PROMPTS_BUCKET = "team-prompts";
+
+// Путь до Role-файла агента в bucket'е team-prompts. Кириллица в имени файла
+// работает: Supabase Storage не отбивает не-ASCII в путях самих файлов
+// (отбивает только нестандартные ключи — слэш и пр.). Подпапка «Должностные
+// инструкции» специально на русском, чтобы в Dashboard было сразу понятно.
+const ROLES_FOLDER = "Должностные инструкции";
+function rolePath(displayName) {
+  return `${ROLES_FOLDER}/${displayName}.md`;
+}
 
 // Slug: латиница, цифры, дефис. Без подчёркиваний и слэшей — чтобы id можно
 // было класть в URL и в имя файла без экранирования. Регистр пока разрешаем
@@ -44,6 +57,8 @@ const UPDATABLE_FIELDS = new Set([
   "orchestration_mode",
   "autonomy_level",
   "default_model",
+  "purpose",
+  "success_criteria",
 ]);
 
 // Какое значение change_type писать в history при изменении каждого поля.
@@ -233,6 +248,8 @@ export async function createAgent(fields = {}) {
     orchestration_mode: !!fields.orchestration_mode,
     autonomy_level: fields.autonomy_level !== undefined ? Number(fields.autonomy_level) : 0,
     default_model: fields.default_model ?? null,
+    purpose: fields.purpose ?? null,
+    success_criteria: fields.success_criteria ?? null,
   };
 
   const client = getServiceRoleClient();
@@ -251,6 +268,44 @@ export async function createAgent(fields = {}) {
     newValue: displayName,
     comment: fields.comment ?? null,
   });
+
+  // Role-файл и seed-rules — мастер передаёт их при создании. Любая ошибка
+  // здесь не должна откатывать создание агента (запись уже в БД), поэтому
+  // ловим и логируем; мастер сообщит пользователю, что Role можно дозаписать
+  // через карточку сотрудника.
+  const roleContent =
+    typeof fields.role_content === "string" ? fields.role_content : null;
+  if (roleContent && roleContent.trim()) {
+    try {
+      await saveRoleFile(displayName, roleContent);
+    } catch (storageErr) {
+      console.error(
+        `[team/agents] не удалось сохранить Role «${displayName}»:`,
+        storageErr,
+      );
+    }
+  }
+
+  const seedRules = Array.isArray(fields.seed_rules) ? fields.seed_rules : [];
+  if (seedRules.length > 0) {
+    for (const rule of seedRules) {
+      const text = typeof rule === "string" ? rule.trim() : "";
+      if (!text) continue;
+      try {
+        await ensureRule({ agentId: id, content: text, source: "seed" });
+      } catch (ruleErr) {
+        console.error(
+          `[team/agents] не удалось добавить seed-правило для ${id}:`,
+          ruleErr,
+        );
+      }
+    }
+  }
+
+  // Состав активных агентов изменился → пометить Awareness-кеш как
+  // невалидный для всех агентов (promptBuilder перечитает при следующем
+  // вызове).
+  bumpAwarenessVersion();
 
   return data;
 }
@@ -280,6 +335,10 @@ export async function updateAgent(agentId, fields = {}) {
   for (const [key, value] of Object.entries(fields)) {
     if (key === "comment") continue;
     if (!UPDATABLE_FIELDS.has(key)) continue;
+
+    // purpose / success_criteria — обычные текстовые поля, без валидации.
+    // В историю их изменения не пишем отдельным change_type — generic
+    // 'field_updated' через FIELD_CHANGE_TYPES (см. ниже).
 
     // Валидации, специфичные для поля.
     if (key === "department" && value !== null && value !== undefined) {
@@ -385,6 +444,10 @@ async function setStatus(agentId, newStatus, comment) {
     comment: comment ?? null,
   });
 
+  // Любая смена статуса меняет состав активных агентов (или для paused —
+  // меняет роль агента в команде). Инвалидируем Awareness-кеш сразу.
+  bumpAwarenessVersion();
+
   return data;
 }
 
@@ -398,4 +461,64 @@ export async function restoreAgent(agentId, { comment } = {}) {
 
 export async function pauseAgent(agentId, { comment } = {}) {
   return setStatus(agentId, "paused", comment);
+}
+
+// =========================================================================
+// Role-файлы в Storage
+// =========================================================================
+
+// Сохраняет (или перезаписывает) Role-файл агента в team-prompts/Должностные
+// инструкции/<display_name>.md. Используется мастером создания и редактором
+// карточки сотрудника.
+export async function saveRoleFile(displayName, content) {
+  const name = typeof displayName === "string" ? displayName.trim() : "";
+  if (!name) {
+    throw new Error("display_name обязателен для сохранения Role-файла.");
+  }
+  const text = typeof content === "string" ? content : String(content ?? "");
+  await uploadFile(PROMPTS_BUCKET, rolePath(name), text);
+  return true;
+}
+
+// Загружает Role-файл агента. Возвращает текст или null, если файла нет.
+// Используется promptBuilder.loadRole — но там сейчас прямой путь через
+// roles/, не «Должностные инструкции» (исторически: латиница в путях). Этот
+// метод оставлен симметрично save для будущей карточки сотрудника.
+export async function getRoleFile(displayName) {
+  const name = typeof displayName === "string" ? displayName.trim() : "";
+  if (!name) return null;
+  try {
+    return await downloadFile(PROMPTS_BUCKET, rolePath(name));
+  } catch {
+    return null;
+  }
+}
+
+// Слаг — на случай, если фронт прислал чистое имя на кириллице. Реализация
+// упрощённая: транслит, lowercase, дефисы вместо пробелов, дроп всего
+// лишнего. Совпадает с поведением фронтового генератора (см. мастер).
+const TRANSLIT_MAP = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "yo", ж: "zh",
+  з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o",
+  п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts",
+  ч: "ch", ш: "sh", щ: "shch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu",
+  я: "ya",
+};
+
+export function generateSlug(displayName) {
+  const src = String(displayName ?? "").trim().toLowerCase();
+  if (!src) return "";
+  let out = "";
+  for (const ch of src) {
+    if (TRANSLIT_MAP[ch] !== undefined) {
+      out += TRANSLIT_MAP[ch];
+    } else if (/[a-z0-9]/.test(ch)) {
+      out += ch;
+    } else if (/\s|-|_|\./.test(ch)) {
+      out += "-";
+    }
+    // прочие символы игнорируем
+  }
+  // схлопываем кратные дефисы и подрезаем края
+  return out.replace(/-+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { AlertTriangle, Archive, Loader2, Plus, User } from "lucide-react";
 import {
   DEPARTMENT_LABELS,
@@ -76,10 +77,9 @@ function DepartmentBadge({ department }: { department: TeamAgent["department"] }
 
 function AgentCard({ agent }: { agent: TeamAgent }) {
   return (
-    <div
-      className="group flex items-start gap-4 rounded-2xl border border-line bg-elevated p-5 shadow-card transition"
-      title="Карточка появится в следующем обновлении"
-      style={{ cursor: "not-allowed" }}
+    <Link
+      href={`/blog/team/staff/${encodeURIComponent(agent.id)}`}
+      className="focus-ring group flex items-start gap-4 rounded-2xl border border-line bg-elevated p-5 shadow-card transition hover:border-line-strong hover:shadow-lg"
     >
       {agent.avatar_url ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -116,7 +116,7 @@ function AgentCard({ agent }: { agent: TeamAgent }) {
           )}
         </div>
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -169,15 +169,13 @@ export default function StaffWorkspace() {
           ))}
         </div>
 
-        <button
-          type="button"
-          disabled
-          title="Появится в следующем обновлении"
-          className="focus-ring inline-flex items-center gap-2 rounded-xl border border-line bg-elevated px-4 py-2 text-sm font-semibold text-ink-muted opacity-60"
+        <Link
+          href="/blog/team/staff/create"
+          className="focus-ring inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-surface shadow-card transition hover:bg-accent-hover"
         >
           <Plus size={16} />
           Добавить сотрудника
-        </button>
+        </Link>
       </div>
 
       {loading && (
@@ -207,15 +205,13 @@ export default function StaffWorkspace() {
               ? "В архиве пока никого нет."
               : "В команде пока нет агентов. Добавьте первого сотрудника через мастер создания."}
           </p>
-          <button
-            type="button"
-            disabled
-            title="Появится в следующем обновлении"
-            className="focus-ring mt-4 inline-flex items-center gap-2 rounded-xl border border-line bg-canvas px-4 py-2 text-sm font-semibold text-ink-muted opacity-60"
+          <Link
+            href="/blog/team/staff/create"
+            className="focus-ring mt-4 inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-surface shadow-card transition hover:bg-accent-hover"
           >
             <Plus size={16} />
             Добавить сотрудника
-          </button>
+          </Link>
         </div>
       )}
 

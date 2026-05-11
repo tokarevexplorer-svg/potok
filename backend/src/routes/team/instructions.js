@@ -1,15 +1,12 @@
-// Эндпоинты раздела «Инструкции» (Сессия 4 этапа 2).
+// Эндпоинты раздела «Инструкции» (Сессия 4 этапа 2; Role-папка — Сессия 10).
 //
 // Сейчас единственный эндпоинт — список содержимого трёх логических папок
-// bucket'а team-prompts: strategy/, roles/, task-templates/. Фронт
-// (`/blog/team/instructions/`) делает один запрос и рендерит три блока с
-// кликабельными файлами; русские лейблы («Стратегия команды» и т.п.) живут
-// только в UI — в Storage всё на латинице, иначе Supabase отбивает ключи.
+// bucket'а team-prompts: strategy/, «Должностные инструкции»/, task-templates/.
+// Фронт (`/blog/team/instructions/`) делает один запрос и рендерит три блока
+// с кликабельными файлами.
 //
-// Папка `roles/` появится в этапе 2 (пункт 12 roadmap) — сейчас она пуста и
-// эндпоинт возвращает `roles: []`. Папки `agent-skills/` и `tools/` намеренно
-// НЕ листим здесь — они появятся в отдельных этапах (пункт 10 этапа 4 и
-// пункт 16 этапа 3).
+// Папки `agent-skills/` и `tools/` намеренно НЕ листим здесь — они появятся
+// в отдельных этапах (пункт 10 этапа 4 и пункт 16 этапа 3).
 
 import { Router } from "express";
 import { listFiles } from "../../services/team/teamStorage.js";
@@ -45,7 +42,9 @@ router.get("/list", async (_req, res) => {
   try {
     const [strategy, roles, templates] = await Promise.all([
       listFolderTitles("strategy"),
-      listFolderTitles("roles"),
+      // «Должностные инструкции» — кириллица, совпадает с папкой, в которую
+      // мастер сохраняет Role-файл (agentService.saveRoleFile).
+      listFolderTitles("Должностные инструкции"),
       listFolderTitles("task-templates"),
     ]);
     return res.json({ strategy, roles, templates });

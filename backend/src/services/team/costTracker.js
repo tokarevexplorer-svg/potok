@@ -146,6 +146,8 @@ export async function recordCall({
   taskId = null,
   success = true,
   error = null,
+  agentId = null,
+  purpose = null,
 }) {
   const cost = await calculateCost({
     provider,
@@ -167,6 +169,8 @@ export async function recordCall({
     taskId,
     success,
     error,
+    agentId,
+    purpose,
   });
 }
 
