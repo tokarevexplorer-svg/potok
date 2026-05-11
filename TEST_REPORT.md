@@ -829,3 +829,40 @@ URL: https://potok-omega.vercel.app/blog/team/staff/&lt;agent_id&gt;
 ### Что осталось руками проверить
 Ничего необязательного — функционал визуальный, проверен.
 
+
+---
+
+## Сессия 29 — Self-review: сервис, чек-лист, второй вызов (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для selfReviewService.js, taskRunner.js, promptBuilder.js, routes/team/tasks.js — OK.
+- `npx tsc --noEmit` во фронте — без ошибок.
+- `npx supabase db push` — миграция `0029_team_self_review.sql` применена (три колонки в `team_tasks`).
+- `npm run apply:self-review-defaults` — 5/5 шаблонов получили frontmatter (write-text/edit-text-fragments=true, остальные=false).
+- `git log --oneline -1` → `bfd4234 Сессия 29 — self-review: сервис, чек-лист, второй вызов`.
+
+### E2E через Playwright
+1. `GET /api/team-proxy/tasks/template-defaults/<taskType>` для всех 5 — корректные дефолты:
+   - `write_text` → `{"self_review_default":true}` ✓
+   - `edit_text_fragments` → `{"self_review_default":true}` ✓
+   - `ideas_free` → `{"self_review_default":false}` ✓
+   - `ideas_questions_for_research` → `{"self_review_default":false}` ✓
+   - `research_direct` → `{"self_review_default":false}` ✓
+2. `/blog/team/dashboard` → «Поставить задачу» → агент Игорь → «Написать текст». В модалке чекбокс «🔍 Самопроверка» = `checked=true, disabled=false`, textarea «Доп. пункты проверки» раскрыта.
+3. `/blog/team/dashboard` → быстрый запуск «Идеи и вопросы (свободные)». Чекбокс = `checked=false, disabled=false` — дефолт корректно подтягивается из frontmatter.
+
+### Что осталось руками проверить
+#### Сессия 29 — реальный self-review (требует запуска задачи)
+URL: https://potok-omega.vercel.app/blog/team/dashboard
+
+Что сделать:
+1. «Поставить задачу» → выбрать агента с привязанными правилами Memory (Игорь) → «Написать текст».
+2. Заполнить бриф (`point_name`, `user_input`) и запустить.
+3. После завершения открыть задачу в логе.
+
+Что должно произойти:
+- В `team_tasks` для последнего снапшота поле `self_review_result` непустое — JSON с `checklist`, `passed`, `revised`.
+- В `team_api_calls` есть отдельная строка с `purpose='self_review'`, agent_id того же.
+- Если `revised=true` — артефакт в Storage уже содержит исправленную версию (UI результата покажет её).
+- Визуальная карточка результата self-review в карточке задачи появится в Сессии 30.
+
