@@ -464,3 +464,71 @@ URL: https://potok-omega.vercel.app/blog/team/instructions
 2. В шапке редактора должно быть написано «Методичка инструмента».
 3. Изменить текст → автосохранение.
 4. Поставить новую задачу агенту с привязанным NotebookLM — в Awareness промпта появится обновлённый текст.
+
+---
+
+## Сессия 22 — Предложения от агентов: двухтактный процесс
+
+### ✅ Выполнено (автоматически)
+- Миграция `0026_team_proposals.sql` накачена (`supabase db push` → up to date).
+- Backend: `node --check` прошёл для `proposalService.js`, `triggerService.js`, `routes/team/proposals.js`, `app.js`, `scripts/run-triggers.js`.
+- Frontend: `next build` — Compiled successfully + Linting + типы прошли. Page-data collection упала на pre-existing missing local Supabase env.
+- E2E на проде через Playwright:
+  - `GET /api/team-proxy/proposals` → 200 `{proposals:[]}` (Railway-деплой backend накатил новые маршруты).
+  - Console clean (только pre-existing 401 на `/admin/dev-mode`).
+
+### ⚠️ Требует ручной проверки
+
+#### Сессия 22 — еженедельное окно для одного агента
+URL: терминал backend.
+
+Что сделать:
+1. Включить глобальный тумблер: в Supabase обновить запись `team_settings` с `key='autonomy_enabled_globally'` → `value=true::jsonb`.
+2. У тестового агента поставить `autonomy_level=1` (Сессия 23 даст UI; пока — через SQL).
+3. В терминале:
+   ```
+   cd backend
+   npm run triggers:run -- --agent <agent_id>
+   ```
+
+Что должно произойти:
+- В лог выводится `phase: 'proposal_created' | 'skip' | 'cooldown'`.
+- При `proposal_created` — запись в `team_proposals` со `status='pending'`, в Inbox-блоке дашборда и колокольчике появляется группа «🎯 Предложения от агентов» с +1 нотификацией.
+- При `skip` с reason `filter_declined` — запись в `team_agent_diary` с reason_to_skip.
+- В `team_api_calls` две записи с `purpose='autonomy_filter'` и `purpose='autonomy_propose'` (или только filter — если такт 1 сказал «нет»).
+
+#### Сессия 22 — повторный запуск, cooldown
+URL: терминал backend.
+
+Что сделать:
+1. Сразу после успешного запуска повторить `npm run triggers:run -- --agent <id>`.
+
+Что должно произойти:
+- Лог покажет `phase: 'cooldown', last_at: <timestamp>` — повторное размышление по тому же `triggered_by=weekly_window` не происходит в течение 7 дней. LLM-вызовы не делаются.
+
+#### Сессия 22 — принятие предложения через API
+URL: терминал.
+
+Что сделать:
+1. Получить id pending-предложения: `curl /api/team-proxy/proposals?status=pending`.
+2. Принять:
+   ```
+   curl -X PATCH https://potok-omega.vercel.app/api/team-proxy/proposals/<id>/accept \
+     -H 'Content-Type: application/json' \
+     -d '{}'
+   ```
+
+Что должно произойти:
+- Ответ: `{ proposal: {...status:'accepted'}, task_id: 'tsk_...' }`.
+- В `team_tasks` появляется новая задача с `agent_id` из предложения; в логе дашборда видна сразу.
+- Предложение получает `decided_at` и `resulting_task_id`.
+
+#### Сессия 22 — отключённый тумблер
+URL: терминал backend.
+
+Что сделать:
+1. В Supabase: `UPDATE team_settings SET value='false'::jsonb WHERE key='autonomy_enabled_globally';`.
+2. Запустить `npm run triggers:run`.
+
+Что должно произойти:
+- Лог: `autonomy_enabled_globally = false — все триггеры спят.` LLM-вызовов нет.
