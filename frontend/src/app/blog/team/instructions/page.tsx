@@ -34,12 +34,22 @@ async function listFolder(folder: string): Promise<string[]> {
   }
 }
 
+// Стратегия — фиксированный обязательный набор: Миссия + Цели на период.
+// Эти два файла показываем всегда, даже если их ещё нет в Storage (первое
+// сохранение создаст файл). Любые дополнительные файлы в `strategy/`
+// (например, author-profile.md из этапа 2, пункт 9) подмешиваем сверху.
+const STRATEGY_REQUIRED = ["mission", "goals"];
+
 async function loadInstructionsTree(): Promise<InstructionsTree> {
-  const [strategy, roles, templates] = await Promise.all([
+  const [strategyFound, roles, templates] = await Promise.all([
     listFolder("strategy"),
     listFolder("roles"),
     listFolder("task-templates"),
   ]);
+  const extra = strategyFound
+    .filter((slug) => !STRATEGY_REQUIRED.includes(slug))
+    .sort();
+  const strategy = [...STRATEGY_REQUIRED, ...extra];
   return { strategy, roles, templates };
 }
 

@@ -296,9 +296,14 @@ function FileEditorPanel({
       .catch((err) => {
         if (cancelled) return;
         // Если файла нет — начинаем с пустого; первое сохранение создаст его.
+        // Это штатный сценарий для обязательных файлов стратегии (Миссия,
+        // Цели на период), которые ещё не заполнены — баннер ошибки не
+        // показываем, чтобы не пугать.
+        const msg = err instanceof Error ? err.message : String(err);
+        const isMissing = /not found|404/i.test(msg);
         setContent("");
         setOriginalContent("");
-        setLoadError(err instanceof Error ? err.message : String(err));
+        setLoadError(isMissing ? null : msg);
       })
       .finally(() => {
         if (!cancelled) setLoadingContent(false);
