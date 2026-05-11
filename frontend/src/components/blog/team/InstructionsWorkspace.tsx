@@ -33,10 +33,11 @@ import {
 
 const STRATEGY_FOLDER = "strategy";
 const TEMPLATES_FOLDER = "task-templates";
-// Сессия 10 этапа 2: Role-файлы агентов лежат в «Должностные инструкции/»
-// (см. agentService.saveRoleFile). Кириллица в пути — намеренно, чтобы Влад
-// в Supabase Dashboard сразу узнавал нужную папку.
-const ROLES_FOLDER = "Должностные инструкции";
+// Сессия 11 этапа 2: Role-файлы агентов лежат в `roles/<agent_id>.md`.
+// До Сессии 11 здесь была кириллическая папка «Должностные инструкции» —
+// Storage отбивал её ключи как `Invalid key`, и Role-файлы вообще не
+// сохранялись (см. agentService.rolePath).
+const ROLES_FOLDER = "roles";
 
 // Маппинг latin-slug → человекочитаемое название для UI. В Storage файл
 // называется `mission.md`, но в интерфейсе показываем «Миссия».

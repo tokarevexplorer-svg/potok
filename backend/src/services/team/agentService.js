@@ -17,19 +17,26 @@
 import { getServiceRoleClient } from "./teamSupabase.js";
 import { uploadFile, downloadFile } from "./teamStorage.js";
 import { ensureRule } from "./memoryService.js";
-import { bumpAwarenessVersion } from "./awarenessVersion.js";
+import { invalidatePromptCache } from "./promptBuilder.js";
 
 const TABLE = "team_agents";
 const HISTORY_TABLE = "team_agent_history";
 const PROMPTS_BUCKET = "team-prompts";
 
-// Путь до Role-файла агента в bucket'е team-prompts. Кириллица в имени файла
-// работает: Supabase Storage не отбивает не-ASCII в путях самих файлов
-// (отбивает только нестандартные ключи — слэш и пр.). Подпапка «Должностные
-// инструкции» специально на русском, чтобы в Dashboard было сразу понятно.
-const ROLES_FOLDER = "Должностные инструкции";
-function rolePath(displayName) {
-  return `${ROLES_FOLDER}/${displayName}.md`;
+// Путь до Role-файла агента в bucket'е team-prompts.
+//
+// Эмпирически: Supabase Storage отбивает кириллицу в ключах объектов с
+// ошибкой `Invalid key: …` (несмотря на то что в документации сказано, что
+// поддерживаются произвольные строки). До Сессии 11 здесь была кириллическая
+// папка «Должностные инструкции» — все вызовы `saveRoleFile` тихо падали в
+// try/catch (createAgent → console.error, без откатывания агента). То есть
+// Role-файлы вообще не сохранялись, никаких данных в Storage нет.
+//
+// Сессия 11: перешли на `roles/<agent_id>.md`. Латиница, slug стабилен
+// (id агента нельзя сменить), путь короткий и читаемый в Dashboard.
+const ROLES_FOLDER = "roles";
+function rolePath(agentId) {
+  return `${ROLES_FOLDER}/${agentId}.md`;
 }
 
 // Slug: латиница, цифры, дефис. Без подчёркиваний и слэшей — чтобы id можно
@@ -277,10 +284,10 @@ export async function createAgent(fields = {}) {
     typeof fields.role_content === "string" ? fields.role_content : null;
   if (roleContent && roleContent.trim()) {
     try {
-      await saveRoleFile(displayName, roleContent);
+      await saveRoleFile(id, roleContent);
     } catch (storageErr) {
       console.error(
-        `[team/agents] не удалось сохранить Role «${displayName}»:`,
+        `[team/agents] не удалось сохранить Role «${id}»:`,
         storageErr,
       );
     }
@@ -302,10 +309,10 @@ export async function createAgent(fields = {}) {
     }
   }
 
-  // Состав активных агентов изменился → пометить Awareness-кеш как
-  // невалидный для всех агентов (promptBuilder перечитает при следующем
-  // вызове).
-  bumpAwarenessVersion();
+  // Состав активных агентов изменился + содержимое промпта (новый Role,
+  // seed_rules) — инвалидируем общий prompt-кеш. Сессия 12: единый канал
+  // через invalidatePromptCache (бампает instructionVersion + awareness).
+  invalidatePromptCache();
 
   return data;
 }
@@ -407,6 +414,11 @@ export async function updateAgent(agentId, fields = {}) {
     });
   }
 
+  // Любое поле агента может попасть в промпт (модель, инструменты, доступы,
+  // департамент в Awareness и т.п.) или влиять на сборку. Инвалидируем
+  // prompt-кеш — следующая задача увидит свежие данные. Сессия 12.
+  invalidatePromptCache();
+
   return data;
 }
 
@@ -445,8 +457,9 @@ async function setStatus(agentId, newStatus, comment) {
   });
 
   // Любая смена статуса меняет состав активных агентов (или для paused —
-  // меняет роль агента в команде). Инвалидируем Awareness-кеш сразу.
-  bumpAwarenessVersion();
+  // меняет роль агента в команде). Сессия 12: единый канал инвалидации
+  // через invalidatePromptCache (бампает instructionVersion + awareness).
+  invalidatePromptCache();
 
   return data;
 }
@@ -467,28 +480,28 @@ export async function pauseAgent(agentId, { comment } = {}) {
 // Role-файлы в Storage
 // =========================================================================
 
-// Сохраняет (или перезаписывает) Role-файл агента в team-prompts/Должностные
-// инструкции/<display_name>.md. Используется мастером создания и редактором
-// карточки сотрудника.
-export async function saveRoleFile(displayName, content) {
-  const name = typeof displayName === "string" ? displayName.trim() : "";
-  if (!name) {
-    throw new Error("display_name обязателен для сохранения Role-файла.");
+// Сохраняет (или перезаписывает) Role-файл агента в team-prompts/roles/<id>.md.
+// Используется мастером создания и редактором карточки сотрудника.
+// Сессия 12: после записи инвалидируем prompt-кеш — следующая задача этого
+// агента подтянет обновлённый Role.
+export async function saveRoleFile(agentId, content) {
+  const id = typeof agentId === "string" ? agentId.trim() : "";
+  if (!id) {
+    throw new Error("agentId обязателен для сохранения Role-файла.");
   }
   const text = typeof content === "string" ? content : String(content ?? "");
-  await uploadFile(PROMPTS_BUCKET, rolePath(name), text);
+  await uploadFile(PROMPTS_BUCKET, rolePath(id), text);
+  invalidatePromptCache();
   return true;
 }
 
 // Загружает Role-файл агента. Возвращает текст или null, если файла нет.
-// Используется promptBuilder.loadRole — но там сейчас прямой путь через
-// roles/, не «Должностные инструкции» (исторически: латиница в путях). Этот
-// метод оставлен симметрично save для будущей карточки сотрудника.
-export async function getRoleFile(displayName) {
-  const name = typeof displayName === "string" ? displayName.trim() : "";
-  if (!name) return null;
+// Используется promptBuilder.loadRole и эндпоинтом GET /api/team/agents/:id/role.
+export async function getRoleFile(agentId) {
+  const id = typeof agentId === "string" ? agentId.trim() : "";
+  if (!id) return null;
   try {
-    return await downloadFile(PROMPTS_BUCKET, rolePath(name));
+    return await downloadFile(PROMPTS_BUCKET, rolePath(id));
   } catch {
     return null;
   }

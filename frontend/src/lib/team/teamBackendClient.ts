@@ -208,11 +208,16 @@ export interface PreviewPromptResult {
 export async function previewPrompt(
   taskType: string,
   params: Record<string, unknown>,
+  agentId?: string | null,
 ): Promise<PreviewPromptResult> {
+  // Сессия 12: agentId — top-level поле, бэкенд подмешивает в variables как
+  // `agent_id`, чтобы превью отражало Role/Memory/Awareness выбранного агента.
+  const body: Record<string, unknown> = { taskType, params };
+  if (agentId) body.agentId = agentId;
   const data = await backendFetch("/api/team/tasks/preview-prompt", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ taskType, params }),
+    body: JSON.stringify(body),
   });
   const obj = (data ?? {}) as { prompt?: PreviewPromptResult };
   return obj.prompt ?? { system: null, user: null, cacheableBlocks: [], template: null };
@@ -224,6 +229,9 @@ export interface RunTaskParams {
   modelChoice?: TeamTaskModelChoice | null;
   promptOverride?: TeamTaskPrompt | null;
   title?: string | null;
+  // Сессия 12: опц. id агента-исполнителя. С агентом промпт собирается с
+  // Role + Memory + Awareness; без агента — как раньше (только Mission/Goals).
+  agentId?: string | null;
 }
 
 export async function runTask(input: RunTaskParams): Promise<string> {

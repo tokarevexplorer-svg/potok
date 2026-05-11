@@ -62,6 +62,11 @@ export async function appendTaskSnapshot(snapshot) {
     error: snapshot.error ?? null,
     started_at: snapshot.startedAt ?? null,
     finished_at: snapshot.finishedAt ?? null,
+    // agent_id — Сессия 12. Опц.: задача может быть без агента (как в этапе 1)
+    // или привязанной к конкретному исполнителю. Снимок переносит значение
+    // между состояниями: оно задаётся при первом insert'е (createTask) и
+    // тащится дальше через mergeSnapshot.
+    agent_id: snapshot.agentId ?? null,
   };
 
   const { data, error } = await client

@@ -8,6 +8,7 @@ import { Router } from "express";
 import { uploadFile } from "../../services/team/teamStorage.js";
 import { call as llmCall, LLMError } from "../../services/team/llmClient.js";
 import { recordCall } from "../../services/team/costTracker.js";
+import { invalidatePromptCache } from "../../services/team/promptBuilder.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 
 const router = Router();
@@ -67,6 +68,12 @@ router.post("/", async (req, res) => {
   const filename = verdict.name.endsWith(".md") ? verdict.name : `${verdict.name}.md`;
   try {
     await uploadFile(BUCKET, filename, content);
+    // Сессия 12: любая правка в team-prompts (strategy/mission.md,
+    // strategy/goals.md, strategy/author-profile.md, roles/*.md,
+    // task-templates/*.md) влияет на собираемый промпт. Бампаем
+    // instructionVersion и инвалидируем in-memory Awareness — следующая
+    // задача увидит обновлённое содержимое.
+    invalidatePromptCache();
     return res.json({ ok: true, name: filename });
   } catch (err) {
     console.error(`[team] prompts upload ${filename} failed:`, err);

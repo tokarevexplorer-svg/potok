@@ -69,12 +69,19 @@ router.get("/templates", (_req, res) => {
 // =========================================================================
 
 router.post("/preview-prompt", async (req, res) => {
-  const { taskType, params } = req.body ?? {};
+  const { taskType, params, agentId } = req.body ?? {};
   if (typeof taskType !== "string" || !TASK_HANDLERS[taskType]) {
     return res.status(400).json({ error: "Неизвестный тип задачи" });
   }
   try {
-    const prompt = await previewPrompt(taskType, params || {});
+    // Сессия 12: agentId — top-level, чтобы превью отражало то, что увидит
+    // конкретный агент (Role + Memory + Awareness). buildPrompt принимает
+    // ключ `agent_id` в variables.
+    const promptVars = { ...(params || {}) };
+    if (typeof agentId === "string" && agentId.trim()) {
+      promptVars.agent_id = agentId.trim();
+    }
+    const prompt = await previewPrompt(taskType, promptVars);
     return res.json({ prompt });
   } catch (err) {
     console.error("[team] preview-prompt failed:", err);
@@ -90,13 +97,26 @@ router.post("/preview-prompt", async (req, res) => {
 // =========================================================================
 
 router.post("/run", async (req, res) => {
-  const { taskType, params, modelChoice, promptOverride, title } = req.body ?? {};
+  const { taskType, params, modelChoice, promptOverride, title, agentId } =
+    req.body ?? {};
 
   if (typeof taskType !== "string" || !TASK_HANDLERS[taskType]) {
     return res.status(400).json({ error: "Неизвестный тип задачи" });
   }
   if (params != null && (typeof params !== "object" || Array.isArray(params))) {
     return res.status(400).json({ error: "params должен быть объектом" });
+  }
+
+  // Сессия 12: agentId — опц. top-level. Принимаем строку (slug агента) или
+  // null/undefined. Без агента задача собирается «как раньше» — только
+  // Mission + Goals + шаблон.
+  let normalizedAgentId = null;
+  if (typeof agentId === "string" && agentId.trim()) {
+    normalizedAgentId = agentId.trim();
+  } else if (agentId !== null && agentId !== undefined && agentId !== "") {
+    return res
+      .status(400)
+      .json({ error: "agentId должен быть строкой (id агента) или null." });
   }
 
   try {
@@ -122,6 +142,7 @@ router.post("/run", async (req, res) => {
       modelChoice: modelChoice ?? null,
       promptOverride: promptOverride ?? null,
       title: title ?? null,
+      agentId: normalizedAgentId,
     });
     return res.status(202).json({ taskId });
   } catch (err) {

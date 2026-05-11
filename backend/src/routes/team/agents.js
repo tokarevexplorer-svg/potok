@@ -5,6 +5,8 @@
 //   GET    /api/team/agents/roster       — сжатый ростер активных агентов (Awareness).
 //   GET    /api/team/agents/:id          — один агент.
 //   GET    /api/team/agents/:id/history  — лог изменений (limit по умолчанию 50).
+//   GET    /api/team/agents/:id/role     — текст Role-файла из Storage (Сессия 11).
+//   PUT    /api/team/agents/:id/role     — перезапись Role + строка в history (Сессия 11).
 //   POST   /api/team/agents              — создать.
 //   PATCH  /api/team/agents/:id          — частичное обновление.
 //   DELETE /api/team/agents/:id          — мягкое удаление (status='archived').
@@ -22,7 +24,11 @@ import {
   updateAgent,
   archiveAgent,
   restoreAgent,
+  pauseAgent,
+  getRoleFile,
+  saveRoleFile,
 } from "../../services/team/agentService.js";
+import { getServiceRoleClient } from "../../services/team/teamSupabase.js";
 import { call as llmCall, LLMError } from "../../services/team/llmClient.js";
 import { recordCall } from "../../services/team/costTracker.js";
 import { buildTestPrompt } from "../../services/team/promptBuilder.js";
@@ -104,6 +110,81 @@ router.get("/:id/history", async (req, res) => {
   } catch (err) {
     console.error(`[team/agents] history ${id} failed:`, err);
     return res.status(statusForError(err)).json({ error: err.message ?? "Не удалось получить историю" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/agents/:id/role
+// Возвращает текст Role-файла из team-prompts/roles/<id>.md.
+// Если файла нет — { content: null } (это нормально для агентов, созданных
+// до Сессии 11 — все Role-файлы из мастера Сессии 10 тихо терялись из-за
+// бага с кириллицей в Storage-ключах, см. agentService.rolePath).
+// =========================================================================
+router.get("/:id/role", async (req, res) => {
+  const { id } = req.params;
+  try {
+    await getAgent(id); // 404, если агента нет
+    const content = await getRoleFile(id);
+    return res.json({ content });
+  } catch (err) {
+    console.error(`[team/agents] role get ${id} failed:`, err);
+    return res
+      .status(statusForError(err))
+      .json({ error: err.message ?? "Не удалось получить Role-файл" });
+  }
+});
+
+// =========================================================================
+// PUT /api/team/agents/:id/role
+// Body: { content: string, comment?: string }
+// Перезаписывает Role-файл в Storage + пишет строку в team_agent_history
+// с change_type='role_updated'. Сам Role-файл не хранится в team_agents,
+// поэтому history пишем напрямую, минуя updateAgent().
+// =========================================================================
+router.put("/:id/role", async (req, res) => {
+  const { id } = req.params;
+  const body = req.body ?? {};
+  if (typeof body.content !== "string") {
+    return res
+      .status(400)
+      .json({ error: "Поле content обязательно и должно быть строкой." });
+  }
+  const newContent = body.content;
+  const comment =
+    typeof body.comment === "string" && body.comment.trim()
+      ? body.comment.trim()
+      : null;
+  try {
+    await getAgent(id); // 404, если агента нет
+    const oldContent = (await getRoleFile(id)) ?? "";
+    if (oldContent === newContent) {
+      return res.json({ content: newContent, changed: false });
+    }
+    await saveRoleFile(id, newContent);
+
+    // history-запись пишем прямо здесь — agentService.updateAgent не трогает
+    // Storage, а вызывать его пустым PATCH'ем ради лога — некрасиво. Ошибку
+    // лога глушим: основное действие (запись в Storage) уже прошло.
+    const client = getServiceRoleClient();
+    const { error: historyErr } = await client.from("team_agent_history").insert({
+      agent_id: id,
+      change_type: "role_updated",
+      old_value: oldContent,
+      new_value: newContent,
+      comment,
+    });
+    if (historyErr) {
+      console.error(
+        `[team/agents] history role_updated ${id} failed: ${historyErr.message}`,
+      );
+    }
+
+    return res.json({ content: newContent, changed: true });
+  } catch (err) {
+    console.error(`[team/agents] role put ${id} failed:`, err);
+    return res
+      .status(statusForError(err))
+      .json({ error: err.message ?? "Не удалось сохранить Role-файл" });
   }
 });
 
@@ -421,6 +502,26 @@ router.post("/:id/restore", async (req, res) => {
   } catch (err) {
     console.error(`[team/agents] restore ${id} failed:`, err);
     return res.status(statusForError(err)).json({ error: err.message ?? "Не удалось восстановить агента" });
+  }
+});
+
+// =========================================================================
+// POST /api/team/agents/:id/pause
+// Сессия 11 этапа 2: ставит активного агента на паузу (status='paused').
+// Из «paused» в «active» — через /:id/restore. Awareness-кеш инвалидируется
+// в pauseAgent → setStatus.
+// =========================================================================
+router.post("/:id/pause", async (req, res) => {
+  const { id } = req.params;
+  const comment = req.body && typeof req.body.comment === "string" ? req.body.comment : null;
+  try {
+    const agent = await pauseAgent(id, { comment });
+    return res.json({ agent });
+  } catch (err) {
+    console.error(`[team/agents] pause ${id} failed:`, err);
+    return res
+      .status(statusForError(err))
+      .json({ error: err.message ?? "Не удалось приостановить агента" });
   }
 });
 

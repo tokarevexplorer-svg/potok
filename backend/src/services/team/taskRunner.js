@@ -97,6 +97,9 @@ function mergeSnapshot(current, update) {
     error: update.error === undefined ? current.error : update.error,
     startedAt: update.startedAt ?? current.started_at,
     finishedAt: update.finishedAt ?? current.finished_at,
+    // agent_id живёт на уровне задачи (Сессия 12) — не меняется между
+    // снапшотами, переносим текущее значение, если update не уточняет.
+    agentId: update.agentId ?? current.agent_id,
   };
 }
 
@@ -229,6 +232,9 @@ export async function resolveModelChoice(modelChoice, taskType = null) {
 
 // Собирает промпт для предпросмотра через UI (без запуска задачи).
 // Используется эндпоинтом /api/team/tasks/preview-prompt.
+// Сессия 12: если в params есть agent_id, передаём его в buildPrompt — это
+// подтянет Role + Memory + Awareness в превью (раньше эти слои оставались
+// пустыми, потому что мы не знали, для кого собирается задача).
 export async function previewPrompt(taskType, params) {
   const variables = await buildPreviewVariables(taskType, params || {});
   return await buildTaskPrompt(taskType, variables);
@@ -244,18 +250,29 @@ export async function previewPrompt(taskType, params) {
 //   - promptOverride (опц.): {system, user, cacheable_blocks?} — пользователь
 //     отредактировал промпт перед запуском
 //   - title (опц.): пользовательское название задачи
+//   - agentId (опц.): slug агента-исполнителя (Сессия 12). Если передан —
+//     buildPrompt подтянет Role + Memory + Awareness; промпт станет
+//     персональным. Без agentId — задача собирается «как раньше»
+//     (только Mission + Goals + шаблон).
 export async function createTask({
   taskType,
   params,
   modelChoice = null,
   promptOverride = null,
   title = null,
+  agentId = null,
 }) {
   if (!TASK_HANDLERS[taskType]) {
     throw new Error(`Тип задачи не поддерживается: ${taskType}`);
   }
 
   const { provider, model } = await resolveModelChoice(modelChoice, taskType);
+
+  // agent_id передаётся в buildPrompt через variables — promptBuilder
+  // ожидает ключ `agent_id` (или alias `agentId`) и сам разрулит загрузку
+  // Role/Memory/Awareness. Не мутируем исходный params — копируем.
+  const promptVars = { ...(params || {}) };
+  if (agentId) promptVars.agent_id = agentId;
 
   const overrideUsed = !!(promptOverride && promptOverride.system != null);
   let prompt;
@@ -264,7 +281,7 @@ export async function createTask({
     // фолбэк на стандартные context/concept (если в override не указано иначе).
     let cacheableBlocks = promptOverride.cacheable_blocks ?? promptOverride.cacheableBlocks;
     if (!Array.isArray(cacheableBlocks)) {
-      const standard = await previewPrompt(taskType, params || {});
+      const standard = await previewPrompt(taskType, promptVars);
       cacheableBlocks = standard.cacheableBlocks ?? [];
     }
     prompt = {
@@ -274,7 +291,7 @@ export async function createTask({
       template: taskTemplateName(taskType),
     };
   } else {
-    const built = await previewPrompt(taskType, params || {});
+    const built = await previewPrompt(taskType, promptVars);
     prompt = {
       system: built.system,
       user: built.user,
@@ -284,7 +301,6 @@ export async function createTask({
   }
 
   const taskId = newTaskId();
-  const now = nowIso();
   const snapshot = {
     id: taskId,
     type: taskType,
@@ -303,6 +319,7 @@ export async function createTask({
     error: null,
     startedAt: null,
     finishedAt: null,
+    agentId: agentId || null,
   };
 
   await appendTaskSnapshot(snapshot);
@@ -350,6 +367,9 @@ export async function runTaskInBackground(taskId) {
     const outcome = await handler(task);
 
     // record API call перед апдейтом задачи: получим cost_usd для записи.
+    // Сессия 12: пробрасываем agent_id и purpose='task' — будущая страница
+    // биллинга разбирает расходы по агентам, текущая Админка использует
+    // purpose для разграничения task / role_draft / test_run.
     const tokens = outcome.tokens || {};
     const apiEntry = await recordCall({
       provider: task.provider,
@@ -359,6 +379,8 @@ export async function runTaskInBackground(taskId) {
       cachedTokens: Number(tokens.cached ?? 0),
       taskId,
       success: true,
+      agentId: task.agent_id ?? null,
+      purpose: "task",
     });
 
     // Жёсткий лимит стоимости одной задачи (Сессия 2 этапа 2). После каждого
@@ -404,7 +426,8 @@ export async function runTaskInBackground(taskId) {
     const provider = task?.provider || "unknown";
     const model = task?.model || "unknown";
     // Лог об ошибке тоже идёт в team_api_calls (как в Python-версии),
-    // чтобы видеть статистику падений по моделям.
+    // чтобы видеть статистику падений по моделям. Сессия 12: agent_id и
+    // purpose в журнале остаются согласованными с успешным путём.
     try {
       await recordCall({
         provider,
@@ -412,6 +435,8 @@ export async function runTaskInBackground(taskId) {
         taskId,
         success: false,
         error: message,
+        agentId: task?.agent_id ?? null,
+        purpose: "task",
       });
     } catch (recErr) {
       console.error("[team] recordCall (error) failed:", recErr);
@@ -554,6 +579,9 @@ export async function applyFragmentEditsInline({
     cachedTokens: Number(result.cachedTokens ?? 0),
     taskId: parentTaskId,
     success: true,
+    // Сессия 12: правки биллятся к parent — agent_id тянем с него.
+    agentId: parent.agent_id ?? null,
+    purpose: "task",
   });
 
   // Версионирование: ищем максимальный vN в pointDir.
@@ -711,6 +739,9 @@ export async function appendQuestionToResearch({
     cachedTokens: Number(result.cachedTokens ?? 0),
     taskId: parentTaskId,
     success: true,
+    // Сессия 12: доп. вопрос биллится к parent — agent_id тянем с него.
+    agentId: parent.agent_id ?? null,
+    purpose: "task",
   });
 
   // Дописываем в артефакт новый блок «## Вопрос» / «## Ответ».

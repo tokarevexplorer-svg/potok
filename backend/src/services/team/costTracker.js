@@ -293,6 +293,82 @@ export async function getTaskSpentUsd(taskId) {
   return await getCostForTask(taskId);
 }
 
+// Сумма cost_usd по конкретному агенту за период (Сессия 12 этапа 2).
+// Используется как заготовка для будущей страницы биллинга по агентам в
+// Админке (🔁 пункт 1 этапа 7) — сейчас вызывается только из CLI/тестов,
+// но API стабильный, чтобы UI-слой можно было пристыковать без миграций.
+//
+// Аргументы:
+//   - agentId: slug агента или 'system' (для draft-role и test-run из мастера).
+//   - period:
+//       'today'  — текущие UTC-сутки;
+//       'week'   — последние 7 дней (rolling);
+//       'month'  — последние 30 дней;
+//       'all'    — без ограничения (по умолчанию).
+//     Любая другая строка трактуется как ISO-дата начала периода.
+//
+// Возвращает { agent_id, spent_usd, calls, period }.
+export async function getSpentByAgent(agentId, { period = "all" } = {}) {
+  if (!agentId || typeof agentId !== "string") {
+    throw new Error("agentId обязателен и должен быть непустой строкой.");
+  }
+
+  const startIso = resolvePeriodStart(period);
+
+  const client = getServiceRoleClient();
+  let query = client
+    .from("team_api_calls")
+    .select("cost_usd")
+    .eq("agent_id", agentId);
+  if (startIso) {
+    query = query.gte("timestamp", startIso);
+  }
+  const { data, error } = await query;
+  if (error) {
+    console.warn(
+      `[costTracker] не удалось получить расходы агента ${agentId}: ${error.message}`,
+    );
+    return { agent_id: agentId, spent_usd: 0, calls: 0, period };
+  }
+
+  let total = 0;
+  for (const row of data ?? []) {
+    const v = Number(row?.cost_usd ?? 0);
+    if (Number.isFinite(v)) total += v;
+  }
+  return {
+    agent_id: agentId,
+    spent_usd: Math.round(total * 1_000_000) / 1_000_000,
+    calls: (data ?? []).length,
+    period,
+  };
+}
+
+// Превращает символьный период в ISO-дату начала (или null для 'all').
+function resolvePeriodStart(period) {
+  if (!period || period === "all") return null;
+  const now = new Date();
+  if (period === "today") {
+    return new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0),
+    ).toISOString();
+  }
+  if (period === "week") {
+    const d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return d.toISOString();
+  }
+  if (period === "month") {
+    const d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    return d.toISOString();
+  }
+  // Произвольная ISO-дата от вызывающего кода.
+  const parsed = new Date(period);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString();
+  }
+  return null;
+}
+
 // Проверяет, можно ли запускать новую задачу.
 // Возвращает { allowed, spent_usd, limit_usd, enabled }.
 export async function checkDailyLimit() {

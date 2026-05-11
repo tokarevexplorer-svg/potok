@@ -42,9 +42,9 @@ router.get("/list", async (_req, res) => {
   try {
     const [strategy, roles, templates] = await Promise.all([
       listFolderTitles("strategy"),
-      // «Должностные инструкции» — кириллица, совпадает с папкой, в которую
-      // мастер сохраняет Role-файл (agentService.saveRoleFile).
-      listFolderTitles("Должностные инструкции"),
+      // roles/<agent_id>.md — латиница (Сессия 11 этапа 2 поправила путь:
+      // кириллица в Storage-ключах падает с `Invalid key`).
+      listFolderTitles("roles"),
       listFolderTitles("task-templates"),
     ]);
     return res.json({ strategy, roles, templates });

@@ -48,7 +48,48 @@ import { downloadFile, listFiles } from "./teamStorage.js";
 import { getRulesForAgent } from "./memoryService.js";
 import { getAgent, getAgentRoster } from "./agentService.js";
 import { listDatabases } from "./customDatabaseService.js";
-import { getAwarenessVersion } from "./awarenessVersion.js";
+import { getAwarenessVersion, bumpAwarenessVersion } from "./awarenessVersion.js";
+
+// =========================================================================
+// Инвалидация prompt-кеша (Сессия 12 этапа 2)
+// =========================================================================
+//
+// Anthropic prompt caching content-keyed: при изменении содержимого кеш
+// инвалидируется сам. Реальная проблема — in-memory состояние бэкенда:
+// если бы мы держали слои в локальной памяти Node.js, файл в Storage был
+// бы обновлён, а promptBuilder продолжал бы отдавать старую версию.
+//
+// Поэтому файлы слоёв (Mission, Goals, Role, Skills, Author profile)
+// читаются из Storage на КАЖДЫЙ вызов buildPrompt() — никакого локального
+// кеша слоёв нет (см. loadStorageFile / loadMission / loadRole / loadSkills).
+//
+// Единственное in-memory состояние, которое требует ручной инвалидации, —
+// awarenessCache: per-agent снимок «Карты команды + Карты баз». Он отслеживает
+// смену состава через awarenessVersion, но не отслеживает правки Mission или
+// Role. invalidatePromptCache() сбрасывает обе вещи плюс бампает
+// instructionVersion — публичный счётчик «инструктивных» правок для
+// отладки и потенциальных интеграций (например, лог `prompt cached?` в
+// team_api_calls).
+//
+// Версия сбрасывается при рестарте процесса; это нормально — Anthropic-кеш
+// на стороне провайдера тоже привязан к содержимому, и первая сборка после
+// рестарта заводит свежий cache-entry.
+
+let instructionVersion = 0;
+
+export function getInstructionVersion() {
+  return instructionVersion;
+}
+
+// Бампает instructionVersion + инвалидирует Awareness-кеш (через
+// bumpAwarenessVersion и очистку in-memory Map'ы). Вызывать из сервисов и
+// эндпоинтов, которые меняют содержимое слоёв промпта (Role, Mission, Goals)
+// или состав агентов.
+export function invalidatePromptCache() {
+  instructionVersion += 1;
+  bumpAwarenessVersion();
+  awarenessCache.clear();
+}
 
 // {{name}} — буквы латиницы, цифры и underscore. Регистр важен.
 // Пробелы внутри {{ name }} разрешены. Совпадает с Python-версией.
@@ -63,12 +104,10 @@ const GOALS_PATH = "strategy/goals.md";
 const AUTHOR_PROFILE_PATH = "strategy/author-profile.md";
 
 // Корни папок для агент-зависимых слоёв.
-// «Должностные инструкции» — кириллица намеренно: путь видим в Dashboard,
-// файл — это та же сущность, что и Role-файл в карточке сотрудника.
-// Supabase Storage поддерживает не-ASCII в путях объектов (URL-encoded под
-// капотом). Раньше путь был на латинице (`roles/`); миграция мгновенная,
-// поскольку папка roles/ ещё пустая — никаких файлов не теряем.
-const ROLES_FOLDER = "Должностные инструкции"; // <папка>/<display_name>.md
+// roles/<agent_id>.md — латиница; см. agentService.rolePath. Кириллица в
+// Storage-ключах падает с `Invalid key`, поэтому путь и имя файла строятся
+// только из id агента (slug).
+const ROLES_FOLDER = "roles"; // <папка>/<agent_id>.md
 const SKILLS_FOLDER = "agent-skills"; // agent-skills/<agent_name>/*.md
 
 // Логический порядок слоёв (от общего к частному). Используется в превью,
@@ -217,32 +256,31 @@ async function loadAuthorProfile() {
 //      внутри мастера: агента ещё нет в БД, но командный контекст уже есть.
 //   2. Иначе fallback на agentName (старая Сессия 6 совместимость).
 //
-// Путь в Storage: `Должностные инструкции/<имя>.md` — кириллица, совпадает
-// с местом сохранения мастером (agentService.saveRoleFile).
+// Путь в Storage: `roles/<agent_id>.md` — латиница, совпадает с местом
+// сохранения мастером и эндпоинтом PUT /api/team/agents/:id/role
+// (agentService.saveRoleFile).
 async function loadRole({ agentId, agentName }) {
-  let name = null;
   let resolvedAgent = null;
 
   if (agentId) {
     try {
       resolvedAgent = await getAgent(agentId);
-      name = resolvedAgent?.display_name ?? null;
     } catch (err) {
       // Агента в БД нет (test_run в мастере, другой проект) — не падаем,
-      // пробуем fallback на agentName, и Awareness всё равно соберём.
+      // Awareness всё равно соберём.
       console.warn(
         `[promptBuilder] не удалось получить агента ${agentId}: ${err?.message ?? err}`,
       );
     }
   }
-  if (!name && agentName) {
-    name = agentName;
-  }
 
   let roleFile = "";
-  if (name) {
-    roleFile = await loadStorageFile(`${ROLES_FOLDER}/${name}.md`);
+  if (agentId) {
+    roleFile = await loadStorageFile(`${ROLES_FOLDER}/${agentId}.md`);
   }
+  // agentName используем только в логе buildAwareness ниже (для красивого
+  // имени); сам Role-файл всегда идёт по id.
+  void agentName;
 
   // Awareness — для всех агент-зависимых вызовов, даже если Role-файла нет.
   // Если roster пуст И карт баз тоже нет — buildAwareness вернёт пустую

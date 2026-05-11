@@ -179,6 +179,8 @@ export interface UpdateAgentInput {
   orchestration_mode?: boolean;
   autonomy_level?: 0 | 1;
   default_model?: string | null;
+  purpose?: string | null;
+  success_criteria?: string | null;
   comment?: string | null;
 }
 
@@ -204,8 +206,47 @@ export async function archiveAgent(id: string, comment?: string): Promise<TeamAg
   return obj.agent;
 }
 
+// =========================================================================
+// Role-файл (Сессия 11)
+// =========================================================================
+
+export async function fetchAgentRole(id: string): Promise<string | null> {
+  const data = await fetchAgents(`/${encodeURIComponent(id)}/role`, {
+    method: "GET",
+  });
+  const obj = (data ?? {}) as { content?: string | null };
+  return obj.content ?? null;
+}
+
+export async function saveAgentRole(
+  id: string,
+  content: string,
+  comment?: string | null,
+): Promise<{ content: string; changed: boolean }> {
+  const body: Record<string, unknown> = { content };
+  if (comment) body.comment = comment;
+  const data = await fetchAgents(`/${encodeURIComponent(id)}/role`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const obj = (data ?? {}) as { content?: string; changed?: boolean };
+  return { content: obj.content ?? content, changed: !!obj.changed };
+}
+
 export async function restoreAgent(id: string, comment?: string): Promise<TeamAgent> {
   const data = await fetchAgents(`/${encodeURIComponent(id)}/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: comment ? JSON.stringify({ comment }) : undefined,
+  });
+  const obj = (data ?? {}) as { agent?: TeamAgent };
+  if (!obj.agent) throw new Error("Бэкенд не вернул агента");
+  return obj.agent;
+}
+
+export async function pauseAgent(id: string, comment?: string): Promise<TeamAgent> {
+  const data = await fetchAgents(`/${encodeURIComponent(id)}/pause`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: comment ? JSON.stringify({ comment }) : undefined,

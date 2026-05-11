@@ -11,6 +11,7 @@ import {
   type PreviewPromptResult,
   type PromptLayersSummary,
 } from "@/lib/team/teamBackendClient";
+import { listAgents, type TeamAgent } from "@/lib/team/teamAgentsService";
 import type { TeamTaskModelChoice } from "@/lib/team/types";
 
 interface TaskRunnerModalProps {
@@ -39,6 +40,10 @@ export default function TaskRunnerModal({
   const [params, setParams] = useState<TaskParams>({});
   const [modelChoice, setModelChoice] = useState<TeamTaskModelChoice>(DEFAULT_MODEL);
   const [title, setTitle] = useState("");
+  // Сессия 12: выбор сотрудника. null = «без агента» (старое поведение).
+  const [agentId, setAgentId] = useState<string | null>(null);
+  const [agents, setAgents] = useState<TeamAgent[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(false);
 
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptPreview, setPromptPreview] = useState<PreviewPromptResult | null>(null);
@@ -59,6 +64,7 @@ export default function TaskRunnerModal({
       setParams({});
       setModelChoice(DEFAULT_MODEL);
       setTitle("");
+      setAgentId(null);
       setPromptOpen(false);
       setPromptPreview(null);
       setPromptError(null);
@@ -69,6 +75,28 @@ export default function TaskRunnerModal({
       setSubmitting(false);
     }
   }, [open, taskType]);
+
+  // Подтягиваем активных агентов при открытии — список нужен и до сборки
+  // промпта, и при отправке. Ошибку не показываем как блокер — пустой
+  // список означает «можно работать без агента», старый сценарий этапа 1.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setAgentsLoading(true);
+    listAgents("active")
+      .then((list) => {
+        if (!cancelled) setAgents(list);
+      })
+      .catch((err) => {
+        console.warn("[TaskRunnerModal] listAgents failed:", err);
+      })
+      .finally(() => {
+        if (!cancelled) setAgentsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   // Esc + блокировка скролла фона.
   useEffect(() => {
@@ -105,12 +133,17 @@ export default function TaskRunnerModal({
 
   // Пользователь раскрыл «Промпт» — собираем превью на бэкенде. Делаем это
   // только при первом открытии или если params изменились (при следующем
-  // нажатии можно пересобрать).
+  // нажатии можно пересобрать). Сессия 12: пробрасываем выбранного агента,
+  // чтобы превью отражало Role + Memory + Awareness.
   async function loadPromptPreview() {
     setPromptLoading(true);
     setPromptError(null);
     try {
-      const preview = await previewPrompt(taskType, sanitizeParamsForBackend(params));
+      const preview = await previewPrompt(
+        taskType,
+        sanitizeParamsForBackend(params),
+        agentId,
+      );
       setPromptPreview(preview);
       setSystemDraft(preview.system ?? "");
       setUserDraft(preview.user ?? "");
@@ -148,6 +181,7 @@ export default function TaskRunnerModal({
             }
           : null,
         title: title.trim() || null,
+        agentId,
       });
       onCreated(taskId);
     } catch (err) {
@@ -214,6 +248,21 @@ export default function TaskRunnerModal({
           className="flex flex-1 flex-col gap-5 overflow-y-auto p-6"
         >
           <TaskFields taskType={taskType} params={params} setParam={setParam} />
+
+          <AgentSelectField
+            agents={agents}
+            loading={agentsLoading}
+            value={agentId}
+            onChange={(id) => {
+              setAgentId(id);
+              // Превью с другим агентом будет другим — сбрасываем кеш, чтобы
+              // следующее раскрытие «Промпт» подтянуло свежий Role/Memory.
+              setPromptPreview(null);
+              setOverridden(false);
+              setSystemDraft("");
+              setUserDraft("");
+            }}
+          />
 
           <label className="flex flex-col gap-2">
             <span className="text-sm font-medium text-ink">
@@ -592,6 +641,57 @@ function PromptField({
         rows={6}
         className="focus-ring w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 font-mono text-xs leading-relaxed text-ink"
       />
+    </label>
+  );
+}
+
+// Селект «Сотрудник» (Сессия 12 этапа 2). Опциональный — null значит «без
+// агента» (старое поведение этапа 1: промпт без Role/Memory/Awareness).
+// Если активных агентов нет — показываем подсказку, что список пуст;
+// форма всё равно работает в режиме «без агента».
+function AgentSelectField({
+  agents,
+  loading,
+  value,
+  onChange,
+}: {
+  agents: TeamAgent[];
+  loading: boolean;
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  const noAgents = !loading && agents.length === 0;
+  return (
+    <label className="flex flex-col gap-2">
+      <span className="text-sm font-medium text-ink">
+        Сотрудник
+        <span className="ml-2 text-xs font-normal text-ink-faint">
+          (необязательно — без выбора задача собирается как раньше)
+        </span>
+      </span>
+      <select
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value || null)}
+        disabled={loading || noAgents}
+        className="focus-ring h-11 rounded-xl border border-line bg-canvas px-4 text-sm text-ink disabled:opacity-60"
+      >
+        <option value="">
+          {loading
+            ? "Загружаю список…"
+            : noAgents
+              ? "Нет активных сотрудников"
+              : "— Без агента —"}
+        </option>
+        {agents.map((a) => {
+          const suffix = a.role_title ? ` · ${a.role_title}` : "";
+          return (
+            <option key={a.id} value={a.id}>
+              {a.display_name}
+              {suffix}
+            </option>
+          );
+        })}
+      </select>
     </label>
   );
 }
