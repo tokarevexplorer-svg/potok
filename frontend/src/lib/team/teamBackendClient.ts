@@ -1,68 +1,47 @@
-// Изоморфный клиент для бэкенд-эндпоинтов команды (`/api/team/*`).
+// Клиент для бэкенд-эндпоинтов команды (`/api/team/*`) из браузера.
 //
-// Из server components и server actions ходит напрямую через BACKEND_URL,
-// подписывая HS256-JWT с email из сессии Auth.js v5 (через `fetchBackend`
-// из `@/lib/apiClient`).
-//
-// Из браузерных компонентов ходит через прокси /api/team-proxy/<path>
+// Все вызовы идут через прокси /api/team-proxy/<path>
 // (см. frontend/src/app/api/team-proxy/[...path]/route.ts), потому что
 // BACKEND_URL — серверная переменная без NEXT_PUBLIC_ префикса. Прокси
-// сам подкладывает Authorization Bearer перед форвардингом на Railway.
+// сам вытягивает email из сессии Auth.js v5 и подкладывает
+// Authorization Bearer перед форвардингом на Railway.
 //
-// Один модуль для обоих контекстов — выбор пути решается в runtime через
-// typeof window. Это убирает необходимость дублировать сигнатуры функций
-// в server-only и client-only файлах.
+// ВАЖНО: этот модуль предназначен для КЛИЕНТСКИХ компонентов. На server-
+// side он будет работать только в Node-окружении Next.js (где fetch
+// относительных URL резолвится против self) — но рекомендуется на сервере
+// использовать `fetchBackend` из `@/lib/apiClient` напрямую (это короче
+// один хоп и не требует прокси-роута). Подмешивать сюда `apiClient` через
+// dynamic import нельзя — webpack включает его в клиентский bundle и
+// падает на `server-only` импорте (jsonwebtoken, auth, NEXTAUTH_SECRET).
 
 import type { ApiKeysStatus, TeamTask, TeamTaskModelChoice, TeamTaskPrompt } from "./types";
 
-// Внутренний хелпер: выбирает путь и шлёт запрос. Возвращает разобранный
+// Внутренний хелпер: шлёт запрос через прокси и возвращает разобранный
 // JSON (или null, если ответ пустой). Бросает Error со строкой из {error}
 // или с HTTP-статусом, чтобы caller всегда видел понятное сообщение.
 async function backendFetch(
   path: string,
   init: RequestInit & { timeoutMs?: number } = {},
 ): Promise<unknown> {
-  const isBrowser = typeof window !== "undefined";
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (!normalizedPath.startsWith("/api/team/")) {
+    throw new Error(
+      `backendFetch: ожидался путь с префиксом /api/team/, получено ${normalizedPath}`,
+    );
+  }
+  const url = `/api/team-proxy/${normalizedPath.slice("/api/team/".length)}`;
 
   const { timeoutMs = 30_000, ...rest } = init;
   let response: Response;
-
-  if (isBrowser) {
-    // Из браузера — относительный путь до своего же Next-сервера, который
-    // проксирует на Railway. URL начинается с /api/team/... — превращаем в
-    // /api/team-proxy/...
-    if (!normalizedPath.startsWith("/api/team/")) {
-      throw new Error(
-        `backendFetch: ожидался путь с префиксом /api/team/, получено ${normalizedPath}`,
-      );
-    }
-    const url = `/api/team-proxy/${normalizedPath.slice("/api/team/".length)}`;
-    try {
-      response = await fetch(url, {
-        ...rest,
-        signal: AbortSignal.timeout(timeoutMs),
-        cache: "no-store",
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "неизвестная ошибка";
-      throw new Error(`Бэкенд не отвечает: ${message}`);
-    }
-  } else {
-    // Server-side: грузим fetchBackend лениво, чтобы исключить случайный
-    // импорт server-only-модуля в клиентский bundle. (`server-only` плагин
-    // выкинет ошибку на этапе сборки, но без lazy-load TS-резолвер мог бы
-    // попытаться разрешить @/auth даже там, где он не нужен.)
-    const { fetchBackend, BackendAuthRequiredError } = await import("../apiClient");
-    try {
-      response = await fetchBackend(normalizedPath, { ...rest, timeoutMs });
-    } catch (err) {
-      if (err instanceof BackendAuthRequiredError) {
-        throw err;
-      }
-      const message = err instanceof Error ? err.message : "неизвестная ошибка";
-      throw new Error(`Бэкенд не отвечает: ${message}`);
-    }
+  try {
+    response = await fetch(url, {
+      ...rest,
+      signal: AbortSignal.timeout(timeoutMs),
+      cache: "no-store",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "неизвестная ошибка";
+    throw new Error(`Бэкенд не отвечает: ${message}`);
   }
 
   const text = await response.text();
