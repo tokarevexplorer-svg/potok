@@ -86,6 +86,25 @@ const LAYER_LABELS = {
   task: "ЗАДАЧА",
 };
 
+// Обязательные секции Mission и Goals (Сессия 7).
+// Порядок важен: используется при выводе списка в валидаторе.
+// Ключи в camelCase — для удобства потребителей (см. getMissionGoalsCompleteness).
+// heading — точный заголовок секции в .md (## <heading>), без `## `, без хвостовых пробелов.
+const MISSION_SECTIONS = [
+  { key: "concept", heading: "Концепция" },
+  { key: "northStar", heading: "North Star" },
+  { key: "audience", heading: "Целевая аудитория" },
+  { key: "taboo", heading: "Табу" },
+  { key: "values", heading: "Ценности" },
+];
+
+const GOALS_SECTIONS = [
+  { key: "focus", heading: "Фокус на период" },
+  { key: "currentPoint", heading: "Текущая точка" },
+  { key: "rubrics", heading: "Рубрики в работе" },
+  { key: "kpi", heading: "KPI на период" },
+];
+
 // Сообщения-заглушки в превью для слоёв, которые на этом этапе ещё не загружаются.
 const LAYER_SKIP_HINTS = {
   mission: "(пусто — strategy/mission.md ещё не заполнен)",
@@ -236,6 +255,110 @@ async function loadSkills(agentName) {
   }
   if (bodies.length === 0) return "";
   return bodies.join("\n\n---\n\n");
+}
+
+// =========================================================================
+// Анализ заполненности Mission / Goals (Сессия 7)
+// =========================================================================
+
+// Тело секции считается placeholder'ным, если после вычёркивания всех
+// «шаблонных» вкраплений в нём не остаётся живого текста. Вычёркиваем:
+//   - `[...]`-скобки (могут быть многострочными, но без вложенных скобок);
+//   - italic `_(...)_` — стиль предков из ДК Лурье;
+//   - токены `tba` / `tbd` / `todo` / `placeholder`;
+//   - маркеры списков, тире, точки, длинные тире.
+// Если после этого остаётся хоть один не-whitespace символ — это «живой»
+// текст, секция ✅. Иначе — ⚠️ (placeholder).
+function hasMeaningfulContent(body) {
+  if (!body || !body.trim()) return false;
+  // Снимаем маркеры списков и blockquote в начале строк, чтобы они не
+  // считались «контентом» сами по себе.
+  let residue = body
+    .split("\n")
+    .map((l) => l.replace(/^[ \t]*[-*>][ \t]+/, ""))
+    .join("\n");
+  // Многострочные [...]-плейсхолдеры (без вложенных скобок — нам хватит).
+  residue = residue.replace(/\[[^\[\]]*\]/g, "");
+  // Italic placeholders в стиле _( ... )_ — наследие старых шаблонов.
+  residue = residue.replace(/_\([\s\S]*?\)_/g, "");
+  // Стандартные «пустые» токены.
+  residue = residue.replace(/\b(tba|tbd|todo|placeholder)\b/gi, "");
+  // Markdown-пунктуация, не несущая смысла.
+  residue = residue.replace(/[—•·]/g, "");
+  return /\S/.test(residue);
+}
+
+// Ищет секцию `## <heading>` в тексте. Регистр и пробелы по краям не важны.
+// Возвращает 'missing' (нет заголовка), 'empty' (есть, но без содержимого
+// или только placeholders), 'filled' (есть и наполнен).
+function findSectionStatus(text, heading) {
+  if (!text) return "missing";
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^[ \\t]*##[ \\t]+${escaped}[ \\t]*$`, "im");
+  const match = text.match(re);
+  if (!match) return "missing";
+
+  const afterHeading = text.slice(match.index + match[0].length);
+  // Тело секции — до следующего `#` или `##` заголовка (более глубокие `###` не разрывают).
+  const nextRe = /^[ \t]*#{1,2}[ \t]+\S/m;
+  const nextMatch = afterHeading.match(nextRe);
+  const body = nextMatch ? afterHeading.slice(0, nextMatch.index) : afterHeading;
+
+  return hasMeaningfulContent(body) ? "filled" : "empty";
+}
+
+// Внутренний анализатор: применяет схему секций к тексту.
+// Возвращает: { total, filled, sections: {key: bool}, details: {key: status} }
+// где status ∈ {'filled','empty','missing'}.
+function analyzeSections(content, schema) {
+  const sections = {};
+  const details = {};
+  let filled = 0;
+  const text = String(content ?? "");
+  for (const { key, heading } of schema) {
+    const status = findSectionStatus(text, heading);
+    details[key] = status;
+    const isFilled = status === "filled";
+    sections[key] = isFilled;
+    if (isFilled) filled += 1;
+  }
+  return { total: schema.length, filled, sections, details };
+}
+
+// Публичные пер-документные анализаторы — используются в валидаторе и
+// в превью промпта без повторного запроса к Storage.
+export function analyzeMission(content) {
+  return analyzeSections(content, MISSION_SECTIONS);
+}
+
+export function analyzeGoals(content) {
+  return analyzeSections(content, GOALS_SECTIONS);
+}
+
+// Сводка по обоим документам — для дашборда и превью.
+// Подгружает контент из Storage (если файла нет — пустые секции, статус 'missing').
+// Спецификация формы возврата зафиксирована в Claude_team_stage2.MD, Сессия 7:
+//   { mission: { total, filled, sections: {...bool} },
+//     goals:   { total, filled, sections: {...bool} } }
+// Поле `details` (с тремя статусами) — расширение, нужно валидатору.
+export async function getMissionGoalsCompleteness() {
+  const [missionContent, goalsContent] = await Promise.all([
+    loadMission(),
+    loadGoals(),
+  ]);
+  return {
+    mission: analyzeMission(missionContent),
+    goals: analyzeGoals(goalsContent),
+  };
+}
+
+// Короткая строка-индикатор для превью промпта.
+// Примеры: «[Mission: 5/5 секций]», «[Mission: 3/5 секций — проверь]».
+// Если filled === total — без хвоста, всё ок; иначе «проверь».
+function formatCompletenessIndicator(label, analysis) {
+  const { total, filled } = analysis;
+  const suffix = filled === total ? "" : " — проверь";
+  return `[${label}: ${filled}/${total} секций${suffix}]`;
 }
 
 // =========================================================================
@@ -412,9 +535,15 @@ export async function buildPrompt(templateName, variables = {}) {
     .map((l) => String(l.content).trim());
   const systemText = nonCacheableParts.join("\n\n");
 
+  // ---- Анализ полноты Mission и Goals для индикаторов в превью (Сессия 7) ----
+  // Считаем по уже загруженному контенту — не делаем повторных запросов в Storage.
+  const missionAnalysis = analyzeMission(missionContent);
+  const goalsAnalysis = analyzeGoals(goalsContent);
+
   // ---- layeredPreview: единая строка для UI с разделителями ----
   // Используется фронтом, чтобы Влад видел каркас промпта с пометками
   // о незагруженных слоях. На сам Anthropic-запрос НЕ влияет.
+  // После MISSION/GOALS добавляем строку-индикатор полноты секций.
   const previewLines = [];
   for (const layer of layers) {
     previewLines.push(`═══ ${LAYER_LABELS[layer.key]} ═══`);
@@ -422,6 +551,11 @@ export async function buildPrompt(templateName, variables = {}) {
       previewLines.push(String(layer.content).trim());
     } else {
       previewLines.push(LAYER_SKIP_HINTS[layer.key] ?? "(не загружен)");
+    }
+    if (layer.key === "mission") {
+      previewLines.push(formatCompletenessIndicator("Mission", missionAnalysis));
+    } else if (layer.key === "goals") {
+      previewLines.push(formatCompletenessIndicator("Goals", goalsAnalysis));
     }
     previewLines.push("");
   }

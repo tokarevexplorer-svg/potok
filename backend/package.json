@@ -8,7 +8,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "migrate:instructions": "node scripts/migrate-instructions.js"
+    "migrate:instructions": "node scripts/migrate-instructions.js",
+    "validate:mission-goals": "node scripts/validate-mission-goals.js"
   },
   "engines": {
     "node": ">=20"
