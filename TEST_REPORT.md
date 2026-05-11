@@ -658,3 +658,54 @@ URL: SQL.
 Что должно произойти:
 - В логе `expire: переведено в expired: 1.`
 - В `team_proposals` запись получает `status='expired'`, `decided_at=now()`.
+
+---
+
+## Сессия 25 — Skills: Storage, сервис, загрузка в промпт
+
+### ✅ Выполнено (автоматически)
+- Миграция `0028_team_skill_candidates.sql` накачена (`supabase db push` → up to date).
+- `npm install gray-matter` — пакет в `dependencies`.
+- Backend: `node --check` прошёл для `skillService.js`, `routes/team/skills.js`, `promptBuilder.js`, `app.js`.
+- Frontend: `next build` — Compiled successfully + Linting + типы.
+- E2E на проде через Playwright:
+  - `GET /api/team-proxy/skills/<unknown>` → 200 `{skills:[]}` (Railway-деплой backend накатил новые маршруты).
+  - Console clean (только pre-existing 401 на `/admin/dev-mode`).
+
+### ⚠️ Требует ручной проверки
+
+#### Сессия 25 — создание навыка через API
+URL: терминал или DevTools fetch.
+
+Что сделать:
+1. Создать навык для существующего агента:
+   ```
+   curl -X POST https://potok-omega.vercel.app/api/team-proxy/skills/<agent_id> \
+     -H 'Content-Type: application/json' \
+     -d '{
+       "skill_name": "Краткий хук во вступлении",
+       "when_to_apply": "Когда пишешь анонс ролика длиной 1-3 минуты",
+       "what_to_do": "Открой первое предложение интригой или парадоксом — не более 12 слов",
+       "why_it_works": "Алгоритмы Instagram режут показы при медленном старте"
+     }'
+   ```
+2. В Supabase Storage → bucket `team-prompts` → папка `agent-skills/<agent_id>/` — появился файл `<slug>.md` с YAML frontmatter и тремя секциями.
+3. `curl GET /api/team-proxy/skills/<agent_id>` — список из одного skill.
+
+Что должно произойти:
+- Файл валиден: frontmatter содержит `skill_name`, `status: active`, `created_at`, `use_count: 0`.
+- Тело содержит `## Когда применять`, `## Что делать`, `## Почему работает`.
+
+#### Сессия 25 — навык в Awareness/Skills промпта
+URL: дашборд.
+
+Что сделать:
+1. У того же агента поставить задачу через мастер.
+2. Открыть карточку задачи → раскрыть «Использованный промпт».
+
+Что должно произойти:
+- В слое `SKILLS` появится `### Краткий хук во вступлении` с подзаголовками «Когда применять» и «Что делать». «Почему работает» НЕ показывается (это только для Влада).
+- Если архивировать навык (`PATCH /api/team/skills/<agent>/<slug>/archive`) — следующая задача не содержит этот блок.
+
+#### Сессия 25 — UI вкладки «Навыки» и блока «Навыки агентов»
+ТЗ просит вкладку и блок Инструкций, но в этой сессии они отложены на Сессию 27 (см. отклонения). Сейчас управление skills — только через API. Карточка агента покажет skills только когда Сессия 27 добавит UI.
