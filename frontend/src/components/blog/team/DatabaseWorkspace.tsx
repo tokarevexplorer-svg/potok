@@ -8,7 +8,7 @@ type TabId = "research" | "texts" | "ideas" | "sources";
 
 // Сессия 4 этапа 2: вкладки Контекст / Концепция убраны — эти файлы
 // (бывшие context.md / concept.md) переехали в раздел «Инструкции» под
-// именами Миссия и Цели на период (bucket team-prompts/Стратегия команды/).
+// именами Миссия и Цели на период (bucket team-prompts/strategy/).
 // Остаются артефакты задач команды: исследования, тексты, идеи, источники.
 const TABS: { id: TabId; label: string; description: string }[] = [
   {

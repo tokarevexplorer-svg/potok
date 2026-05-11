@@ -11,12 +11,13 @@ export interface PromptTemplateEntry {
   size: number | null;
 }
 
-// Список шаблонов задач (после Сессии 4 — лежат в подпапке «Шаблоны задач»).
-// Имена возвращаются с префиксом папки, чтобы их можно было сразу передать в
-// readPromptTemplate без догадок.
+// Список шаблонов задач (после Сессии 4 — лежат в подпапке `task-templates/`,
+// имена на латинице со слэшем и дефисом — Supabase Storage не принимает
+// кириллицу и пробелы). Имена возвращаются с префиксом папки, чтобы их
+// можно было сразу передать в readPromptTemplate без догадок.
 export async function listPromptTemplates(): Promise<PromptTemplateEntry[]> {
   const supabase = getSupabaseBrowserClient();
-  const folder = "Шаблоны задач";
+  const folder = "task-templates";
   const { data, error } = await supabase.storage.from(BUCKET).list(folder, {
     limit: 1000,
     sortBy: { column: "name", order: "asc" },
@@ -37,8 +38,8 @@ export async function listPromptTemplates(): Promise<PromptTemplateEntry[]> {
 }
 
 // Принимает либо имя файла, либо полный путь внутри bucket'а
-// (`Стратегия команды/Миссия.md`). Поддерживает кириллицу и пробелы —
-// Supabase JS client сам URL-кодирует ключ при download().
+// (`strategy/mission.md`). Пути строго на латинице — Storage отбивает
+// кириллицу и пробелы (`Invalid key`).
 export async function readPromptTemplate(name: string): Promise<string> {
   const supabase = getSupabaseBrowserClient();
   const filename = name.endsWith(".md") ? name : `${name}.md`;

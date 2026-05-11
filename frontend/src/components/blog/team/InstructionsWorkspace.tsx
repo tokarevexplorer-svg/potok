@@ -17,22 +17,41 @@ import {
 
 // Сессия 4 этапа 2: главная страница раздела «Инструкции» состоит из трёх
 // логических блоков, привязанных к подпапкам bucket'а team-prompts:
-//   • Стратегия команды — Миссия и Цели на период (бывшие context.md /
-//     concept.md из team-database, переехали под человекочитаемые имена).
-//   • Должностные инструкции — заполняется в этапе 2 (пункт 12 roadmap);
-//     сейчас пустой плейсхолдер.
-//   • Шаблоны задач — пять переименованных шаблонов из этапа 1.
+//   • strategy/ — Миссия и Цели на период (бывшие context.md / concept.md
+//     из team-database).
+//   • roles/ — заполняется в этапе 2 (пункт 12 roadmap); сейчас пустой
+//     плейсхолдер.
+//   • task-templates/ — пять шаблонов задач из этапа 1.
+//
+// Хранилище и пути — только латиница (Supabase Storage отбивает кириллицу
+// и пробелы в ключах). Русские лейблы для UI живут здесь, в FILE_LABELS.
 //
 // Клик по любому файлу открывает существующий markdown-редактор с
 // автосохранением и функцией «🪄 Уточнить промпт». «Уточнить» имеет смысл
 // только для шаблонов задач — для Стратегии команды кнопку прячем (там
 // не промпт с {{плейсхолдерами}}, а обычный текст).
 
-const STRATEGY_FOLDER = "Стратегия команды";
-const TEMPLATES_FOLDER = "Шаблоны задач";
+const STRATEGY_FOLDER = "strategy";
+const TEMPLATES_FOLDER = "task-templates";
+
+// Маппинг latin-slug → человекочитаемое название для UI. В Storage файл
+// называется `mission.md`, но в интерфейсе показываем «Миссия».
+const FILE_LABELS: Record<string, string> = {
+  mission: "Миссия",
+  goals: "Цели на период",
+  "ideas-free": "Свободные идеи",
+  "ideas-questions": "Идеи и вопросы для исследования",
+  "research-direct": "Прямое исследование",
+  "write-text": "Написание текста",
+  "edit-text-fragments": "Правка фрагментов",
+};
+
+function displayLabel(slug: string): string {
+  return FILE_LABELS[slug] ?? slug;
+}
 
 // Те же подсказки про плейсхолдеры, что были в PromptsWorkspace до Сессии 4 —
-// чтобы редактор шаблонов не потерял функционал. Ключ — имя файла без папки.
+// чтобы редактор шаблонов не потерял функционал. Ключ — slug файла без папки.
 const COMMON_PLACEHOLDERS = [
   {
     name: "{{mission}}",
@@ -53,22 +72,22 @@ const TASK_SPECIFIC_PLACEHOLDERS: Record<
   string,
   { name: string; description: string }[]
 > = {
-  "Прямое исследование": [
+  "research-direct": [
     { name: "{{source}}", description: "URL или путь к файлу источника, материал которого подгружается" },
     { name: "{{source_text}}", description: "Содержимое источника после fetch'а — рабочий текст для анализа" },
   ],
-  "Написание текста": [
+  "write-text": [
     { name: "{{point_name}}", description: "Название точки экскурсии (slug идёт в путь к артефакту)" },
     { name: "{{length_hint}}", description: "Подсказка по длине: «короткий», «средний», «длинный»" },
     { name: "{{research}}", description: "Собранные исследования из research_paths — подмешиваются автоматически" },
   ],
-  "Правка фрагментов": [
+  "edit-text-fragments": [
     { name: "{{full_text}}", description: "Полный текст артефакта write_text задачи — текущая версия" },
     { name: "{{edits}}", description: "Список правок: фрагмент → инструкция, форматируется автоматически" },
     { name: "{{general_instruction}}", description: "Общая инструкция к правке (опц.)" },
   ],
-  "Свободные идеи": [],
-  "Идеи и вопросы для исследования": [],
+  "ideas-free": [],
+  "ideas-questions": [],
 };
 
 export interface InstructionsTree {
@@ -84,8 +103,8 @@ interface InstructionsWorkspaceProps {
 type ActiveKind = "strategy" | "template";
 interface ActiveFile {
   kind: ActiveKind;
-  /** имя без расширения .md */
-  title: string;
+  /** latin-slug файла без расширения .md (то же, что имя в Storage) */
+  slug: string;
   /** полный путь внутри bucket'а */
   path: string;
 }
@@ -128,9 +147,9 @@ function SectionGrid({
           <EmptyHint text="Файлов пока нет. Они появятся после миграции." />
         ) : (
           <FileList
-            items={tree.strategy.map((title) => ({
-              title,
-              path: `${STRATEGY_FOLDER}/${title}.md`,
+            items={tree.strategy.map((slug) => ({
+              slug,
+              path: `${STRATEGY_FOLDER}/${slug}.md`,
               kind: "strategy" as ActiveKind,
             }))}
             activePath={active?.path ?? null}
@@ -157,9 +176,9 @@ function SectionGrid({
           <EmptyHint text="Шаблонов пока нет. Возможно, миграция Сессии 4 ещё не прогнана." />
         ) : (
           <FileList
-            items={tree.templates.map((title) => ({
-              title,
-              path: `${TEMPLATES_FOLDER}/${title}.md`,
+            items={tree.templates.map((slug) => ({
+              slug,
+              path: `${TEMPLATES_FOLDER}/${slug}.md`,
               kind: "template" as ActiveKind,
             }))}
             activePath={active?.path ?? null}
@@ -209,7 +228,7 @@ function FileList({
   activePath,
   onSelect,
 }: {
-  items: { title: string; path: string; kind: ActiveKind }[];
+  items: { slug: string; path: string; kind: ActiveKind }[];
   activePath: string | null;
   onSelect: (file: ActiveFile) => void;
 }) {
@@ -228,7 +247,7 @@ function FileList({
                   : "border-transparent text-ink-muted hover:bg-elevated hover:text-ink"
               }`}
             >
-              {item.title}
+              {displayLabel(item.slug)}
             </button>
           </li>
         );
@@ -330,9 +349,9 @@ function FileEditorPanel({
   const showRefine = file.kind === "template";
   const placeholders = useMemo(() => {
     if (file.kind !== "template") return [];
-    const taskSpecific = TASK_SPECIFIC_PLACEHOLDERS[file.title] ?? [];
+    const taskSpecific = TASK_SPECIFIC_PLACEHOLDERS[file.slug] ?? [];
     return [...COMMON_PLACEHOLDERS, ...taskSpecific];
-  }, [file.kind, file.title]);
+  }, [file.kind, file.slug]);
 
   return (
     <section className="flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4">
@@ -341,7 +360,7 @@ function FileEditorPanel({
           <p className="text-xs uppercase tracking-wide text-ink-faint">
             {file.kind === "template" ? "Шаблон задачи" : "Стратегия команды"}
           </p>
-          <h3 className="truncate text-base font-semibold text-ink">{file.title}</h3>
+          <h3 className="truncate text-base font-semibold text-ink">{displayLabel(file.slug)}</h3>
         </div>
         <button
           type="button"

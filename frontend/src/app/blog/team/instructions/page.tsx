@@ -36,9 +36,9 @@ async function listFolder(folder: string): Promise<string[]> {
 
 async function loadInstructionsTree(): Promise<InstructionsTree> {
   const [strategy, roles, templates] = await Promise.all([
-    listFolder("Стратегия команды"),
-    listFolder("Должностные инструкции"),
-    listFolder("Шаблоны задач"),
+    listFolder("strategy"),
+    listFolder("roles"),
+    listFolder("task-templates"),
   ]);
   return { strategy, roles, templates };
 }

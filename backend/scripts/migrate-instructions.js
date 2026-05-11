@@ -1,22 +1,34 @@
 // Одноразовая миграция структуры bucket'ов команды под Сессию 4 этапа 2.
 //
+// История: первая версия скрипта пыталась использовать кириллические имена
+// в Storage (`Стратегия команды/Миссия.md`, `Шаблоны задач/...`). Supabase
+// Storage отбивал такие ключи с ошибкой `Invalid key` — он не принимает
+// пробелы и кириллицу в путях. Перевели целевые имена на латиницу со слэшем,
+// человекочитаемые лейблы остались только в UI (см. InstructionsWorkspace).
+//
 // Что делает:
 //
+//   0. Чистит кириллические пути в bucket `team-prompts`, если они остались
+//      от частично-успешных прогонов старой версии скрипта. Это страховка —
+//      обычно их нет (старый скрипт падал до создания файлов), но лучше
+//      перебдеть, чтобы не висели «фантомы» в Storage Dashboard.
+//
 //   1. Копирует из bucket `team-database` два файла:
-//        context.md → bucket `team-prompts` / `Стратегия команды/Миссия.md`
-//        concept.md → bucket `team-prompts` / `Стратегия команды/Цели на период.md`
+//        context.md → bucket `team-prompts` / `strategy/mission.md`
+//        concept.md → bucket `team-prompts` / `strategy/goals.md`
 //      Метод Supabase Storage `copy()` не работает между bucket'ами — поэтому
 //      используется пара `download()` + `upload()`. Оригиналы в `team-database`
 //      НЕ удаляются — оставляем как backup, удалить руками через Supabase
 //      Dashboard после ручной проверки прода (см. чеклист Сессии 4).
 //
-//   2. Внутри bucket'а `team-prompts` переименовывает пять файлов шаблонов в
-//      человекочитаемые имена и переносит их в подпапку `Шаблоны задач/`:
-//        ideas-questions.md       → Шаблоны задач/Идеи и вопросы для исследования.md
-//        ideas-free.md            → Шаблоны задач/Свободные идеи.md
-//        research-direct.md       → Шаблоны задач/Прямое исследование.md
-//        write-text.md            → Шаблоны задач/Написание текста.md
-//        edit-text-fragments.md   → Шаблоны задач/Правка фрагментов.md
+//   2. Внутри bucket'а `team-prompts` переносит пять файлов шаблонов из корня
+//      в подпапку `task-templates/` (имена сохраняются — менять было нечего,
+//      они и так на латинице):
+//        ideas-questions.md       → task-templates/ideas-questions.md
+//        ideas-free.md            → task-templates/ideas-free.md
+//        research-direct.md       → task-templates/research-direct.md
+//        write-text.md            → task-templates/write-text.md
+//        edit-text-fragments.md   → task-templates/edit-text-fragments.md
 //
 // Идемпотентность: если файл уже на новом месте — шаг пропускается с логом,
 // падать не должен. Это позволяет безопасно перезапускать скрипт несколько раз
@@ -49,20 +61,25 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 const SOURCE_BUCKET = "team-database";
 const PROMPTS_BUCKET = "team-prompts";
 
-// Шаг 1: копирование context.md / concept.md → Стратегия команды/...
+// Шаг 1: копирование context.md / concept.md → strategy/...
 const STRATEGY_COPIES = [
-  { from: "context.md", to: "Стратегия команды/Миссия.md" },
-  { from: "concept.md", to: "Стратегия команды/Цели на период.md" },
+  { from: "context.md", to: "strategy/mission.md" },
+  { from: "concept.md", to: "strategy/goals.md" },
 ];
 
-// Шаг 2: переименование пяти шаблонов внутри team-prompts.
+// Шаг 2: перенос пяти шаблонов из корня в подпапку task-templates/.
+// Имена не меняются — они и так на латинице с дефисами.
 const TEMPLATE_MOVES = [
-  { from: "ideas-questions.md", to: "Шаблоны задач/Идеи и вопросы для исследования.md" },
-  { from: "ideas-free.md", to: "Шаблоны задач/Свободные идеи.md" },
-  { from: "research-direct.md", to: "Шаблоны задач/Прямое исследование.md" },
-  { from: "write-text.md", to: "Шаблоны задач/Написание текста.md" },
-  { from: "edit-text-fragments.md", to: "Шаблоны задач/Правка фрагментов.md" },
+  { from: "ideas-questions.md", to: "task-templates/ideas-questions.md" },
+  { from: "ideas-free.md", to: "task-templates/ideas-free.md" },
+  { from: "research-direct.md", to: "task-templates/research-direct.md" },
+  { from: "write-text.md", to: "task-templates/write-text.md" },
+  { from: "edit-text-fragments.md", to: "task-templates/edit-text-fragments.md" },
 ];
+
+// Кириллические папки, которые могла создать старая версия скрипта. Шаг 0
+// чистит их содержимое (если файлы есть) и оставляет bucket в чистом виде.
+const LEGACY_CYRILLIC_FOLDERS = ["Стратегия команды", "Шаблоны задач"];
 
 // Проверка существования файла. Возвращает true/false без бросания ошибок.
 // Supabase Storage не имеет HEAD-метода — используем download() и ловим ошибку.
@@ -72,8 +89,47 @@ async function fileExists(bucket, path) {
   return !!data;
 }
 
+// Step 0. Чистим кириллические пути в team-prompts, если остались.
+async function cleanupLegacyCyrillic() {
+  let removed = 0;
+  for (const folder of LEGACY_CYRILLIC_FOLDERS) {
+    const { data, error } = await supabase.storage
+      .from(PROMPTS_BUCKET)
+      .list(folder, { limit: 1000 });
+    if (error) {
+      // Папки с таким именем нет — нормальная ситуация, идём дальше.
+      continue;
+    }
+    const names = (data ?? [])
+      .map((row) => row?.name)
+      .filter((name) => typeof name === "string" && name.length > 0);
+    if (names.length === 0) continue;
+
+    const paths = names.map((name) => `${folder}/${name}`);
+    const { error: rmErr } = await supabase.storage
+      .from(PROMPTS_BUCKET)
+      .remove(paths);
+    if (rmErr) {
+      console.warn(
+        `[step 0] Не удалось удалить кириллические файлы из "${folder}": ${rmErr.message}`,
+      );
+      continue;
+    }
+    for (const p of paths) {
+      console.log(`[step 0] Удалён legacy-файл: ${p}`);
+      removed += 1;
+    }
+  }
+  if (removed === 0) {
+    console.log("[step 0] Кириллических файлов не найдено — чистить нечего.");
+  } else {
+    console.log(`[step 0] Готово: удалено ${removed} legacy-файлов.`);
+  }
+  return { removed };
+}
+
 // Step 1. Копируем context.md / concept.md из team-database в team-prompts
-// под человекочитаемые имена в Стратегии команды/.
+// под латинские имена в strategy/.
 async function copyStrategyFiles() {
   let moved = 0;
   let skipped = 0;
@@ -114,9 +170,8 @@ async function copyStrategyFiles() {
   return { moved, skipped };
 }
 
-// Step 2. Перемещаем пять шаблонов в подпапку «Шаблоны задач/» с
-// человекочитаемыми именами. Используем move() — он работает в пределах одного
-// bucket'а и сохраняет атрибуты.
+// Step 2. Перемещаем пять шаблонов в подпапку `task-templates/` —
+// имена не меняются. move() работает в пределах одного bucket'а.
 async function moveTemplateFiles() {
   let moved = 0;
   let skipped = 0;
@@ -147,7 +202,7 @@ async function moveTemplateFiles() {
       continue;
     }
 
-    console.log(`[step 2] Переименован ${from} → ${to}`);
+    console.log(`[step 2] Перемещён ${from} → ${to}`);
     moved += 1;
   }
 
@@ -157,12 +212,14 @@ async function moveTemplateFiles() {
 
 async function main() {
   console.log("[migrate-instructions] старт миграции структуры team-prompts.");
+  const step0 = await cleanupLegacyCyrillic();
   const step1 = await copyStrategyFiles();
   const step2 = await moveTemplateFiles();
   const total = step1.moved + step1.skipped + step2.moved + step2.skipped;
   console.log(
     `[migrate-instructions] Готово: всего обработано ${total} файлов ` +
-      `(перенесено ${step1.moved + step2.moved}, пропущено ${step1.skipped + step2.skipped}). ` +
+      `(перенесено ${step1.moved + step2.moved}, пропущено ${step1.skipped + step2.skipped}, ` +
+      `legacy-удалено ${step0.removed}). ` +
       "Оригиналы context.md / concept.md остаются в bucket team-database как backup — " +
       "удалить руками через Supabase Dashboard после ручной проверки прода.",
   );

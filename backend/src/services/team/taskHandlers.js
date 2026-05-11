@@ -490,14 +490,15 @@ export const TASK_TITLES = {
   edit_text_fragments: "Правка через AI",
 };
 
-// Человекочитаемые имена шаблонов задач после Сессии 4 этапа 2 (без .md).
-// Файлы лежат в bucket team-prompts под подпапкой «Шаблоны задач/».
+// Имена шаблонов задач в bucket team-prompts после Сессии 4 этапа 2 (без .md).
+// Файлы лежат в подпапке `task-templates/`. Имена строго на латинице со
+// слэшем и дефисом — Supabase Storage отбивает пути с пробелами/кириллицей.
 const TEMPLATE_NAMES = {
-  ideas_free: "Свободные идеи",
-  ideas_questions_for_research: "Идеи и вопросы для исследования",
-  research_direct: "Прямое исследование",
-  write_text: "Написание текста",
-  edit_text_fragments: "Правка фрагментов",
+  ideas_free: "ideas-free",
+  ideas_questions_for_research: "ideas-questions",
+  research_direct: "research-direct",
+  write_text: "write-text",
+  edit_text_fragments: "edit-text-fragments",
 };
 
 // Старые имена шаблонов (плоские, в корне bucket'а) — фолбэк, если новый
@@ -512,11 +513,10 @@ const LEGACY_TEMPLATE_NAMES = {
 };
 
 // Имя файла шаблона в bucket'е team-prompts. Возвращает путь с подпапкой:
-// «Шаблоны задач/Свободные идеи.md». Supabase JS client сам URL-кодирует
-// кириллицу и пробелы при обращении к Storage API.
+// `task-templates/ideas-free.md`.
 export function taskTemplateName(taskType) {
-  const human = TEMPLATE_NAMES[taskType];
-  if (human) return `Шаблоны задач/${human}.md`;
+  const name = TEMPLATE_NAMES[taskType];
+  if (name) return `task-templates/${name}.md`;
   return LEGACY_TEMPLATE_NAMES[taskType] ?? `${taskType}.md`;
 }
 
@@ -527,10 +527,10 @@ export function taskTemplateNameLegacy(taskType) {
 }
 
 // Собирает промпт задачи через buildPrompt: сначала пробует новый путь
-// (Шаблоны задач/<человеческое имя>.md), при «Шаблон не найден» — старый
-// flat-путь в корне (ideas-free.md и т.п.). При срабатывании фолбэка
-// записывает предупреждение в лог, чтобы было видно, что миграция ещё не
-// прогнана на этом окружении.
+// (`task-templates/<name>.md`), при «Шаблон не найден» — старый flat-путь
+// в корне (ideas-free.md и т.п.). При срабатывании фолбэка записывает
+// предупреждение в лог, чтобы было видно, что миграция ещё не прогнана
+// на этом окружении.
 export async function buildTaskPrompt(taskType, variables = {}) {
   const primary = taskTemplateName(taskType);
   try {

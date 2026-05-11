@@ -10,17 +10,19 @@
 //   ...тело пользовательского сообщения с {{плейсхолдерами}}...
 //
 // Сборщик автоматически тянет Миссию и Цели на период из bucket'а
-// team-prompts (папка «Стратегия команды»), если в шаблоне есть {{mission}} /
+// team-prompts (папка `strategy/`), если в шаблоне есть {{mission}} /
 // {{goals}} (или старые алиасы {{context}} / {{concept}}), и они не переданы
 // в variables. Эти большие блоки кладутся в cacheableBlocks — Anthropic-клиент
 // маркирует их как ephemeral cache и серьёзно экономит на повторных вызовах.
 //
 // Сессия 4 этапа 2: переезд двух базовых файлов из bucket team-database
-// (context.md / concept.md в корне) в bucket team-prompts (Стратегия команды/
-// Миссия.md / Цели на период.md). Ключи cacheable_blocks переименованы
+// (context.md / concept.md в корне) в bucket team-prompts (strategy/
+// mission.md / strategy/goals.md). Ключи cacheable_blocks переименованы
 // `context` → `mission`, `concept` → `goals`. Старые имена работают как
 // алиасы — это backward-compat для шаблонов, которые ещё используют
-// {{context}} / {{concept}} в тексте.
+// {{context}} / {{concept}} в тексте. Storage не принимает кириллицу и пробелы
+// в путях (ошибка `Invalid key`) — поэтому хранилище строго на латинице,
+// а человекочитаемые лейблы живут только в UI (см. InstructionsWorkspace).
 
 import { downloadFile, listFiles } from "./teamStorage.js";
 
@@ -32,8 +34,8 @@ const PROMPTS_BUCKET = "team-prompts";
 
 // Пути к стратегическим блокам в bucket'е team-prompts. После Сессии 4
 // они переехали из team-database/context.md и team-database/concept.md.
-const MISSION_PATH = "Стратегия команды/Миссия.md";
-const GOALS_PATH = "Стратегия команды/Цели на период.md";
+const MISSION_PATH = "strategy/mission.md";
+const GOALS_PATH = "strategy/goals.md";
 
 // Возвращает все имена плейсхолдеров, упомянутые в тексте.
 function findPlaceholders(text) {
@@ -85,7 +87,7 @@ function splitSections(template) {
   return { systemBody: afterSys.trim(), userBody: null };
 }
 
-// Скачивает файл из bucket'а team-prompts (Стратегия команды/...), возвращает
+// Скачивает файл из bucket'а team-prompts (strategy/...), возвращает
 // строку или пустую строку. Используется в авто-загрузке mission / goals.
 // Если файла нет (свежий проект, Влад ещё не написал миссию) — пусто, не падаем.
 async function loadStrategyFile(path) {
@@ -104,7 +106,7 @@ async function loadStrategyFile(path) {
 //   template — фактическое имя файла шаблона (с .md)
 //
 // Имя шаблона может быть полным путём внутри bucket'а (например,
-// «Шаблоны задач/Свободные идеи.md»). Бросает ошибку с понятным русским
+// `task-templates/ideas-free.md`). Бросает ошибку с понятным русским
 // сообщением, если шаблона нет.
 export async function buildPrompt(templateName, variables = {}) {
   const vars = { ...variables };
@@ -180,10 +182,10 @@ export async function buildPrompt(templateName, variables = {}) {
 }
 
 // Возвращает список имён всех шаблонов в bucket'е team-prompts (только .md).
-// После Сессии 4 пять шаблонов задач переехали в подпапку `Шаблоны задач/` —
+// После Сессии 4 пять шаблонов задач переехали в подпапку `task-templates/` —
 // поэтому листим её, а не корень. Возвращаем имена с префиксом папки.
 export async function listTemplates() {
-  const folder = "Шаблоны задач";
+  const folder = "task-templates";
   const files = await listFiles(PROMPTS_BUCKET, folder);
   return files
     .map((f) => f.name)
