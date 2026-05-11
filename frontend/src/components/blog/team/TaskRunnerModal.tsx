@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Loader2, Sparkles, X } from "lucide-react";
+import { ChevronDown, GitBranch, Loader2, Sparkles, X } from "lucide-react";
 import VoiceInput from "./VoiceInput";
 import ModelSelector from "./ModelSelector";
 import {
@@ -12,7 +12,21 @@ import {
   type PromptLayersSummary,
 } from "@/lib/team/teamBackendClient";
 import { listAgents, type TeamAgent } from "@/lib/team/teamAgentsService";
-import type { TeamTaskModelChoice } from "@/lib/team/types";
+import type { SuggestedNextStep, TeamTaskModelChoice } from "@/lib/team/types";
+
+// Сессия 13: контекст handoff. Передаётся, когда модалку открывают из
+// кнопки «Передать дальше» в TaskViewerModal. Заставляет UI:
+//   • показать баннер «Передача от задачи …»
+//   • если есть Suggested Next Step — предзаполнить user_input и выбрать
+//     агента по соответствию имени (case-insensitive contains).
+//   • показать чекбокс «Прикрепить артефакт родителя».
+//   • при сабмите пробросить parentTaskId / attachParentArtifact в runTask.
+export interface HandoffContext {
+  parentTaskId: string;
+  parentTitle: string | null;
+  // Если в Suggested Next Steps было предложение — пред-заполняем форму.
+  suggestion?: SuggestedNextStep | null;
+}
 
 interface TaskRunnerModalProps {
   open: boolean;
@@ -21,6 +35,8 @@ interface TaskRunnerModalProps {
   onClose: () => void;
   // Когда задача успешно создана — caller получает её id и закрывает модалку.
   onCreated: (taskId: string) => void;
+  // Сессия 13: опц. handoff-контекст. Без него — обычный запуск задачи.
+  handoff?: HandoffContext | null;
 }
 
 // Параметры задачи, которые UI собирает из формы. Снепшот специфичен для
@@ -36,6 +52,7 @@ export default function TaskRunnerModal({
   taskTitle,
   onClose,
   onCreated,
+  handoff = null,
 }: TaskRunnerModalProps) {
   const [params, setParams] = useState<TaskParams>({});
   const [modelChoice, setModelChoice] = useState<TeamTaskModelChoice>(DEFAULT_MODEL);
@@ -44,6 +61,10 @@ export default function TaskRunnerModal({
   const [agentId, setAgentId] = useState<string | null>(null);
   const [agents, setAgents] = useState<TeamAgent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
+  // Сессия 13: при handoff — прикреплять артефакт родителя как контекст.
+  // По умолчанию true: бриф без контекста почти всегда бесполезен новому
+  // агенту. Влад может отключить, если хочет «чистую» задачу.
+  const [attachParentArtifact, setAttachParentArtifact] = useState(true);
 
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptPreview, setPromptPreview] = useState<PreviewPromptResult | null>(null);
@@ -61,10 +82,16 @@ export default function TaskRunnerModal({
   // не должен увидеть данные прошлого запуска.
   useEffect(() => {
     if (open) {
-      setParams({});
+      // Сессия 13: при handoff — предзаполняем user_input из Suggested Next Step.
+      const initialParams: TaskParams = {};
+      if (handoff?.suggestion?.suggestion) {
+        initialParams.user_input = handoff.suggestion.suggestion;
+      }
+      setParams(initialParams);
       setModelChoice(DEFAULT_MODEL);
       setTitle("");
       setAgentId(null);
+      setAttachParentArtifact(true);
       setPromptOpen(false);
       setPromptPreview(null);
       setPromptError(null);
@@ -74,7 +101,7 @@ export default function TaskRunnerModal({
       setSubmitError(null);
       setSubmitting(false);
     }
-  }, [open, taskType]);
+  }, [open, taskType, handoff]);
 
   // Подтягиваем активных агентов при открытии — список нужен и до сборки
   // промпта, и при отправке. Ошибку не показываем как блокер — пустой
@@ -85,7 +112,20 @@ export default function TaskRunnerModal({
     setAgentsLoading(true);
     listAgents("active")
       .then((list) => {
-        if (!cancelled) setAgents(list);
+        if (cancelled) return;
+        setAgents(list);
+        // Сессия 13: если есть handoff с предложением — пробуем сопоставить
+        // имя из Suggested Next Step с display_name активного агента
+        // (case-insensitive, ищем подстроку в обе стороны — модель часто
+        // даёт сокращённое имя «Маша» вместо полного «Маша-разведчик»).
+        if (handoff?.suggestion?.agent_name) {
+          const needle = handoff.suggestion.agent_name.trim().toLowerCase();
+          const match = list.find((a) => {
+            const name = a.display_name.toLowerCase();
+            return name.includes(needle) || needle.includes(name);
+          });
+          if (match) setAgentId(match.id);
+        }
       })
       .catch((err) => {
         console.warn("[TaskRunnerModal] listAgents failed:", err);
@@ -96,7 +136,7 @@ export default function TaskRunnerModal({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, handoff]);
 
   // Esc + блокировка скролла фона.
   useEffect(() => {
@@ -182,6 +222,9 @@ export default function TaskRunnerModal({
           : null,
         title: title.trim() || null,
         agentId,
+        // Сессия 13: handoff поля. Бэкенд игнорирует, если null.
+        parentTaskId: handoff?.parentTaskId ?? null,
+        attachParentArtifact: handoff ? attachParentArtifact : undefined,
       });
       onCreated(taskId);
     } catch (err) {
@@ -247,6 +290,52 @@ export default function TaskRunnerModal({
           }}
           className="flex flex-1 flex-col gap-5 overflow-y-auto p-6"
         >
+          {handoff && (
+            <div className="rounded-xl border border-accent/30 bg-accent-soft/40 px-4 py-3">
+              <div className="flex items-start gap-2.5 text-sm">
+                <GitBranch
+                  size={16}
+                  className="mt-0.5 flex-shrink-0 text-accent"
+                  aria-hidden
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-ink">
+                    Передача от задачи
+                    {handoff.parentTitle ? (
+                      <span className="ml-1 text-ink-muted">
+                        «{handoff.parentTitle}»
+                      </span>
+                    ) : (
+                      <span className="ml-1 text-ink-muted">{handoff.parentTaskId}</span>
+                    )}
+                  </p>
+                  {handoff.suggestion ? (
+                    <p className="mt-1 text-xs text-ink-muted">
+                      Предложение исходного агента:{" "}
+                      <em className="not-italic text-ink">
+                        {handoff.suggestion.agent_name}
+                      </em>{" "}
+                      → {handoff.suggestion.suggestion}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-xs text-ink-muted">
+                      Выбери сотрудника-получателя и сформулируй бриф.
+                    </p>
+                  )}
+                  <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-ink-muted">
+                    <input
+                      type="checkbox"
+                      checked={attachParentArtifact}
+                      onChange={(e) => setAttachParentArtifact(e.target.checked)}
+                      className="accent-accent"
+                    />
+                    Прикрепить артефакт исходной задачи как контекст
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
+
           <TaskFields taskType={taskType} params={params} setParam={setParam} />
 
           <AgentSelectField

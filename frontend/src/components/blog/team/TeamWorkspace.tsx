@@ -119,6 +119,9 @@ export default function TeamWorkspace({ initialTasks }: TeamWorkspaceProps) {
         updatedAt: new Date().toISOString(),
         startedAt: null,
         finishedAt: null,
+        agentId: null,
+        parentTaskId: null,
+        suggestedNextSteps: null,
       };
       setTasks((prev) => {
         // Если задача уже подъехала из поллинга (race) — не дублируем.

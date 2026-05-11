@@ -67,6 +67,13 @@ export async function appendTaskSnapshot(snapshot) {
     // между состояниями: оно задаётся при первом insert'е (createTask) и
     // тащится дальше через mergeSnapshot.
     agent_id: snapshot.agentId ?? null,
+    // parent_task_id — Сессия 13. NULL для корневой задачи (большинство),
+    // task.id родителя для handoff-цепочки. Не меняется между снапшотами.
+    parent_task_id: snapshot.parentTaskId ?? null,
+    // suggested_next_steps — Сессия 13. NULL до завершения; после finishTask
+    // — массив [{ agent_name, suggestion }]. Парсится из ответа LLM по
+    // блоку **Suggested Next Steps:** (см. handoffParser.js).
+    suggested_next_steps: snapshot.suggestedNextSteps ?? null,
   };
 
   const { data, error } = await client
@@ -159,6 +166,33 @@ export async function getTasksByStatus(status) {
   const all = await getAllTasks();
   const allowed = Array.isArray(status) ? new Set(status) : new Set([status]);
   return all.filter((t) => allowed.has(t.status));
+}
+
+// Прямые дочерние задачи по parent_task_id (Сессия 13, handoff-цепочка).
+// Возвращает текущие состояния всех задач, у которых parent_task_id = parentId.
+// Используется в getTaskChain для рекурсивного обхода вниз.
+export async function getChildTasks(parentId) {
+  if (!parentId || typeof parentId !== "string") return [];
+  const client = getServiceRoleClient();
+  // Тянем все снапшоты, у которых parent_task_id совпадает, и схлопываем
+  // до последнего на каждый task id (см. логику getAllTasks).
+  const { data, error } = await client
+    .from("team_tasks")
+    .select("*")
+    .eq("parent_task_id", parentId)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw new Error(`Supabase select team_tasks by parent failed: ${error.message}`);
+  }
+  const seen = new Set();
+  const current = [];
+  for (const row of data ?? []) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    current.push(row);
+  }
+  return current;
 }
 
 // =========================================================================

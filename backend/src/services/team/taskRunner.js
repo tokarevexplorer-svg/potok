@@ -38,6 +38,7 @@ import {
   formatEdits,
 } from "./taskHandlers.js";
 import { enqueueTeamTask } from "../../queue/teamWorkerPool.js";
+import { parseSuggestedNextSteps } from "./handoffParser.js";
 
 const DATABASE_BUCKET = "team-database";
 const PRESETS_PATH = "presets.json";
@@ -100,6 +101,16 @@ function mergeSnapshot(current, update) {
     // agent_id живёт на уровне задачи (Сессия 12) — не меняется между
     // снапшотами, переносим текущее значение, если update не уточняет.
     agentId: update.agentId ?? current.agent_id,
+    // parent_task_id фиксируется при createTask (handoff) и не меняется
+    // между снапшотами. Сессия 13.
+    parentTaskId:
+      update.parentTaskId !== undefined ? update.parentTaskId : current.parent_task_id,
+    // suggested_next_steps записывается один раз в finishTask, остальные
+    // снапшоты её сохраняют. NULL до завершения — это норма.
+    suggestedNextSteps:
+      update.suggestedNextSteps !== undefined
+        ? update.suggestedNextSteps
+        : current.suggested_next_steps,
   };
 }
 
@@ -261,6 +272,7 @@ export async function createTask({
   promptOverride = null,
   title = null,
   agentId = null,
+  parentTaskId = null,
 }) {
   if (!TASK_HANDLERS[taskType]) {
     throw new Error(`Тип задачи не поддерживается: ${taskType}`);
@@ -320,6 +332,8 @@ export async function createTask({
     startedAt: null,
     finishedAt: null,
     agentId: agentId || null,
+    parentTaskId: parentTaskId || null,
+    suggestedNextSteps: null,
   };
 
   await appendTaskSnapshot(snapshot);
@@ -409,6 +423,12 @@ export async function runTaskInBackground(taskId) {
       return;
     }
 
+    // Парсим необязательный блок «**Suggested Next Steps:**» в конце ответа
+    // (Сессия 13, пункт 8). Пустой массив, если блока нет — это нормальный
+    // случай для большинства задач. UI handoff использует этот массив для
+    // предзаполнения формы передачи задачи.
+    const suggestedSteps = parseSuggestedNextSteps(outcome.result ?? "");
+
     const update = {
       status: "done",
       result: outcome.result ?? "",
@@ -417,6 +437,7 @@ export async function runTaskInBackground(taskId) {
       costUsd: Number(apiEntry?.cost_usd ?? 0),
       startedAt,
       finishedAt: nowIso(),
+      suggestedNextSteps: suggestedSteps.length > 0 ? suggestedSteps : null,
     };
     if (outcome.prompt) update.prompt = outcome.prompt;
 

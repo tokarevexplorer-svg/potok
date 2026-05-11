@@ -55,6 +55,15 @@ export interface TeamTaskPrompt {
   template?: string | null;
 }
 
+// Предложение агента передать задачу дальше (Сессия 13, пункт 8).
+// Парсится из блока «**Suggested Next Steps:**» в ответе LLM. Хранится
+// в team_tasks.suggested_next_steps как массив. UI handoff использует
+// первое предложение для предзаполнения формы передачи.
+export interface SuggestedNextStep {
+  agent_name: string;
+  suggestion: string;
+}
+
 // Снапшот задачи — соответствует одной строке team_tasks.
 // Чтобы получить «текущее состояние задачи», нужно сгруппировать по id и
 // взять последнюю по created_at (см. dedupe в teamTasksService).
@@ -78,6 +87,14 @@ export interface TeamTask {
   updatedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  // Сессия 12: id агента-исполнителя (slug). NULL для задач без агента
+  // (как в этапе 1).
+  agentId: string | null;
+  // Сессия 13: id родительской задачи при handoff. NULL для корневых задач.
+  parentTaskId: string | null;
+  // Сессия 13: предложения агента передать задачу дальше. NULL если блок
+  // не был распознан в ответе LLM.
+  suggestedNextSteps: SuggestedNextStep[] | null;
 }
 
 // ---------- Журнал API-вызовов ----------

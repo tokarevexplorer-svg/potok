@@ -1,6 +1,6 @@
 "use client";
 
-import { Cpu, Loader2 } from "lucide-react";
+import { ArrowLeftFromLine, Cpu, GitBranch, Loader2 } from "lucide-react";
 import type { TeamTask } from "@/lib/team/types";
 import { formatUsd } from "@/lib/team/format";
 import { formatRelative, statusBadge, taskTypeLabel } from "./taskTypeMeta";
@@ -49,6 +49,32 @@ export default function TaskCard({ task, onClick }: TaskCardProps) {
         <h3 className="line-clamp-2 font-display text-base font-semibold leading-snug tracking-tight text-ink">
           {task.title || "(без названия)"}
         </h3>
+        {/* Сессия 13: визуальные пометки цепочки задач. ← для дочерней,
+            🔗 если агент в финале предложил передать дальше. Подробности —
+            в TaskViewerModal. */}
+        {(task.parentTaskId ||
+          (task.suggestedNextSteps && task.suggestedNextSteps.length > 0)) && (
+          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-ink-faint">
+            {task.parentTaskId && (
+              <span
+                className="inline-flex items-center gap-1"
+                title="Задача — продолжение цепочки"
+              >
+                <ArrowLeftFromLine size={11} />
+                из задачи
+              </span>
+            )}
+            {task.suggestedNextSteps && task.suggestedNextSteps.length > 0 && (
+              <span
+                className="inline-flex items-center gap-1"
+                title={`Агент предложил передать дальше (${task.suggestedNextSteps.length})`}
+              >
+                <GitBranch size={11} />
+                есть предложение
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {isRunning && !preview && (

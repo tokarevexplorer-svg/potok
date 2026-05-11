@@ -391,6 +391,26 @@ function formatDatabasesMap(databases, currentAgent) {
   return lines.length > 1 ? lines.join("\n") : "";
 }
 
+// Блок «Рекомендации по передаче» (Сессия 13, пункт 8).
+// Включается в Awareness, если в команде есть хотя бы один другой активный
+// агент (handoff в команде из одного человека бессмыслен). Текст инструкции
+// — стабильный, кеш-эффективный: меняется только при правке этого файла.
+const HANDOFF_HINT_BLOCK = [
+  "## Рекомендации по передаче",
+  "",
+  "Если результат твоей работы может быть полезен другому сотруднику для",
+  "продолжения, добавь в конце ответа блок:",
+  "",
+  "---",
+  "**Suggested Next Steps:**",
+  "- [Имя сотрудника]: [краткое описание задачи, которую стоит поставить]",
+  "- [Имя сотрудника]: [ещё одно предложение, если есть]",
+  "---",
+  "",
+  "Блок необязательный. Добавляй только если передача действительно имеет",
+  "смысл. Ты предлагаешь — решение за Владом.",
+].join("\n");
+
 async function buildAwareness({ agentId, currentAgent }) {
   const version = getAwarenessVersion();
   const cacheKey = agentId || "__nobody__";
@@ -418,7 +438,16 @@ async function buildAwareness({ agentId, currentAgent }) {
   const teamBlock = formatTeamRoster(roster);
   const dbBlock = formatDatabasesMap(databases, currentAgent);
 
-  const text = [teamBlock, dbBlock].filter((s) => s && s.trim()).join("\n\n");
+  // Handoff-инструкция нужна только тем, у кого вообще есть кому передавать:
+  // если кроме текущего агента в roster никого нет, блок пропускаем.
+  const peersCount = Array.isArray(roster)
+    ? roster.filter((m) => agentId ? m?.id !== agentId : true).length
+    : 0;
+  const handoffBlock = peersCount > 0 ? HANDOFF_HINT_BLOCK : "";
+
+  const text = [teamBlock, dbBlock, handoffBlock]
+    .filter((s) => s && s.trim())
+    .join("\n\n");
   awarenessCache.set(cacheKey, { version, accessFingerprint, text });
   return text;
 }

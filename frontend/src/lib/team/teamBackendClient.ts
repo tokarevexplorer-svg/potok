@@ -232,6 +232,11 @@ export interface RunTaskParams {
   // Сессия 12: опц. id агента-исполнителя. С агентом промпт собирается с
   // Role + Memory + Awareness; без агента — как раньше (только Mission/Goals).
   agentId?: string | null;
+  // Сессия 13: handoff. parentTaskId — id исходной задачи цепочки.
+  // attachParentArtifact=true — бэкенд подмешает контент артефакта родителя
+  // в params.user_input как блок «## Контекст из задачи …».
+  parentTaskId?: string | null;
+  attachParentArtifact?: boolean;
 }
 
 export async function runTask(input: RunTaskParams): Promise<string> {
@@ -263,6 +268,44 @@ export async function renameTask(taskId: string, title: string): Promise<TeamTas
 
 export async function markTaskDone(taskId: string): Promise<TeamTask> {
   const data = await backendFetch(`/api/team/tasks/${taskId}/mark-done`, { method: "POST" });
+  return ((data ?? {}) as { task?: TeamTask }).task as TeamTask;
+}
+
+// =========================================================================
+// Сессия 13: handoff и цепочки задач
+// =========================================================================
+
+// Краткая выдержка из team_tasks для отображения связей. Эндпоинт /chain
+// возвращает массив этих строк — от корневой задачи до самой свежей дочерней
+// (BFS, отсортирован по created_at). Поля выровнены под snake_case ответа.
+export interface TaskChainEntry {
+  id: string;
+  title: string | null;
+  type: string;
+  status: string;
+  agent_id: string | null;
+  parent_task_id: string | null;
+  suggested_next_steps:
+    | { agent_name: string; suggestion: string }[]
+    | null;
+  created_at: string;
+}
+
+export interface TaskChainResult {
+  chain: TaskChainEntry[];
+  current_index: number;
+  total: number;
+}
+
+export async function fetchTaskChain(taskId: string): Promise<TaskChainResult> {
+  const data = await backendFetch(`/api/team/tasks/${taskId}/chain`, { method: "GET" });
+  return data as TaskChainResult;
+}
+
+// Получение одной задачи по id (без всех логов). Используется в HandoffModal,
+// чтобы загрузить родительскую задачу для отображения в шапке цепочки.
+export async function fetchTaskById(taskId: string): Promise<TeamTask> {
+  const data = await backendFetch(`/api/team/tasks/${taskId}`, { method: "GET" });
   return ((data ?? {}) as { task?: TeamTask }).task as TeamTask;
 }
 

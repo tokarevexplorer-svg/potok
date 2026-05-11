@@ -3,26 +3,31 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Archive,
+  ArrowLeftFromLine,
   Check,
   ChevronDown,
   Cpu,
+  GitBranch,
   Loader2,
   MessageSquarePlus,
   Pencil,
+  Send,
   X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { TeamTask } from "@/lib/team/types";
+import type { SuggestedNextStep, TeamTask } from "@/lib/team/types";
 import { formatUsd } from "@/lib/team/format";
 import {
   archiveTask,
+  fetchTaskById,
   markTaskDone,
   renameTask,
 } from "@/lib/team/teamBackendClient";
 import { formatRelative, statusBadge, taskTypeLabel } from "./taskTypeMeta";
 import WriteTextEditor from "./WriteTextEditor";
 import AppendQuestionModal from "./AppendQuestionModal";
+import TaskRunnerModal, { type HandoffContext } from "./TaskRunnerModal";
 
 interface TaskViewerModalProps {
   task: TeamTask;
@@ -56,18 +61,45 @@ export default function TaskViewerModal({
   // при смене task.id.
   const [localContent, setLocalContent] = useState<string | null>(null);
   const [askOpen, setAskOpen] = useState(false);
+  // Сессия 13: модалка handoff. handoffSuggestion — какое из Suggested Next
+  // Steps предложение использовать (null = ручной handoff без preset).
+  const [handoffOpen, setHandoffOpen] = useState<{
+    suggestion: SuggestedNextStep | null;
+  } | null>(null);
+  // Подтянутый title родительской задачи для отображения «← из задачи …».
+  // Хранится отдельно, чтобы не делать запрос в карточке списка.
+  const [parentTitle, setParentTitle] = useState<string | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setTitleDraft(task.title ?? "");
     setLocalContent(null);
+    setParentTitle(null);
   }, [task.id, task.title]);
+
+  // Сессия 13: подтягиваем title родителя для отображения цепочки.
+  // Если parent_task_id нет — пропускаем. Ошибки игнорируем тихо — наличие
+  // ссылки в UI важнее красивого title.
+  useEffect(() => {
+    if (!task.parentTaskId) return;
+    let cancelled = false;
+    fetchTaskById(task.parentTaskId)
+      .then((parent) => {
+        if (!cancelled) setParentTitle(parent?.title ?? null);
+      })
+      .catch((err) => {
+        console.warn("[TaskViewerModal] fetch parent title failed:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task.parentTaskId]);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !busy && !askOpen) {
+      if (e.key === "Escape" && !busy && !askOpen && !handoffOpen) {
         if (editingTitle) {
           setEditingTitle(false);
           setTitleDraft(task.title ?? "");
@@ -81,7 +113,7 @@ export default function TaskViewerModal({
       document.body.style.overflow = prev;
       document.removeEventListener("keydown", onKey);
     };
-  }, [busy, onClose, editingTitle, task.title, askOpen]);
+  }, [busy, onClose, editingTitle, task.title, askOpen, handoffOpen]);
 
   useEffect(() => {
     if (editingTitle) {
@@ -222,6 +254,18 @@ export default function TaskViewerModal({
               </h2>
             )}
 
+            {task.parentTaskId && (
+              <div className="mt-1.5 flex items-center gap-1.5 text-xs text-ink-muted">
+                <ArrowLeftFromLine size={12} className="flex-shrink-0" />
+                <span>
+                  ← из задачи{" "}
+                  <span className="font-medium text-ink">
+                    «{parentTitle ?? task.parentTaskId}»
+                  </span>
+                </span>
+              </div>
+            )}
+
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-faint">
               <span title={task.createdAt}>Создана {formatRelative(task.createdAt)}</span>
               {task.finishedAt && (
@@ -314,6 +358,43 @@ export default function TaskViewerModal({
             </div>
           )}
 
+          {/* Сессия 13: блок Suggested Next Steps. Если агент в финале ответа
+              предложил передать задачу дальше — показываем список с кнопками
+              «Передать дальше → …», каждая открывает HandoffModal с
+              preselect'ом этого предложения. */}
+          {Array.isArray(task.suggestedNextSteps) &&
+            task.suggestedNextSteps.length > 0 &&
+            task.status !== "running" &&
+            task.status !== "error" && (
+              <div className="mt-5 rounded-xl border border-line bg-elevated/60 p-4">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
+                  <GitBranch size={14} className="text-accent" />
+                  Предложения передать дальше
+                </div>
+                <ul className="flex flex-col gap-2">
+                  {task.suggestedNextSteps.map((s, idx) => (
+                    <li
+                      key={`${s.agent_name}-${idx}`}
+                      className="flex items-start justify-between gap-3 rounded-lg bg-surface px-3 py-2 text-sm"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-ink">{s.agent_name}</p>
+                        <p className="mt-0.5 text-ink-muted">{s.suggestion}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setHandoffOpen({ suggestion: s })}
+                        className="focus-ring inline-flex h-8 items-center gap-1 rounded-md border border-line bg-surface px-2.5 text-xs font-medium text-ink-muted transition hover:border-line-strong hover:text-ink"
+                      >
+                        <Send size={12} />
+                        Передать
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
           {/* Промпт */}
           <div className="mt-6 flex flex-col gap-2">
             <button
@@ -369,6 +450,20 @@ export default function TaskViewerModal({
               {busy === "archive" ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}
               В архив
             </button>
+            {/* Сессия 13: «Передать дальше» — на завершённых задачах. Открывает
+                TaskRunnerModal в режиме handoff (без preset'а конкретного
+                предложения, Влад заполняет всё руками). */}
+            {(task.status === "done" || task.status === "marked_done") && (
+              <button
+                type="button"
+                onClick={() => setHandoffOpen({ suggestion: null })}
+                disabled={busy !== null}
+                className="focus-ring inline-flex h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-4 text-sm font-medium text-ink-muted transition hover:border-line-strong hover:text-ink disabled:opacity-50"
+              >
+                <Send size={14} />
+                Передать дальше
+              </button>
+            )}
             <button
               type="button"
               onClick={handleMarkDone}
@@ -401,8 +496,35 @@ export default function TaskViewerModal({
           }}
         />
       )}
+
+      {/* Сессия 13: handoff. Переиспользуем TaskRunnerModal с параметром
+          handoff — он показывает баннер, чекбокс «прикрепить артефакт» и
+          пробрасывает parentTaskId в runTask. Тип задачи и заголовок —
+          ideas_free по умолчанию (универсальный шаблон без обязательных
+          полей кроме user_input); Влад в форме сможет уточнить параметры. */}
+      {handoffOpen !== null && (
+        <TaskRunnerModal
+          open
+          taskType="ideas_free"
+          taskTitle="Передать дальше"
+          onClose={() => setHandoffOpen(null)}
+          onCreated={() => setHandoffOpen(null)}
+          handoff={buildHandoffContext(task, handoffOpen.suggestion)}
+        />
+      )}
     </div>
   );
+}
+
+function buildHandoffContext(
+  parent: TeamTask,
+  suggestion: SuggestedNextStep | null,
+): HandoffContext {
+  return {
+    parentTaskId: parent.id,
+    parentTitle: parent.title,
+    suggestion,
+  };
 }
 
 function PromptBlock({ label, value }: { label: string; value: string }) {

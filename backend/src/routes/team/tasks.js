@@ -23,7 +23,7 @@ import {
   saveDirectEdit,
   appendQuestionToResearch,
 } from "../../services/team/taskRunner.js";
-import { getTaskById } from "../../services/team/teamSupabase.js";
+import { getTaskById, getChildTasks } from "../../services/team/teamSupabase.js";
 import { listFiles, downloadFile } from "../../services/team/teamStorage.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { checkDailyLimit } from "../../services/team/costTracker.js";
@@ -97,8 +97,16 @@ router.post("/preview-prompt", async (req, res) => {
 // =========================================================================
 
 router.post("/run", async (req, res) => {
-  const { taskType, params, modelChoice, promptOverride, title, agentId } =
-    req.body ?? {};
+  const {
+    taskType,
+    params,
+    modelChoice,
+    promptOverride,
+    title,
+    agentId,
+    parentTaskId,
+    attachParentArtifact,
+  } = req.body ?? {};
 
   if (typeof taskType !== "string" || !TASK_HANDLERS[taskType]) {
     return res.status(400).json({ error: "Неизвестный тип задачи" });
@@ -119,6 +127,21 @@ router.post("/run", async (req, res) => {
       .json({ error: "agentId должен быть строкой (id агента) или null." });
   }
 
+  // Сессия 13: parentTaskId — опц. top-level. При handoff содержит id
+  // исходной задачи. Если флаг attachParentArtifact=true — подмешиваем
+  // контент артефакта родителя в params.user_input как «контекст».
+  let normalizedParentId = null;
+  if (typeof parentTaskId === "string" && parentTaskId.trim()) {
+    if (!TASK_ID_REGEX.test(parentTaskId.trim())) {
+      return res.status(400).json({ error: "Некорректный parentTaskId" });
+    }
+    normalizedParentId = parentTaskId.trim();
+  } else if (parentTaskId !== null && parentTaskId !== undefined && parentTaskId !== "") {
+    return res
+      .status(400)
+      .json({ error: "parentTaskId должен быть строкой (id задачи) или null." });
+  }
+
   try {
     // Жёсткий дневной лимит. Считаем сумму cost_usd в team_api_calls за
     // текущие UTC-сутки и сверяем с настройкой в team_settings (запись
@@ -136,13 +159,40 @@ router.post("/run", async (req, res) => {
       });
     }
 
+    // Сборка финальных params: при handoff с прикреплённым артефактом
+    // дописываем контекст в user_input. Сама задача создаётся «обычно»,
+    // просто видит расширенный бриф.
+    let finalParams = params || {};
+    if (normalizedParentId && attachParentArtifact === true) {
+      const parent = await getTaskById(normalizedParentId);
+      if (parent?.artifact_path) {
+        try {
+          const content = await downloadFile(DATABASE_BUCKET, parent.artifact_path);
+          const userBrief = String(finalParams.user_input ?? "").trim();
+          const parentLabel = parent.title || `задача ${parent.id}`;
+          const contextBlock =
+            `\n\n---\n\n## Контекст из задачи «${parentLabel}»\n\n${content}`;
+          finalParams = {
+            ...finalParams,
+            user_input: userBrief ? userBrief + contextBlock : contextBlock.trim(),
+          };
+        } catch (err) {
+          console.warn(
+            `[team] tasks/run: не удалось приложить артефакт родителя ${normalizedParentId}:`,
+            err?.message ?? err,
+          );
+        }
+      }
+    }
+
     const taskId = await createTask({
       taskType,
-      params: params || {},
+      params: finalParams,
       modelChoice: modelChoice ?? null,
       promptOverride: promptOverride ?? null,
       title: title ?? null,
       agentId: normalizedAgentId,
+      parentTaskId: normalizedParentId,
     });
     return res.status(202).json({ taskId });
   } catch (err) {
@@ -393,6 +443,122 @@ router.get("/:taskId/version-content", async (req, res) => {
   } catch (err) {
     console.error(`[team] version-content ${taskId} failed:`, err);
     return res.status(500).json({ error: err.message ?? "Не удалось прочитать версию" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/tasks/:taskId/chain
+// Возвращает цепочку задач (Сессия 13, handoff): корень → ... → текущая → ...
+// дочерние. Используется UI для подсветки связей между задачами.
+//
+// Алгоритм:
+//   1. Идём вверх по parent_task_id, пока есть родитель (защита от циклов —
+//      hard cap 50 шагов, чтобы баг в данных не зациклил сервер).
+//   2. От корня обходим вниз через getChildTasks (BFS, тот же cap).
+//   3. Считаем current_index — позицию текущей задачи в линейном
+//      порядке цепочки (для UI «← 2/4 →»).
+//
+// Возвращает { chain: [{id, title, agent_id, status, parent_task_id}],
+//              current_index, total }. Если задача не найдена — 404.
+// =========================================================================
+
+router.get("/:taskId/chain", async (req, res) => {
+  const taskId = ensureTaskId(req, res);
+  if (!taskId) return;
+
+  const MAX_DEPTH = 50;
+
+  try {
+    const current = await getTaskById(taskId);
+    if (!current) return res.status(404).json({ error: "Задача не найдена" });
+
+    // Поднимаемся к корню.
+    const ancestorsReversed = [];
+    let cursor = current;
+    const visited = new Set([cursor.id]);
+    let safety = 0;
+    while (cursor.parent_task_id && safety < MAX_DEPTH) {
+      const parent = await getTaskById(cursor.parent_task_id);
+      if (!parent) break;
+      if (visited.has(parent.id)) break; // защита от цикла в данных
+      visited.add(parent.id);
+      ancestorsReversed.push(parent);
+      cursor = parent;
+      safety += 1;
+    }
+    const root = ancestorsReversed.length > 0
+      ? ancestorsReversed[ancestorsReversed.length - 1]
+      : current;
+
+    // Спускаемся от корня вниз (BFS). При сходящейся ветке несколько дочерних —
+    // обрабатываем все. visited предотвращает повторные посещения.
+    const allTasks = new Map(); // id → row
+    const queue = [root];
+    visited.clear();
+    visited.add(root.id);
+    allTasks.set(root.id, root);
+    while (queue.length && allTasks.size < MAX_DEPTH * 2) {
+      const node = queue.shift();
+      const children = await getChildTasks(node.id);
+      for (const child of children) {
+        if (visited.has(child.id)) continue;
+        visited.add(child.id);
+        allTasks.set(child.id, child);
+        queue.push(child);
+      }
+    }
+
+    // Линейная цепочка: BFS-порядок от корня. Для UI этого достаточно —
+    // если ветвление было, UI отобразит как «дерево» (но в MVP мы не строим
+    // граф, только список). Сортируем по created_at, чтобы порядок был
+    // детерминированным.
+    const chainRows = Array.from(allTasks.values())
+      .sort((a, b) => {
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return ta - tb;
+      })
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        type: row.type,
+        status: row.status,
+        agent_id: row.agent_id ?? null,
+        parent_task_id: row.parent_task_id ?? null,
+        suggested_next_steps: row.suggested_next_steps ?? null,
+        created_at: row.created_at,
+      }));
+
+    const currentIndex = chainRows.findIndex((t) => t.id === current.id);
+
+    return res.json({
+      chain: chainRows,
+      current_index: currentIndex >= 0 ? currentIndex : 0,
+      total: chainRows.length,
+    });
+  } catch (err) {
+    console.error(`[team] chain ${taskId} failed:`, err);
+    return res.status(500).json({ error: err.message ?? "Не удалось получить цепочку" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/tasks/:taskId
+// Текущее состояние задачи. Нужен фронту, чтобы загрузить детали задачи
+// без полного запроса /api/team/tasks (например, при открытии модалки
+// handoff из строки лога — там есть только id). Read-only.
+// =========================================================================
+
+router.get("/:taskId", async (req, res) => {
+  const taskId = ensureTaskId(req, res);
+  if (!taskId) return;
+  try {
+    const task = await getTaskById(taskId);
+    if (!task) return res.status(404).json({ error: "Задача не найдена" });
+    return res.json({ task });
+  } catch (err) {
+    console.error(`[team] get ${taskId} failed:`, err);
+    return res.status(500).json({ error: err.message ?? "Не удалось получить задачу" });
   }
 });
 

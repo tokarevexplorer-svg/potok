@@ -15,6 +15,7 @@ import {
   getSupabaseBrowserClient,
 } from "@/lib/supabaseClient";
 import type {
+  SuggestedNextStep,
   TeamTask,
   TeamTaskModelChoice,
   TeamTaskPrompt,
@@ -44,6 +45,10 @@ interface TeamTaskRow {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
+  // Сессия 12 / 13: добавленные колонки.
+  agent_id: string | null;
+  parent_task_id: string | null;
+  suggested_next_steps: SuggestedNextStep[] | null;
 }
 
 function toNumber(value: number | string | null): number | null {
@@ -73,6 +78,9 @@ function mapTask(row: TeamTaskRow): TeamTask {
     updatedAt: row.updated_at,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    agentId: row.agent_id ?? null,
+    parentTaskId: row.parent_task_id ?? null,
+    suggestedNextSteps: row.suggested_next_steps ?? null,
   };
 }
 
@@ -92,7 +100,7 @@ function dedupeLatest(rows: TeamTaskRow[]): TeamTask[] {
 }
 
 const TASK_SELECT =
-  "id, type, title, status, params, model_choice, provider, model, prompt, prompt_override_used, result, artifact_path, tokens, cost_usd, error, created_at, updated_at, started_at, finished_at";
+  "id, type, title, status, params, model_choice, provider, model, prompt, prompt_override_used, result, artifact_path, tokens, cost_usd, error, created_at, updated_at, started_at, finished_at, agent_id, parent_task_id, suggested_next_steps";
 
 // Все задачи (по последнему снапшоту), включая архивированные.
 // Используется на главной для подсчёта статистики и в Сессии 6 как
