@@ -1,92 +1,47 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Loader2 } from "lucide-react";
-import AutosavingTextEditor from "./AutosavingTextEditor";
 import ArtifactBrowser from "./ArtifactBrowser";
-import { readArtifactText } from "@/lib/team/teamArtifactsService";
-import { uploadArtifact } from "@/lib/team/teamBackendClient";
 
-type TabId = "context" | "concept" | "research" | "texts" | "ideas" | "sources";
+type TabId = "research" | "texts" | "ideas" | "sources";
 
+// Сессия 4 этапа 2: вкладки Контекст / Концепция убраны — эти файлы
+// (бывшие context.md / concept.md) переехали в раздел «Инструкции» под
+// именами Миссия и Цели на период (bucket team-prompts/Стратегия команды/).
+// Остаются артефакты задач команды: исследования, тексты, идеи, источники.
 const TABS: { id: TabId; label: string; description: string }[] = [
-  {
-    id: "context",
-    label: "Контекст",
-    description: "Контекст блога: о чём он, кому, какие темы. Подгружается во все промпты как кешируемый блок.",
-  },
-  {
-    id: "concept",
-    label: "Концепция",
-    description: "Подробная концепция: тон, форматы, циклы, культурные ориентиры. Тоже идёт во все промпты.",
-  },
   {
     id: "research",
     label: "Исследования",
-    description: "Артефакты задач research_direct и собранные тобой материалы. Папки можно разбивать по темам.",
+    description:
+      "Артефакты задач research_direct и собранные тобой материалы. Папки можно разбивать по темам.",
   },
   {
     id: "texts",
     label: "Тексты",
-    description: "Версии текстов задач write_text. Каждая точка — своя подпапка, версии — внутри (v1_..., v2_...).",
+    description:
+      "Версии текстов задач write_text. Каждая точка — своя подпапка, версии — внутри (v1_..., v2_...).",
   },
   {
     id: "ideas",
     label: "Идеи",
-    description: "Артефакты задач ideas_free и ideas_questions_for_research. Сюда попадают результаты «штормов».",
+    description:
+      "Артефакты задач ideas_free и ideas_questions_for_research. Сюда попадают результаты «штормов».",
   },
   {
     id: "sources",
     label: "Источники",
-    description: "PDF, скрипты выпусков, материалы исследований. Можно загрузить файл и потом ссылаться на путь в задачах.",
+    description:
+      "PDF, скрипты выпусков, материалы исследований. Можно загрузить файл и потом ссылаться на путь в задачах.",
   },
 ];
 
-interface DatabaseWorkspaceProps {
-  initialContext: string | null;
-  initialConcept: string | null;
-}
-
-// Корень страницы /blog/team/artifacts. Шесть табов:
-//   • Контекст / Концепция — большие markdown-файлы в team-database/ (корень)
+// Корень страницы /blog/team/artifacts. Четыре таба:
 //   • Исследования / Тексты / Идеи / Источники — папки с файлами,
 //     управляются через ArtifactBrowser.
-//
-// State хранит активный таб + значения context/concept (для синка между
-// табом «обнови страницу» и autosave). Папки загружают свой list внутри
-// ArtifactBrowser — это не глобальный state.
-export default function DatabaseWorkspace({
-  initialContext,
-  initialConcept,
-}: DatabaseWorkspaceProps) {
-  const [activeTab, setActiveTab] = useState<TabId>("context");
-  const [contextValue, setContextValue] = useState<string | null>(initialContext);
-  const [conceptValue, setConceptValue] = useState<string | null>(initialConcept);
-
-  // При переключении на context/concept — перечитаем из Storage, чтобы не
-  // показывать устаревшие данные после правок из другой вкладки/системы.
-  useEffect(() => {
-    let cancelled = false;
-    if (activeTab === "context") {
-      readArtifactText("context.md")
-        .then((text) => !cancelled && setContextValue(text))
-        .catch(() => {
-          if (!cancelled) setContextValue(contextValue ?? "");
-        });
-    }
-    if (activeTab === "concept") {
-      readArtifactText("concept.md")
-        .then((text) => !cancelled && setConceptValue(text))
-        .catch(() => {
-          if (!cancelled) setConceptValue(conceptValue ?? "");
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
-
+export default function DatabaseWorkspace() {
+  const [activeTab, setActiveTab] = useState<TabId>("research");
   const activeMeta = TABS.find((t) => t.id === activeTab)!;
 
   return (
@@ -111,30 +66,6 @@ export default function DatabaseWorkspace({
 
       <p className="text-sm text-ink-muted">{activeMeta.description}</p>
 
-      {activeTab === "context" && (
-        <AutosavingTextEditor
-          label="Контекст"
-          initialValue={contextValue}
-          placeholder="Опиши блог: тематику, аудиторию, тон, форматы…"
-          onSave={async (value) => {
-            await uploadArtifact("context.md", value);
-            setContextValue(value);
-          }}
-        />
-      )}
-
-      {activeTab === "concept" && (
-        <AutosavingTextEditor
-          label="Концепция"
-          initialValue={conceptValue}
-          placeholder="Подробное описание концепции блога: циклы, метод подачи, культурные ориентиры…"
-          onSave={async (value) => {
-            await uploadArtifact("concept.md", value);
-            setConceptValue(value);
-          }}
-        />
-      )}
-
       {activeTab === "research" && (
         <ArtifactBrowser rootPrefix="research" supportsFolders supportsUpload={false} />
       )}
@@ -151,12 +82,11 @@ export default function DatabaseWorkspace({
   );
 }
 
-// Скелет загрузки используется в страницах при первом рендере (server
-// component тянет context/concept; для остальных табов — лениво).
+// Скелет загрузки используется в страницах при первом рендере.
 export function DatabaseLoading() {
   return (
     <div className="flex items-center gap-2 rounded-2xl border border-dashed border-line bg-elevated/40 px-4 py-12 text-sm text-ink-muted">
-      <Loader2 size={16} className="animate-spin" /> Грузим базу…
+      <Loader2 size={16} className="animate-spin" /> Грузим артефакты…
     </div>
   );
 }

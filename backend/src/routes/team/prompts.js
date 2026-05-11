@@ -15,9 +15,33 @@ const BUCKET = "team-prompts";
 
 router.use(requireAuth);
 
-// Имя шаблона должно быть простым: только латиница/цифры/дефис/подчёркивание/точка.
-// Никаких слэшей — у нас плоская структура шаблонов.
-const NAME_REGEX = /^[A-Za-z0-9_-]+(?:\.md)?$/;
+// Имя шаблона может быть путём внутри bucket'а с одной подпапкой:
+// «Шаблоны задач/Свободные идеи.md», «Стратегия команды/Миссия.md».
+// До Сессии 4 принимали только плоские имена в корне; теперь Storage
+// разложен по подпапкам, и фронт обращается к ним по полному пути.
+// Разрешаем: латиницу, кириллицу, цифры, дефис, подчёркивание, пробел,
+// точку и ровно один слэш-разделитель (папка/файл). Запрещаем `..`, чтобы
+// не было побегов из bucket'а через ../.
+const SEGMENT_REGEX = /^[A-Za-zА-Яа-яЁё0-9 ._-]+$/;
+function validateTemplatePath(rawName) {
+  const name = (rawName ?? "").trim();
+  if (!name) return { ok: false, reason: "name обязателен" };
+  if (name.includes("..")) return { ok: false, reason: "name не должен содержать .." };
+  const segments = name.split("/");
+  if (segments.length > 2) {
+    return { ok: false, reason: "name может содержать не более одной подпапки" };
+  }
+  for (const seg of segments) {
+    if (!seg.trim() || !SEGMENT_REGEX.test(seg)) {
+      return {
+        ok: false,
+        reason:
+          "name может содержать латиницу, кириллицу, цифры, пробел, точку, дефис, подчёркивание и одну подпапку",
+      };
+    }
+  }
+  return { ok: true, name };
+}
 
 // =========================================================================
 // POST /api/team/prompts
@@ -28,20 +52,18 @@ const NAME_REGEX = /^[A-Za-z0-9_-]+(?:\.md)?$/;
 
 router.post("/", async (req, res) => {
   const { name, content } = req.body ?? {};
-  if (typeof name !== "string" || !name.trim()) {
+  if (typeof name !== "string") {
     return res.status(400).json({ error: "name обязателен" });
   }
-  const trimmed = name.trim();
-  if (!NAME_REGEX.test(trimmed)) {
-    return res.status(400).json({
-      error: "name может содержать только латиницу, цифры, дефис, подчёркивание и опционально .md",
-    });
+  const verdict = validateTemplatePath(name);
+  if (!verdict.ok) {
+    return res.status(400).json({ error: verdict.reason });
   }
   if (typeof content !== "string") {
     return res.status(400).json({ error: "content должен быть строкой" });
   }
 
-  const filename = trimmed.endsWith(".md") ? trimmed : `${trimmed}.md`;
+  const filename = verdict.name.endsWith(".md") ? verdict.name : `${verdict.name}.md`;
   try {
     await uploadFile(BUCKET, filename, content);
     return res.json({ ok: true, name: filename });

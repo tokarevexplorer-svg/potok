@@ -317,7 +317,7 @@ async function handleResearchDirect(task) {
     const fetched = await fetchSource(source);
     fetchedLabel = fetched.label;
     fetchedKind = fetched.kind;
-    usedPrompt = await buildPrompt("research-direct.md", {
+    usedPrompt = await buildTaskPrompt("research_direct", {
       user_input: params.user_input ?? "",
       source_label: fetched.label,
       source_text: fetched.text,
@@ -369,7 +369,7 @@ async function handleWriteText(task) {
     usedPrompt = task.prompt;
   } else {
     const researchBlob = await gatherResearch(params.research_paths || []);
-    usedPrompt = await buildPrompt("write-text.md", {
+    usedPrompt = await buildTaskPrompt("write_text", {
       point_name: params.point_name ?? "",
       research: researchBlob,
       length_hint: params.length_hint ?? "произвольно",
@@ -427,7 +427,7 @@ async function handleEditFragments(task) {
   if (task.prompt_override_used) {
     usedPrompt = task.prompt;
   } else {
-    usedPrompt = await buildPrompt("edit-text-fragments.md", {
+    usedPrompt = await buildTaskPrompt("edit_text_fragments", {
       full_text: params.full_text ?? "",
       edits: formatEdits(params.edits || []),
       general_instruction: (params.general_instruction ?? "").trim(),
@@ -490,16 +490,62 @@ export const TASK_TITLES = {
   edit_text_fragments: "Правка через AI",
 };
 
-// Имя файла шаблона в bucket'е team-prompts. Маппинг тип → имя файла.
+// Человекочитаемые имена шаблонов задач после Сессии 4 этапа 2 (без .md).
+// Файлы лежат в bucket team-prompts под подпапкой «Шаблоны задач/».
+const TEMPLATE_NAMES = {
+  ideas_free: "Свободные идеи",
+  ideas_questions_for_research: "Идеи и вопросы для исследования",
+  research_direct: "Прямое исследование",
+  write_text: "Написание текста",
+  edit_text_fragments: "Правка фрагментов",
+};
+
+// Старые имена шаблонов (плоские, в корне bucket'а) — фолбэк, если новый
+// файл по какой-то причине не доехал на конкретный окружение (например, на
+// проде ещё не прогнан `npm run migrate:instructions`).
+const LEGACY_TEMPLATE_NAMES = {
+  ideas_free: "ideas-free.md",
+  ideas_questions_for_research: "ideas-questions.md",
+  research_direct: "research-direct.md",
+  write_text: "write-text.md",
+  edit_text_fragments: "edit-text-fragments.md",
+};
+
+// Имя файла шаблона в bucket'е team-prompts. Возвращает путь с подпапкой:
+// «Шаблоны задач/Свободные идеи.md». Supabase JS client сам URL-кодирует
+// кириллицу и пробелы при обращении к Storage API.
 export function taskTemplateName(taskType) {
-  const map = {
-    ideas_free: "ideas-free.md",
-    ideas_questions_for_research: "ideas-questions.md",
-    research_direct: "research-direct.md",
-    write_text: "write-text.md",
-    edit_text_fragments: "edit-text-fragments.md",
-  };
-  return map[taskType] ?? `${taskType}.md`;
+  const human = TEMPLATE_NAMES[taskType];
+  if (human) return `Шаблоны задач/${human}.md`;
+  return LEGACY_TEMPLATE_NAMES[taskType] ?? `${taskType}.md`;
+}
+
+// Старый путь шаблона (в корне bucket'а). Используется как фолбэк, если
+// новый файл не найден — см. buildTaskPrompt.
+export function taskTemplateNameLegacy(taskType) {
+  return LEGACY_TEMPLATE_NAMES[taskType] ?? `${taskType}.md`;
+}
+
+// Собирает промпт задачи через buildPrompt: сначала пробует новый путь
+// (Шаблоны задач/<человеческое имя>.md), при «Шаблон не найден» — старый
+// flat-путь в корне (ideas-free.md и т.п.). При срабатывании фолбэка
+// записывает предупреждение в лог, чтобы было видно, что миграция ещё не
+// прогнана на этом окружении.
+export async function buildTaskPrompt(taskType, variables = {}) {
+  const primary = taskTemplateName(taskType);
+  try {
+    return await buildPrompt(primary, variables);
+  } catch (err) {
+    const msg = err?.message ?? "";
+    if (!/Шаблон не найден/.test(msg)) throw err;
+    const legacy = taskTemplateNameLegacy(taskType);
+    if (legacy === primary) throw err;
+    console.warn(
+      `[team] шаблон "${primary}" не найден, fallback на "${legacy}". ` +
+        "Прогоните `npm run migrate:instructions` на этом окружении.",
+    );
+    return await buildPrompt(legacy, variables);
+  }
 }
 
 // Технические типы — не показываются в канбане как самостоятельные карточки.

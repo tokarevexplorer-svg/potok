@@ -106,14 +106,14 @@ export default async function TeamPage() {
           <TeamSectionCard
             href="/blog/team/instructions"
             icon={BookOpen}
-            label="Промпты"
-            description="Библиотека шаблонов: 5 типов задач, переменные, разделение system/user, версии."
+            label="Инструкции"
+            description="Что команда знает о проекте: миссия, цели на период и шаблоны задач. Должностные инструкции появятся в этапе 2."
           />
           <TeamSectionCard
             href="/blog/team/artifacts"
             icon={Folder}
-            label="База"
-            description="Артефакты команды: исследования, тексты по точкам, идеи, источники, контекст блога."
+            label="Артефакты"
+            description="Результаты работы команды: исследования, тексты по точкам, идеи и источники."
           />
           <TeamSectionCard
             href="/blog/team/admin"

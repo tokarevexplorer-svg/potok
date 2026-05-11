@@ -9,10 +9,18 @@
 //   ## User           ← опциональная; если её нет, user-сообщение = {{user_input}}
 //   ...тело пользовательского сообщения с {{плейсхолдерами}}...
 //
-// Сборщик автоматически тянет context.md и concept.md из team-database, если
-// в шаблоне есть {{context}} / {{concept}}, и НЕ переданы в variables. Эти
-// два больших блока кладутся в cacheableBlocks — Anthropic-клиент маркирует
-// их как ephemeral cache и серьёзно экономит на повторных вызовах.
+// Сборщик автоматически тянет Миссию и Цели на период из bucket'а
+// team-prompts (папка «Стратегия команды»), если в шаблоне есть {{mission}} /
+// {{goals}} (или старые алиасы {{context}} / {{concept}}), и они не переданы
+// в variables. Эти большие блоки кладутся в cacheableBlocks — Anthropic-клиент
+// маркирует их как ephemeral cache и серьёзно экономит на повторных вызовах.
+//
+// Сессия 4 этапа 2: переезд двух базовых файлов из bucket team-database
+// (context.md / concept.md в корне) в bucket team-prompts (Стратегия команды/
+// Миссия.md / Цели на период.md). Ключи cacheable_blocks переименованы
+// `context` → `mission`, `concept` → `goals`. Старые имена работают как
+// алиасы — это backward-compat для шаблонов, которые ещё используют
+// {{context}} / {{concept}} в тексте.
 
 import { downloadFile, listFiles } from "./teamStorage.js";
 
@@ -21,7 +29,11 @@ import { downloadFile, listFiles } from "./teamStorage.js";
 const PLACEHOLDER_RE = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
 
 const PROMPTS_BUCKET = "team-prompts";
-const DATABASE_BUCKET = "team-database";
+
+// Пути к стратегическим блокам в bucket'е team-prompts. После Сессии 4
+// они переехали из team-database/context.md и team-database/concept.md.
+const MISSION_PATH = "Стратегия команды/Миссия.md";
+const GOALS_PATH = "Стратегия команды/Цели на период.md";
 
 // Возвращает все имена плейсхолдеров, упомянутые в тексте.
 function findPlaceholders(text) {
@@ -73,12 +85,12 @@ function splitSections(template) {
   return { systemBody: afterSys.trim(), userBody: null };
 }
 
-// Скачивает файл из team-database, возвращает строку или пустую строку.
-// Используется только для context.md / concept.md в авто-загрузке. Если
-// файла нет (свежий проект, Влад ещё не написал контекст) — пусто, не падаем.
-async function loadDatabaseFile(name) {
+// Скачивает файл из bucket'а team-prompts (Стратегия команды/...), возвращает
+// строку или пустую строку. Используется в авто-загрузке mission / goals.
+// Если файла нет (свежий проект, Влад ещё не написал миссию) — пусто, не падаем.
+async function loadStrategyFile(path) {
   try {
-    return await downloadFile(DATABASE_BUCKET, name);
+    return await downloadFile(PROMPTS_BUCKET, path);
   } catch {
     return "";
   }
@@ -88,10 +100,12 @@ async function loadDatabaseFile(name) {
 // Возвращает {system, user, cacheableBlocks, template}:
 //   system — финальный текст с подставленными плейсхолдерами
 //   user — финальный текст пользовательского сообщения
-//   cacheableBlocks — массив строк (context, concept), для Anthropic-кеша
+//   cacheableBlocks — массив строк (mission, goals), для Anthropic-кеша
 //   template — фактическое имя файла шаблона (с .md)
 //
-// Бросает ошибку с понятным русским сообщением, если шаблона нет.
+// Имя шаблона может быть полным путём внутри bucket'а (например,
+// «Шаблоны задач/Свободные идеи.md»). Бросает ошибку с понятным русским
+// сообщением, если шаблона нет.
 export async function buildPrompt(templateName, variables = {}) {
   const vars = { ...variables };
 
@@ -106,13 +120,29 @@ export async function buildPrompt(templateName, variables = {}) {
 
   const { systemBody, userBody } = splitSections(raw);
 
-  // Авто-загрузка context / concept, если упомянуты и не переданы.
+  // Авто-загрузка mission / goals (и их алиасов context / concept), если
+  // упомянуты в шаблоне и не переданы вызывающим кодом.
   const referenced = new Set([...findPlaceholders(systemBody), ...findPlaceholders(userBody ?? "")]);
-  if (referenced.has("context") && vars.context === undefined) {
-    vars.context = await loadDatabaseFile("context.md");
+
+  const wantsMission = referenced.has("mission") || referenced.has("context");
+  if (wantsMission) {
+    let missionText = null;
+    if (vars.mission !== undefined) missionText = vars.mission;
+    else if (vars.context !== undefined) missionText = vars.context;
+    else missionText = await loadStrategyFile(MISSION_PATH);
+    // Заполняем оба ключа, чтобы шаблоны со старым именованием тоже сработали.
+    if (vars.mission === undefined) vars.mission = missionText;
+    if (vars.context === undefined) vars.context = missionText;
   }
-  if (referenced.has("concept") && vars.concept === undefined) {
-    vars.concept = await loadDatabaseFile("concept.md");
+
+  const wantsGoals = referenced.has("goals") || referenced.has("concept");
+  if (wantsGoals) {
+    let goalsText = null;
+    if (vars.goals !== undefined) goalsText = vars.goals;
+    else if (vars.concept !== undefined) goalsText = vars.concept;
+    else goalsText = await loadStrategyFile(GOALS_PATH);
+    if (vars.goals === undefined) vars.goals = goalsText;
+    if (vars.concept === undefined) vars.concept = goalsText;
   }
 
   // Если ## User секции в шаблоне нет — user-сообщение это просто
@@ -126,14 +156,18 @@ export async function buildPrompt(templateName, variables = {}) {
 
   const systemText = replacePlaceholders(systemBody, vars);
 
-  // В cacheableBlocks кладём context и concept как есть (без подстановки —
+  // В cacheableBlocks кладём mission и goals как есть (без подстановки —
   // они и так чистый текст без плейсхолдеров). Пустые блоки не включаем,
   // чтобы Anthropic не получил «whitespace-only» блок (он на это ругается).
+  // Старые ключи context / concept служат фолбэком, если шаблон/код ещё
+  // не переехал на новые имена.
   const cacheableBlocks = [];
-  for (const key of ["context", "concept"]) {
+  const seen = new Set();
+  for (const key of ["mission", "context", "goals", "concept"]) {
     const val = vars[key];
-    if (val && String(val).trim()) {
+    if (val && String(val).trim() && !seen.has(String(val))) {
       cacheableBlocks.push(String(val));
+      seen.add(String(val));
     }
   }
 
@@ -146,11 +180,14 @@ export async function buildPrompt(templateName, variables = {}) {
 }
 
 // Возвращает список имён всех шаблонов в bucket'е team-prompts (только .md).
-// Сортируется по имени для стабильности UI.
+// После Сессии 4 пять шаблонов задач переехали в подпапку `Шаблоны задач/` —
+// поэтому листим её, а не корень. Возвращаем имена с префиксом папки.
 export async function listTemplates() {
-  const files = await listFiles(PROMPTS_BUCKET, "");
+  const folder = "Шаблоны задач";
+  const files = await listFiles(PROMPTS_BUCKET, folder);
   return files
     .map((f) => f.name)
     .filter((name) => typeof name === "string" && name.endsWith(".md"))
+    .map((name) => `${folder}/${name}`)
     .sort();
 }

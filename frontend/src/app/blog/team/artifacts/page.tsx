@@ -1,43 +1,28 @@
 import TeamPageHeader from "@/components/blog/team/TeamPageHeader";
 import DatabaseWorkspace from "@/components/blog/team/DatabaseWorkspace";
-import { createSupabaseServerClient } from "@/lib/supabaseClient";
 
 export const metadata = {
-  title: "База команды — Поток",
+  title: "Артефакты команды — Поток",
 };
 
 export const dynamic = "force-dynamic";
 
-// Читает текстовый файл из team-database через сервер-supabase. Возвращает
-// null, если файла нет или прочитать не получилось — UI покажет пустой
-// AutosavingTextEditor, и первое сохранение создаст файл.
-async function loadDatabaseText(name: string): Promise<string | null> {
-  try {
-    const supabase = createSupabaseServerClient();
-    const { data, error } = await supabase.storage.from("team-database").download(name);
-    if (error || !data) return null;
-    return await data.text();
-  } catch {
-    return null;
-  }
-}
-
-export default async function TeamDatabasePage() {
-  const [context, concept] = await Promise.all([
-    loadDatabaseText("context.md"),
-    loadDatabaseText("concept.md"),
-  ]);
-
+// После Сессии 4 этапа 2 со страницы «Артефакты» убраны вкладки Контекст /
+// Концепция: эти два файла переехали в раздел «Инструкции» под именами
+// Миссия и Цели на период (bucket team-prompts/Стратегия команды/).
+// Здесь остаются исходные артефакты задач: исследования, тексты, идеи,
+// источники.
+export default async function TeamArtifactsPage() {
   return (
     <div className="min-w-0">
       <TeamPageHeader
-        title="База"
-        description="Контекст и концепция блога — это то, что подмешивается во все промпты команды. Артефакты задач (исследования, тексты, идеи) лежат в соответствующих папках."
+        title="Артефакты"
+        description="Результаты работы команды: исследования, тексты, идеи и источники. Артефакты задач появляются здесь по мере выполнения работы команды."
         showBackLink
       />
 
       <div className="mt-8">
-        <DatabaseWorkspace initialContext={context} initialConcept={concept} />
+        <DatabaseWorkspace />
       </div>
     </div>
   );

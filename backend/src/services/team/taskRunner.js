@@ -27,7 +27,6 @@ import {
 } from "./teamSupabase.js";
 import { downloadFile, uploadFile, listFiles } from "./teamStorage.js";
 import { call as llmCall } from "./llmClient.js";
-import { buildPrompt } from "./promptBuilder.js";
 import { fetchSource } from "./contentFetcher.js";
 import { recordCall, getCostForTask, checkTaskLimit } from "./costTracker.js";
 import {
@@ -35,6 +34,7 @@ import {
   TASK_TITLES,
   taskTemplateName,
   buildPreviewVariables,
+  buildTaskPrompt,
   formatEdits,
 } from "./taskHandlers.js";
 import { enqueueTeamTask } from "../../queue/teamWorkerPool.js";
@@ -230,9 +230,8 @@ export async function resolveModelChoice(modelChoice, taskType = null) {
 // Собирает промпт для предпросмотра через UI (без запуска задачи).
 // Используется эндпоинтом /api/team/tasks/preview-prompt.
 export async function previewPrompt(taskType, params) {
-  const template = taskTemplateName(taskType);
   const variables = await buildPreviewVariables(taskType, params || {});
-  return await buildPrompt(template, variables);
+  return await buildTaskPrompt(taskType, variables);
 }
 
 // Создаёт новую задачу: пишет первый снапшот running, кладёт id в очередь.
@@ -524,7 +523,7 @@ export async function applyFragmentEditsInline({
         promptOverride.cacheable_blocks ?? promptOverride.cacheableBlocks ?? [],
     };
   } else {
-    const built = await buildPrompt("edit-text-fragments.md", {
+    const built = await buildTaskPrompt("edit_text_fragments", {
       full_text: fullText || "",
       edits: formatEdits(edits || []),
       general_instruction: (generalInstruction ?? "").trim(),
@@ -690,7 +689,7 @@ export async function appendQuestionToResearch({
   if (!source) throw new Error("В исходной задаче не сохранён источник");
 
   const fetched = await fetchSource(source);
-  const rebuilt = await buildPrompt("research-direct.md", {
+  const rebuilt = await buildTaskPrompt("research_direct", {
     user_input: trimmed,
     source_label: fetched.label,
     source_text: fetched.text,

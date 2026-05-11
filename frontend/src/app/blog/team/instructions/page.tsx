@@ -1,53 +1,60 @@
 import TeamPageHeader from "@/components/blog/team/TeamPageHeader";
-import PromptsWorkspace from "@/components/blog/team/PromptsWorkspace";
+import InstructionsWorkspace, {
+  type InstructionsTree,
+} from "@/components/blog/team/InstructionsWorkspace";
 import { createSupabaseServerClient } from "@/lib/supabaseClient";
-import type { PromptTemplateEntry } from "@/lib/team/teamPromptsService";
 
 export const metadata = {
-  title: "Промпты команды — Поток",
+  title: "Инструкции команды — Поток",
 };
 
 export const dynamic = "force-dynamic";
 
-async function loadPromptTemplates(): Promise<PromptTemplateEntry[]> {
+// Возвращает список .md-файлов в подпапке bucket'а team-prompts без
+// расширения. Если папки нет — пустой массив. Сортируется по имени.
+async function listFolder(folder: string): Promise<string[]> {
   try {
     const supabase = createSupabaseServerClient();
-    const { data, error } = await supabase.storage.from("team-prompts").list("", {
-      limit: 1000,
-      sortBy: { column: "name", order: "asc" },
-    });
+    const { data, error } = await supabase.storage
+      .from("team-prompts")
+      .list(folder, {
+        limit: 1000,
+        sortBy: { column: "name", order: "asc" },
+      });
     if (error) {
-      console.warn("[team] prompts list failed:", error.message);
+      console.warn(`[team/instructions] list ${folder} failed:`, error.message);
       return [];
     }
     return (data ?? [])
       .filter((row) => row.name && row.name.endsWith(".md") && row.id !== null)
-      .map((row) => {
-        const md = (row.metadata ?? null) as { size?: number } | null;
-        return {
-          name: row.name,
-          updatedAt: row.updated_at ?? null,
-          size: md?.size ?? null,
-        };
-      });
+      .map((row) => row.name.replace(/\.md$/i, ""));
   } catch (err) {
-    console.warn("[team] prompts list error:", err);
+    console.warn(`[team/instructions] list ${folder} error:`, err);
     return [];
   }
 }
 
-export default async function TeamPromptsPage() {
-  const templates = await loadPromptTemplates();
+async function loadInstructionsTree(): Promise<InstructionsTree> {
+  const [strategy, roles, templates] = await Promise.all([
+    listFolder("Стратегия команды"),
+    listFolder("Должностные инструкции"),
+    listFolder("Шаблоны задач"),
+  ]);
+  return { strategy, roles, templates };
+}
+
+export default async function TeamInstructionsPage() {
+  const tree = await loadInstructionsTree();
   return (
     <div className="min-w-0">
       <TeamPageHeader
-        title="Промпты"
-        description="Шаблоны промптов для пяти типов задач команды. Слева — список, справа — markdown-редактор. {{плейсхолдеры}} заменяются на значения из формы запуска и из Базы (context, concept)."
+        title="Инструкции"
+        description="Что команда знает о проекте: миссия, цели на период, должностные инструкции (появятся в этапе 2) и шаблоны задач. Клик по файлу открывает markdown-редактор."
         showBackLink
       />
 
       <div className="mt-8">
-        <PromptsWorkspace initialTemplates={templates} />
+        <InstructionsWorkspace initialTree={tree} />
       </div>
     </div>
   );

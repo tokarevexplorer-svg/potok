@@ -7,6 +7,7 @@ import reprocessRouter from "./routes/reprocess.js";
 import teamTasksRouter from "./routes/team/tasks.js";
 import teamArtifactsRouter from "./routes/team/artifacts.js";
 import teamPromptsRouter from "./routes/team/prompts.js";
+import teamInstructionsRouter from "./routes/team/instructions.js";
 import teamAdminRouter from "./routes/team/admin.js";
 import teamFilesRouter from "./routes/team/files.js";
 import teamVoiceRouter from "./routes/team/voice.js";
@@ -43,6 +44,7 @@ export function createApp() {
   app.use("/api/team/tasks", teamTasksRouter);
   app.use("/api/team/artifacts", teamArtifactsRouter);
   app.use("/api/team/prompts", teamPromptsRouter);
+  app.use("/api/team/instructions", teamInstructionsRouter);
   app.use("/api/team/admin", teamAdminRouter);
   app.use("/api/team/files", teamFilesRouter);
   app.use("/api/team/voice", teamVoiceRouter);
