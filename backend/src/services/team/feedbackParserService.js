@@ -21,6 +21,10 @@ import { call as llmCall, LLMError } from "./llmClient.js";
 import { recordCall } from "./costTracker.js";
 import { getApiKey } from "./keysService.js";
 import { getTaskById } from "./teamSupabase.js";
+import {
+  extractSkillCandidate,
+  getSkillThreshold,
+} from "./skillExtractorService.js";
 
 const TABLE = "team_feedback_episodes";
 
@@ -168,6 +172,47 @@ export async function parseAndSave({
   if (error) {
     throw new Error(`Не удалось сохранить эпизод: ${error.message}`);
   }
+
+  // Сессия 26: skill extraction. Если score >= порог и есть task_id —
+  // асинхронно дёргаем extractSkillCandidate. setImmediate, чтобы ответ
+  // POST /api/team/feedback вернулся Владу мгновенно, без ожидания
+  // ~5-15 секунд на LLM-вызов экстрактора. Ошибки внутри extractSkillCandidate
+  // не валят основной поток — она сама ловит и возвращает reason.
+  if (normalizedScore !== null && taskId) {
+    try {
+      const threshold = await getSkillThreshold();
+      if (normalizedScore >= threshold) {
+        setImmediate(() => {
+          extractSkillCandidate({
+            taskId,
+            agentId,
+            score: normalizedScore,
+            comment: parsedText || cleanRaw,
+          })
+            .then((res) => {
+              if (res.extracted) {
+                console.log(
+                  `[feedbackParser] skill extracted for ${agentId}/task=${taskId}: candidate=${res.candidate_id}`,
+                );
+              } else {
+                console.log(
+                  `[feedbackParser] skill extraction skipped: ${res.reason}`,
+                );
+              }
+            })
+            .catch((err) => {
+              console.warn(
+                `[feedbackParser] extractSkillCandidate failed for ${agentId}:`,
+                err?.message ?? err,
+              );
+            });
+        });
+      }
+    } catch (err) {
+      console.warn("[feedbackParser] skill threshold check failed:", err?.message ?? err);
+    }
+  }
+
   return data;
 }
 
