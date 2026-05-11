@@ -27,7 +27,10 @@ import { getTaskById, getChildTasks } from "../../services/team/teamSupabase.js"
 import { getAgent } from "../../services/team/agentService.js";
 import { listFiles, downloadFile } from "../../services/team/teamStorage.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
-import { checkDailyLimit } from "../../services/team/costTracker.js";
+import {
+  checkDailyLimit,
+  getCostBreakdownForTask,
+} from "../../services/team/costTracker.js";
 import { getTaskTemplateDefaults } from "../../services/team/promptBuilder.js";
 
 const DATABASE_BUCKET = "team-database";
@@ -649,6 +652,27 @@ router.get("/:taskId", async (req, res) => {
   } catch (err) {
     console.error(`[team] get ${taskId} failed:`, err);
     return res.status(500).json({ error: err.message ?? "Не удалось получить задачу" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/tasks/:taskId/cost-breakdown
+// Сессия 30: разбивка стоимости задачи по purpose. UI карточки задачи
+// показывает две строки — «Основной вызов» и «Самопроверка», если был
+// purpose='self_review'. Если purpose'ов больше — все идут отдельными
+// строками.
+// =========================================================================
+router.get("/:taskId/cost-breakdown", async (req, res) => {
+  const taskId = ensureTaskId(req, res);
+  if (!taskId) return;
+  try {
+    const breakdown = await getCostBreakdownForTask(taskId);
+    return res.json(breakdown);
+  } catch (err) {
+    console.error(`[team] cost-breakdown ${taskId} failed:`, err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось получить разбивку стоимости" });
   }
 });
 

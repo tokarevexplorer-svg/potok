@@ -134,11 +134,42 @@ export default function TaskCard({
           <Cpu size={12} />
           {task.model || task.provider || "—"}
         </span>
-        {typeof task.costUsd === "number" && task.costUsd > 0 && (
-          <span className="font-medium text-ink-muted">{formatUsd(task.costUsd)}</span>
-        )}
+        <span className="inline-flex items-center gap-2">
+          {/* Сессия 30: индикатор self-review. Только когда есть результат
+              (после второго вызова) — статусы в работе/ошибке не показываем. */}
+          <SelfReviewIndicator task={task} />
+          {typeof task.costUsd === "number" && task.costUsd > 0 && (
+            <span className="font-medium text-ink-muted">{formatUsd(task.costUsd)}</span>
+          )}
+        </span>
       </div>
     </button>
+  );
+}
+
+function SelfReviewIndicator({ task }: { task: { selfReviewResult?: unknown; status?: string } }) {
+  const result = task.selfReviewResult as
+    | { passed?: boolean; revised?: boolean; skipped?: boolean }
+    | null
+    | undefined;
+  if (!result || result.skipped) return null;
+  if (task.status === "running" || task.status === "error") return null;
+  let title = "";
+  let color = "";
+  if (result.passed) {
+    title = "Самопроверка пройдена";
+    color = "text-emerald-600";
+  } else if (result.revised) {
+    title = "Самопроверка: пройдена с правками";
+    color = "text-amber-700";
+  } else {
+    title = "Самопроверка не пройдена полностью";
+    color = "text-rose-600";
+  }
+  return (
+    <span title={title} className={`text-xs ${color}`} aria-label={title}>
+      {result.passed ? "🔍✅" : result.revised ? "🔍⚠️" : "🔍❌"}
+    </span>
   );
 }
 

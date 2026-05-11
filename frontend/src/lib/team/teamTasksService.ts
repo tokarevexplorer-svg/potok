@@ -15,6 +15,7 @@ import {
   getSupabaseBrowserClient,
 } from "@/lib/supabaseClient";
 import type {
+  SelfReviewResultPayload,
   SuggestedNextStep,
   TeamTask,
   TeamTaskModelChoice,
@@ -51,6 +52,10 @@ interface TeamTaskRow {
   suggested_next_steps: SuggestedNextStep[] | null;
   // Сессия 16
   project_id: string | null;
+  // Сессия 29
+  self_review_enabled: boolean | null;
+  self_review_extra_checks: string | null;
+  self_review_result: SelfReviewResultPayload | null;
 }
 
 function toNumber(value: number | string | null): number | null {
@@ -84,6 +89,9 @@ function mapTask(row: TeamTaskRow): TeamTask {
     parentTaskId: row.parent_task_id ?? null,
     suggestedNextSteps: row.suggested_next_steps ?? null,
     projectId: row.project_id ?? null,
+    selfReviewEnabled: row.self_review_enabled ?? null,
+    selfReviewExtraChecks: row.self_review_extra_checks ?? null,
+    selfReviewResult: row.self_review_result ?? null,
   };
 }
 
@@ -103,7 +111,7 @@ function dedupeLatest(rows: TeamTaskRow[]): TeamTask[] {
 }
 
 const TASK_SELECT =
-  "id, type, title, status, params, model_choice, provider, model, prompt, prompt_override_used, result, artifact_path, tokens, cost_usd, error, created_at, updated_at, started_at, finished_at, agent_id, parent_task_id, suggested_next_steps, project_id";
+  "id, type, title, status, params, model_choice, provider, model, prompt, prompt_override_used, result, artifact_path, tokens, cost_usd, error, created_at, updated_at, started_at, finished_at, agent_id, parent_task_id, suggested_next_steps, project_id, self_review_enabled, self_review_extra_checks, self_review_result";
 
 // Все задачи (по последнему снапшоту), включая архивированные.
 // Используется на главной для подсчёта статистики и в Сессии 6 как

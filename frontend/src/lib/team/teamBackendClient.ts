@@ -333,6 +333,37 @@ export async function fetchTaskById(taskId: string): Promise<TeamTask> {
   return ((data ?? {}) as { task?: TeamTask }).task as TeamTask;
 }
 
+// Сессия 30: разбивка стоимости задачи по purpose. UI карточки задачи
+// рендерит две строки «Основной вызов» + «Самопроверка», если был
+// второй вызов.
+export interface TaskCostItem {
+  purpose: string;
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  calls: number;
+}
+
+export interface TaskCostBreakdown {
+  total_usd: number;
+  items: TaskCostItem[];
+}
+
+export async function fetchTaskCostBreakdown(
+  taskId: string,
+): Promise<TaskCostBreakdown> {
+  const data = await backendFetch(
+    `/api/team/tasks/${encodeURIComponent(taskId)}/cost-breakdown`,
+    { method: "GET" },
+  );
+  const obj = (data ?? {}) as Partial<TaskCostBreakdown>;
+  return {
+    total_usd: typeof obj.total_usd === "number" ? obj.total_usd : 0,
+    items: Array.isArray(obj.items) ? obj.items : [],
+  };
+}
+
 // =========================================================================
 // Сессия 14: обратная связь — эпизоды
 // =========================================================================

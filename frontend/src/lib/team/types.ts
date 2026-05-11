@@ -97,6 +97,40 @@ export interface TeamTask {
   suggestedNextSteps: SuggestedNextStep[] | null;
   // Сессия 16: id проекта (тега). NULL = «без проекта».
   projectId: string | null;
+  // Сессия 29: настройки и результат самопроверки. Дефолт читается из
+  // frontmatter шаблона, но Влад мог переопределить вручную при запуске.
+  // selfReviewResult пишется один раз после второго LLM-вызова.
+  selfReviewEnabled?: boolean | null;
+  selfReviewExtraChecks?: string | null;
+  selfReviewResult?: SelfReviewResultPayload | null;
+}
+
+// Сессия 29: что лежит в team_tasks.self_review_result (JSONB) после
+// успешного второго прохода. Если revised=true и revised_result задан —
+// финальный артефакт уже содержит исправленную версию (taskRunner
+// перезаписывает Storage и task.result).
+export interface SelfReviewChecklistEntry {
+  source:
+    | "memory_rule"
+    | "skill"
+    | "template_field"
+    | "mission_taboo"
+    | "vlad_extra"
+    | "tool_manifest"
+    | (string & {});
+  item: string;
+  result: "да" | "нет" | "неприменимо" | (string & {});
+  comment: string;
+}
+
+export interface SelfReviewResultPayload {
+  checklist: SelfReviewChecklistEntry[];
+  passed: boolean;
+  revised: boolean;
+  revised_result?: string;
+  parse_error?: string;
+  skipped?: boolean;
+  reason?: string;
 }
 
 // ---------- Журнал API-вызовов ----------

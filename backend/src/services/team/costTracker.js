@@ -189,6 +189,64 @@ export async function getCostForTask(taskId) {
   return Math.round(total * 1_000_000) / 1_000_000;
 }
 
+// Сессия 30: разбивка стоимости задачи по purpose (task / self_review /
+// прочие системные функции). UI карточки задачи показывает две строки
+// «Основной вызов» + «Самопроверка», если self-review был.
+//
+// purpose='task' собирается в строку source='task'. Всё, что не task — в
+// одну категорию с фактическим purpose'ом (для совместимости с биллингом
+// Сессии 49, где мы группируем по purpose).
+//
+// Возвращает:
+//   {
+//     total_usd,
+//     items: [{ purpose, cost_usd, input_tokens, output_tokens, cached_tokens, calls }]
+//   }
+// Сортировка items: 'task' первым, потом по убыванию cost_usd.
+export async function getCostBreakdownForTask(taskId) {
+  if (!taskId) return { total_usd: 0, items: [] };
+  const calls = await getApiCallsByTaskId(taskId);
+  const buckets = new Map();
+  let total = 0;
+  for (const call of calls) {
+    const cost = Number(call.cost_usd ?? 0);
+    if (!Number.isFinite(cost)) continue;
+    const key = call.purpose && String(call.purpose).trim()
+      ? String(call.purpose).trim()
+      : "task";
+    const bucket =
+      buckets.get(key) ??
+      buckets.set(key, {
+        purpose: key,
+        cost_usd: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_tokens: 0,
+        calls: 0,
+      }).get(key);
+    bucket.cost_usd += cost;
+    bucket.input_tokens += Number(call.input_tokens ?? 0) || 0;
+    bucket.output_tokens += Number(call.output_tokens ?? 0) || 0;
+    bucket.cached_tokens += Number(call.cached_tokens ?? 0) || 0;
+    bucket.calls += 1;
+    total += cost;
+  }
+  const items = Array.from(buckets.values())
+    .map((b) => ({
+      ...b,
+      cost_usd: Math.round(b.cost_usd * 1_000_000) / 1_000_000,
+    }))
+    .sort((a, b) => {
+      if (a.purpose === "task" && b.purpose !== "task") return -1;
+      if (b.purpose === "task" && a.purpose !== "task") return 1;
+      return b.cost_usd - a.cost_usd;
+    });
+  return {
+    total_usd: Math.round(total * 1_000_000) / 1_000_000,
+    items,
+  };
+}
+
 // Агрегирует траты по всему журналу: сумма, разбивка по провайдерам и моделям,
 // флаг превышения порога алерта. Структура ответа повторяет Python-версию,
 // чтобы фронт можно было портировать 1-в-1.

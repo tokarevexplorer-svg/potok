@@ -31,6 +31,12 @@ import VoiceInput from "./VoiceInput";
 import WriteTextEditor from "./WriteTextEditor";
 import AppendQuestionModal from "./AppendQuestionModal";
 import TaskRunnerModal, { type HandoffContext } from "./TaskRunnerModal";
+import SelfReviewResult from "./SelfReviewResult";
+import {
+  fetchTaskCostBreakdown,
+  type TaskCostBreakdown,
+  type TaskCostItem,
+} from "@/lib/team/teamBackendClient";
 
 interface TaskViewerModalProps {
   task: TeamTask;
@@ -395,6 +401,21 @@ export default function TaskViewerModal({
             </p>
           )}
 
+          {/* Сессия 30: результат self-review (раскрывающийся блок).
+              Показываем только когда задача завершена и был результат
+              второго вызова. Бейдж и итоги — в шапке блока. */}
+          {task.selfReviewResult && task.status !== "running" && task.status !== "error" && (
+            <SelfReviewResult result={task.selfReviewResult} />
+          )}
+
+          {/* Сессия 30: разбивка стоимости задачи по purpose. Появляется
+              только если у задачи был self-review или другие не-task
+              вызовы (handoff, parser и т.п. сейчас не добавляют, но
+              структура общая). */}
+          {(task.status === "done" || task.status === "marked_done") && (
+            <CostBreakdownBlock taskId={task.id} />
+          )}
+
           {/* Кнопка «Задать дополнительный вопрос» — только для research_direct */}
           {isResearch && task.status !== "running" && task.status !== "error" && (
             <div className="mt-5 flex justify-end">
@@ -714,4 +735,87 @@ function PromptBlock({ label, value }: { label: string; value: string }) {
       </pre>
     </div>
   );
+}
+
+// Сессия 30: разбивка стоимости задачи по purpose. Запрашивает
+// /tasks/:id/cost-breakdown лениво (только когда блок монтируется на
+// завершённой задаче). Если все вызовы — purpose="task", скрываем себя
+// (одна строка не добавляет ценности).
+function CostBreakdownBlock({ taskId }: { taskId: string }) {
+  const [data, setData] = useState<TaskCostBreakdown | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchTaskCostBreakdown(taskId)
+      .then((res) => {
+        if (cancelled) return;
+        setData(res);
+      })
+      .catch(() => {
+        // молча — блок просто не появится
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [taskId]);
+
+  if (loading || !data) return null;
+  const items = Array.isArray(data.items) ? data.items : [];
+  if (items.length <= 1) return null;
+  return (
+    <section className="mt-5 rounded-2xl border border-line bg-elevated/40 p-4 text-sm">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-faint">
+        Разбивка стоимости
+      </p>
+      <ul className="flex flex-col gap-1">
+        {items.map((item) => (
+          <li
+            key={item.purpose}
+            className="flex items-center justify-between gap-3 rounded-lg bg-canvas px-3 py-1.5"
+          >
+            <span className="text-ink-muted">{costPurposeLabel(item.purpose)}</span>
+            <span className="font-mono text-xs text-ink">
+              {formatUsd(item.cost_usd)}
+            </span>
+          </li>
+        ))}
+        <li className="mt-1 flex items-center justify-between gap-3 border-t border-line px-3 pt-2">
+          <span className="font-medium text-ink">Итого</span>
+          <span className="font-mono text-xs font-semibold text-ink">
+            {formatUsd(data.total_usd)}
+          </span>
+        </li>
+      </ul>
+    </section>
+  );
+}
+
+function costPurposeLabel(purpose: string): string {
+  switch (purpose) {
+    case "task":
+      return "Основной вызов";
+    case "self_review":
+      return "Самопроверка";
+    case "feedback_parse":
+      return "Парсер обратной связи";
+    case "skill_extraction":
+      return "Извлечение навыка";
+    case "compress_episodes":
+      return "Сжатие эпизодов";
+    case "role_draft":
+      return "Черновик Role";
+    case "test_run":
+      return "Тестовый прогон";
+    case "autonomy_filter":
+      return "Автономность · фильтр";
+    case "autonomy_propose":
+      return "Автономность · формулировка";
+    default:
+      return purpose;
+  }
 }
