@@ -27,6 +27,7 @@ import { call as llmCall, LLMError } from "../../services/team/llmClient.js";
 import { recordCall } from "../../services/team/costTracker.js";
 import { buildTestPrompt } from "../../services/team/promptBuilder.js";
 import { getApiKey } from "../../services/team/keysService.js";
+import { downloadFile } from "../../services/team/teamStorage.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 
 const router = Router();
@@ -164,10 +165,44 @@ router.delete("/:id", async (req, res) => {
 // Ответ: { response: "<текст LLM>" }
 // =========================================================================
 
-// Модель по умолчанию для черновика Role и тестового полигона. Берём актуальный
-// Sonnet — рассуждалка, которой Anthropic-аккаунты обычно владеют. Если ключа
-// нет — эндпоинт вернёт 400 с подсказкой добавить ключ в Админке.
-const FALLBACK_ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+// Модель по умолчанию для черновика Role и тестового полигона.
+// Резолвится в два шага:
+//   1. Читаем pricing.json из team-config и берём первую запись с
+//      provider='anthropic'. Это синхронизирует мастер с тем, какие модели
+//      Влад реально подключил.
+//   2. Если pricing.json пуст или там нет Anthropic-моделей — fallback на
+//      claude-sonnet-4-5 (текущий рабочий alias без даты, используется в
+//      prompts/refine).
+//
+// Кеш на 60 сек — pricing.json меняется редко, не дёргаем Storage на каждый
+// запрос. costTracker.loadPricing() уже кеширует, но у него private state —
+// поэтому маленький локальный кеш.
+const ANTHROPIC_FALLBACK_ALIAS = "claude-sonnet-4-5";
+let anthropicModelCache = { value: null, expiresAt: 0 };
+
+async function resolveDefaultAnthropicModel() {
+  const now = Date.now();
+  if (anthropicModelCache.value && anthropicModelCache.expiresAt > now) {
+    return anthropicModelCache.value;
+  }
+  let id = ANTHROPIC_FALLBACK_ALIAS;
+  try {
+    const raw = await downloadFile("team-config", "pricing.json");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.models)) {
+      const match = parsed.models.find(
+        (m) => m && m.provider === "anthropic" && typeof m.id === "string" && m.id.trim(),
+      );
+      if (match) id = match.id;
+    }
+  } catch (err) {
+    console.warn(
+      `[team/agents] не удалось получить Anthropic-модель из pricing.json, fallback на «${ANTHROPIC_FALLBACK_ALIAS}»: ${err?.message ?? err}`,
+    );
+  }
+  anthropicModelCache = { value: id, expiresAt: now + 60_000 };
+  return id;
+}
 
 function buildDraftRoleSystem(displayName, roleTitle) {
   const name = (displayName || "—").trim();
@@ -238,7 +273,7 @@ router.post("/draft-role", async (req, res) => {
     .join("\n\n");
   const userPrompt = dialogue || "Здравствуй! Помоги составить должностную инструкцию.";
 
-  const model = FALLBACK_ANTHROPIC_MODEL;
+  const model = await resolveDefaultAnthropicModel();
   try {
     const result = await llmCall({
       provider: "anthropic",
@@ -305,7 +340,7 @@ router.post("/test-run", async (req, res) => {
   const model =
     typeof body.model === "string" && body.model.trim()
       ? body.model.trim()
-      : FALLBACK_ANTHROPIC_MODEL;
+      : await resolveDefaultAnthropicModel();
 
   if (!query) {
     return res.status(400).json({ error: "query обязателен — введите тестовый запрос." });

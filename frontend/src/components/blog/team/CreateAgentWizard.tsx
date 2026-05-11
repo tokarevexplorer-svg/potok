@@ -110,10 +110,11 @@ const ROLE_TEMPLATE = `## Зона ответственности
 
 const MIN_ROLE_LENGTH = 100;
 
-// Fallback-список моделей, если pricing.json не загружен. Совпадает с подсказкой
-// из ТЗ Сессии 10. TODO: убрать, когда у всех проектов будет pricing.json.
+// Fallback-список моделей, если pricing.json не загружен. Используем
+// рабочие alias-id (без даты-суффикса), потому что хардкод с датой быстро
+// устаревает у Anthropic. TODO: убрать, когда у всех проектов будет pricing.json.
 const FALLBACK_MODELS = [
-  "claude-sonnet-4-20250514",
+  "claude-sonnet-4-5",
   "gemini-2.0-flash",
   "gpt-4o-mini",
 ];
