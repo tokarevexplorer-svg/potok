@@ -866,3 +866,38 @@ URL: https://potok-omega.vercel.app/blog/team/dashboard
 - Если `revised=true` — артефакт в Storage уже содержит исправленную версию (UI результата покажет её).
 - Визуальная карточка результата self-review в карточке задачи появится в Сессии 30.
 
+
+---
+
+## Сессия 30 — UI результата self-review + cost-breakdown (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для costTracker.js, routes/team/tasks.js — OK.
+- `npx tsc --noEmit` во фронте — без ошибок.
+- `git log --oneline -1` → `6e3b17f Сессия 30 — UI результата self-review + cost-breakdown`.
+
+### E2E через Playwright
+1. `GET /api/team-proxy/tasks/tsk_e76a651d1e98/cost-breakdown` → `200 {"total_usd":0.000449,"items":[{"purpose":"task",...}]}` — корректный JSON.
+2. На `/blog/team/dashboard` открыта старая задача `Идеи (под исследование) gpt-4o-mini` — TaskViewerModal загружается без ошибок, новые блоки скрыты потому что:
+   - `selfReviewResult` = null (задача из времён до Сессии 29);
+   - cost-breakdown имеет только один purpose='task' (блок не рендерится).
+3. Cетевой запрос подтвердил: `GET /api/team-proxy/tasks/<id>/cost-breakdown` уходит автоматически при открытии задачи (lazy fetch в `CostBreakdownBlock`).
+4. supabase-select на дашборде уже включает `self_review_enabled`, `self_review_extra_checks`, `self_review_result` (видно в URL запросов к PostgREST).
+
+### Что осталось руками проверить
+#### Сессия 30 — визуальный self-review блок (требует завершённой задачи с self-review)
+URL: https://potok-omega.vercel.app/blog/team/dashboard
+
+Что сделать:
+1. «Поставить задачу» → выбрать агента (Игорь) → «Написать текст» → заполнить point_name + user_input.
+2. Убедиться, что чекбокс «🔍 Самопроверка» включён (для write_text дефолт `true`).
+3. Запустить, дождаться done.
+4. Открыть задачу в логе.
+
+Что должно произойти:
+- В карточке задачи появляется блок «🔍 Самопроверка» с бейджем «✅ Пройдена» / «⚠️ Пройдена с правками» / «❌ Не пройдена полностью» и счётчиками ✓/✗/➖.
+- Клик по блоку раскрывает чек-лист — пункты с иконками, источниками (Правило Memory / Навык / ТЗ / Табу Mission / Доп. проверка).
+- Если был revised — внизу блока подсказка «Результат был исправлен на основании пунктов "нет"».
+- Под блоком — «Разбивка стоимости»: «Основной вызов $X.XX», «Самопроверка $Y.YY», «Итого $Z.ZZ».
+- В логе задач у этой карточки рядом с моделью виден эмодзи `🔍✅` (или ⚠️/❌).
+
