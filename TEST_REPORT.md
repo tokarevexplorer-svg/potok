@@ -376,3 +376,47 @@ URL: TaskRunnerModal.
 
 Что должно произойти:
 - Слева от кнопок появилась подсказка «Заполни бриф задачи, чтобы запустить.» Для `research_direct` добавляется «и источник», для `write_text` — «и название точки». При заполнении подсказка пропадает, кнопка активируется.
+
+---
+
+## Сессия 20 — Инструменты: реестр, методички и Awareness
+
+### ✅ Выполнено (автоматически)
+- Миграция `0025_team_tools.sql` накачена (`supabase db push` → up to date).
+- Seed: `npm run seed:tools` загрузил `tools/notebooklm.md` (1545 chars) в bucket `team-prompts`.
+- Backend: `node --check` прошёл для `toolService.js`, `routes/team/tools.js`, `promptBuilder.js`, `app.js`, `seed-tool-manifests.js`.
+- Frontend: `next build` — Compiled successfully + Linting + типы прошли. Page-data collection упала на pre-existing missing local Supabase env.
+- E2E на проде через Playwright:
+  - `GET /api/team-proxy/tools` → 200, в `tools[]` есть запись `notebooklm` с правильными `tool_type='executor'`, `manifest_path='tools/notebooklm.md'`.
+  - `GET /api/team-proxy/tools/notebooklm/manifest` → 200 `{content:"# NotebookLM — инструмент глубокого исследования..."}` (методичка читается из Storage).
+  - Console: pre-existing 401 на `/admin/dev-mode`.
+
+### ⚠️ Требует ручной проверки
+
+#### Сессия 20 — Awareness с инструментом
+URL: терминал backend.
+
+Что сделать:
+1. В таблице `team_agent_tools` создать привязку:
+   ```sql
+   INSERT INTO team_agent_tools (agent_id, tool_id) VALUES ('<agent_id>', 'notebooklm');
+   ```
+2. В таблице `team_tools` поставить `status='active'` для notebooklm.
+3. Поставить тестовую задачу этому агенту через дашборд → открыть карточку задачи → раскрыть «Использованный промпт».
+
+Что должно произойти:
+- В блоке Role появится третья секция Awareness «## Awareness — Доступные инструменты» с подзаголовком «### NotebookLM» + описанием + полным текстом методички (Что это / Возможности / Ограничения / Как пользоваться / Самопроверка).
+
+#### Сессия 20 — инвалидация кеша при смене инструментов
+URL: терминал backend + дашборд.
+
+Что сделать:
+1. После шагов выше — изменить статус NotebookLM на `inactive` (через `PATCH /api/team/tools/notebooklm`).
+2. Поставить ещё одну задачу тому же агенту.
+
+Что должно произойти:
+- Awareness-секция инструментов в новом промпте отсутствует (инструмент перестал быть active).
+- В логе Railway: запись `[promptBuilder] template=...` без упоминания инструментов.
+
+#### Сессия 20 — UI инструментов
+ТЗ требует UI в Админке и карточке агента — это Сессия 21 (следующая). Сейчас данные доступны только через API.
