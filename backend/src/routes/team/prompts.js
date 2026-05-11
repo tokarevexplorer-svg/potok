@@ -8,9 +8,12 @@ import { Router } from "express";
 import { uploadFile } from "../../services/team/teamStorage.js";
 import { call as llmCall, LLMError } from "../../services/team/llmClient.js";
 import { recordCall } from "../../services/team/costTracker.js";
+import { requireAuth } from "../../middleware/requireAuth.js";
 
 const router = Router();
 const BUCKET = "team-prompts";
+
+router.use(requireAuth);
 
 // Имя шаблона должно быть простым: только латиница/цифры/дефис/подчёркивание/точка.
 // Никаких слэшей — у нас плоская структура шаблонов.

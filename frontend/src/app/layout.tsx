@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Unbounded, Manrope } from "next/font/google";
 import clsx from "clsx";
 import AppShell from "@/components/layout/AppShell";
+import AuthSessionProvider from "@/components/auth/AuthSessionProvider";
 import "./globals.css";
 
 const display = Unbounded({
@@ -33,7 +34,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="ru" className={clsx(display.variable, body.variable)}>
       <body className="min-h-screen bg-canvas text-ink antialiased">
-        <AppShell>{children}</AppShell>
+        <AuthSessionProvider>
+          <AppShell>{children}</AppShell>
+        </AuthSessionProvider>
       </body>
     </html>
   );

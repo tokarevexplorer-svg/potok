@@ -11,9 +11,12 @@
 import { Router } from "express";
 import multer from "multer";
 import { uploadFile } from "../../services/team/teamStorage.js";
+import { requireAuth } from "../../middleware/requireAuth.js";
 
 const router = Router();
 const BUCKET = "team-database";
+
+router.use(requireAuth);
 
 // Multer в memory-mode: файл попадает в req.file.buffer без записи на диск.
 const upload = multer({

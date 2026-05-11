@@ -38,3 +38,18 @@ src/
 ## Деплой
 
 Railway. Переменные окружения — скопировать из `.env`. `PORT` Railway подставит сам.
+
+## Переменные окружения для авторизации (Сессия 1 этапа 2)
+
+С Сессии 1 этапа 2 все маршруты `/api/team/*` защищены `requireAuth` middleware
+(см. `src/middleware/requireAuth.js`). Бэкенд проверяет HS256-JWT, подписанный
+тем же `NEXTAUTH_SECRET`, что и фронт. На Railway нужны:
+
+- `NEXTAUTH_SECRET` — должен совпадать с переменной на Vercel. Без него
+  все `/api/team/*` отвечают 500.
+- `WHITELISTED_EMAIL` — fallback для whitelist email, если в
+  `team_settings.whitelisted_email` (запись `key='security'`) нет
+  значения. Достаточно одного email в нижнем регистре.
+
+Маршруты `/health`, `/api/videos/*`, `/api/thumbnails/*` остаются открытыми
+(они вызываются автоматическими процессами Vercel/Railway, не из браузера).

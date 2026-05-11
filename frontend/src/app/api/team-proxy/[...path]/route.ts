@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { signBackendToken } from "@/lib/apiClient";
 
 // Универсальный прокси клиентских вызовов команды на Railway.
 //
@@ -7,6 +9,11 @@ import { NextResponse } from "next/server";
 // /api/team/* эндпоинты бэкенда, делаем тонкий прокси: фронт обращается на
 // /api/team-proxy/<path>, Next.js здесь подкладывает BACKEND_URL и шлёт на
 // Railway, ответ возвращает клиенту как есть.
+//
+// Сессия 1 этапа 2: прокси теперь сам подписывает короткоживущий HS256-JWT
+// с email из сессии Auth.js v5 и подкладывает Authorization: Bearer. Без
+// валидной сессии — отвечаем 401 не дёргая бэкенд. Middleware в norm. случае
+// до сюда не пускает, но 401 здесь — страховка на случай его обхода.
 //
 // Поддерживает GET, POST, DELETE и multipart upload — в команде есть
 // загрузка аудио для транскрипции (POST /api/team/voice/transcribe) и
@@ -36,6 +43,25 @@ async function proxyRequest(
     );
   }
 
+  // Auth-гейт: middleware в обычном случае не пускает неавторизованных,
+  // но если кто-то обошёл его (например, ошибка matcher) — отказываем тут.
+  const session = await auth();
+  const email = session?.user?.email;
+  if (!email) {
+    return NextResponse.json({ error: "Не авторизован" }, { status: 401 });
+  }
+
+  let token: string;
+  try {
+    token = signBackendToken(email);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "неизвестная ошибка";
+    return NextResponse.json(
+      { error: `Не удалось подписать токен: ${message}` },
+      { status: 500 },
+    );
+  }
+
   const { path } = await ctx.params;
   const target = `${BACKEND_URL}/api/team/${(path ?? []).join("/")}`;
   const url = new URL(req.url);
@@ -43,14 +69,16 @@ async function proxyRequest(
 
   // Передаём заголовки, кроме host/connection (узнает upstream сам) и
   // content-length (изменится при сериализации). Cookie не передаём —
-  // у бэкенда нет сессий.
+  // у бэкенда нет сессий. Authorization подкладываем заново — на бэкенде
+  // ожидается именно наш JWT, не возможный заголовок клиента.
   const forwardHeaders = new Headers();
   for (const [name, value] of req.headers.entries()) {
     const lower = name.toLowerCase();
     if (lower === "host" || lower === "connection" || lower === "content-length") continue;
-    if (lower === "cookie") continue;
+    if (lower === "cookie" || lower === "authorization") continue;
     forwardHeaders.set(name, value);
   }
+  forwardHeaders.set("Authorization", `Bearer ${token}`);
 
   // Body для GET/HEAD не отправляется. Для остальных — стримим как есть
   // (multipart, json, plain).

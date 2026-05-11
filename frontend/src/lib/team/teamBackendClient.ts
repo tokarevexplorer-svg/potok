@@ -1,17 +1,19 @@
 // Изоморфный клиент для бэкенд-эндпоинтов команды (`/api/team/*`).
 //
-// Из server components и server actions ходит напрямую через BACKEND_URL.
+// Из server components и server actions ходит напрямую через BACKEND_URL,
+// подписывая HS256-JWT с email из сессии Auth.js v5 (через `fetchBackend`
+// из `@/lib/apiClient`).
+//
 // Из браузерных компонентов ходит через прокси /api/team-proxy/<path>
 // (см. frontend/src/app/api/team-proxy/[...path]/route.ts), потому что
-// BACKEND_URL — серверная переменная без NEXT_PUBLIC_ префикса.
+// BACKEND_URL — серверная переменная без NEXT_PUBLIC_ префикса. Прокси
+// сам подкладывает Authorization Bearer перед форвардингом на Railway.
 //
 // Один модуль для обоих контекстов — выбор пути решается в runtime через
 // typeof window. Это убирает необходимость дублировать сигнатуры функций
 // в server-only и client-only файлах.
 
 import type { ApiKeysStatus, TeamTask, TeamTaskModelChoice, TeamTaskPrompt } from "./types";
-
-const BACKEND_URL = process.env.BACKEND_URL ?? process.env.RAILWAY_BACKEND_URL ?? null;
 
 // Внутренний хелпер: выбирает путь и шлёт запрос. Возвращает разобранный
 // JSON (или null, если ответ пустой). Бросает Error со строкой из {error}
@@ -23,7 +25,9 @@ async function backendFetch(
   const isBrowser = typeof window !== "undefined";
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
 
-  let url: string;
+  const { timeoutMs = 30_000, ...rest } = init;
+  let response: Response;
+
   if (isBrowser) {
     // Из браузера — относительный путь до своего же Next-сервера, который
     // проксирует на Railway. URL начинается с /api/team/... — превращаем в
@@ -33,27 +37,32 @@ async function backendFetch(
         `backendFetch: ожидался путь с префиксом /api/team/, получено ${normalizedPath}`,
       );
     }
-    url = `/api/team-proxy/${normalizedPath.slice("/api/team/".length)}`;
-  } else {
-    if (!BACKEND_URL) {
-      throw new Error(
-        "Бэкенд не настроен (нет переменной BACKEND_URL). Проверь Vercel → Settings → Environment Variables.",
-      );
+    const url = `/api/team-proxy/${normalizedPath.slice("/api/team/".length)}`;
+    try {
+      response = await fetch(url, {
+        ...rest,
+        signal: AbortSignal.timeout(timeoutMs),
+        cache: "no-store",
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "неизвестная ошибка";
+      throw new Error(`Бэкенд не отвечает: ${message}`);
     }
-    url = `${BACKEND_URL}${normalizedPath}`;
-  }
-
-  const { timeoutMs = 30_000, ...rest } = init;
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      ...rest,
-      signal: AbortSignal.timeout(timeoutMs),
-      cache: "no-store",
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "неизвестная ошибка";
-    throw new Error(`Бэкенд не отвечает: ${message}`);
+  } else {
+    // Server-side: грузим fetchBackend лениво, чтобы исключить случайный
+    // импорт server-only-модуля в клиентский bundle. (`server-only` плагин
+    // выкинет ошибку на этапе сборки, но без lazy-load TS-резолвер мог бы
+    // попытаться разрешить @/auth даже там, где он не нужен.)
+    const { fetchBackend, BackendAuthRequiredError } = await import("../apiClient");
+    try {
+      response = await fetchBackend(normalizedPath, { ...rest, timeoutMs });
+    } catch (err) {
+      if (err instanceof BackendAuthRequiredError) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : "неизвестная ошибка";
+      throw new Error(`Бэкенд не отвечает: ${message}`);
+    }
   }
 
   const text = await response.text();

@@ -1,14 +1,23 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import Sidebar from "./Sidebar";
 import MobileTopbar from "./MobileTopbar";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   // Auto-hide на десктопе: меню скрыто по умолчанию, появляется при наведении
   // на левую кромку экрана и прячется, когда мышь покидает sidebar.
   const [desktopOpen, setDesktopOpen] = useState(false);
+
+  // На /auth/* страницах (signin, error) sidebar и контейнер не нужны —
+  // эти страницы сами центрируют контент во всё окно. Возвращаем
+  // children без обёртки.
+  if (pathname?.startsWith("/auth/")) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="flex min-h-screen w-full">
