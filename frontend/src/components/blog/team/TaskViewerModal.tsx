@@ -12,6 +12,7 @@ import {
   MessageSquarePlus,
   Pencil,
   Send,
+  Star,
   X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -23,8 +24,10 @@ import {
   fetchTaskById,
   markTaskDone,
   renameTask,
+  saveFeedback,
 } from "@/lib/team/teamBackendClient";
 import { formatRelative, statusBadge, taskTypeLabel } from "./taskTypeMeta";
+import VoiceInput from "./VoiceInput";
 import WriteTextEditor from "./WriteTextEditor";
 import AppendQuestionModal from "./AppendQuestionModal";
 import TaskRunnerModal, { type HandoffContext } from "./TaskRunnerModal";
@@ -69,12 +72,24 @@ export default function TaskViewerModal({
   // Подтянутый title родительской задачи для отображения «← из задачи …».
   // Хранится отдельно, чтобы не делать запрос в карточке списка.
   const [parentTitle, setParentTitle] = useState<string | null>(null);
+  // Сессия 14: блок оценки задачи. score=null до клика; comment — текст
+  // комментария. После успешного сохранения переключаем feedbackSaved=true,
+  // и блок схлопывается в «✓ Оценка сохранена».
+  const [feedbackScore, setFeedbackScore] = useState<number | null>(null);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [feedbackSaving, setFeedbackSaving] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [feedbackSaved, setFeedbackSaved] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setTitleDraft(task.title ?? "");
     setLocalContent(null);
     setParentTitle(null);
+    setFeedbackScore(null);
+    setFeedbackComment("");
+    setFeedbackError(null);
+    setFeedbackSaved(false);
   }, [task.id, task.title]);
 
   // Сессия 13: подтягиваем title родителя для отображения цепочки.
@@ -150,6 +165,42 @@ export default function TaskViewerModal({
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function handleFeedbackSubmit() {
+    if (feedbackSaving) return;
+    if (feedbackScore === null) {
+      setFeedbackError("Выберите оценку перед сохранением.");
+      return;
+    }
+    if (feedbackScore < 5 && !feedbackComment.trim()) {
+      setFeedbackError(
+        "Прокомментируй, чего не хватило, — оценка ниже 5 без комментария не сохраняется.",
+      );
+      return;
+    }
+    if (!task.agentId) {
+      setFeedbackError(
+        "У задачи нет сотрудника-исполнителя — оценка записывается на конкретного агента.",
+      );
+      return;
+    }
+    setFeedbackSaving(true);
+    setFeedbackError(null);
+    try {
+      await saveFeedback({
+        agentId: task.agentId,
+        taskId: task.id,
+        score: feedbackScore,
+        comment: feedbackComment.trim(),
+        channel: "task_card",
+      });
+      setFeedbackSaved(true);
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFeedbackSaving(false);
     }
   }
 
@@ -358,6 +409,112 @@ export default function TaskViewerModal({
             </div>
           )}
 
+          {/* Сессия 14: блок оценки задачи. Доступен только когда:
+              • задача завершена (done/marked_done);
+              • есть привязанный агент (без агента — оценку приписать
+                некуда, см. team_feedback_episodes.agent_id NOT NULL).
+              После сохранения схлопывается в «✓ Оценка сохранена». */}
+          {(task.status === "done" || task.status === "marked_done") &&
+            task.agentId &&
+            (feedbackSaved ? (
+              <div className="mt-5 rounded-xl border border-line bg-elevated/60 p-4 text-sm text-ink-muted">
+                <Check size={14} className="mr-1.5 inline text-emerald-600" />
+                Оценка сохранена. Эпизод доступен в карточке сотрудника.
+              </div>
+            ) : (
+              <div className="mt-5 rounded-xl border border-line bg-elevated/60 p-4">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-ink">
+                  <Star size={14} className="text-accent" />
+                  Оценить работу
+                </div>
+                <p className="mb-3 text-xs text-ink-muted">
+                  0–5 — насколько результат тебе подходит. Комментарий уходит в
+                  память сотрудника как сырой эпизод и через LLM
+                  переформулируется в нейтральное наблюдение.
+                </p>
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {[0, 1, 2, 3, 4, 5].map((n) => {
+                    const selected = feedbackScore === n;
+                    const color = scoreButtonColor(n, selected);
+                    return (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setFeedbackScore(n)}
+                        disabled={feedbackSaving}
+                        className={
+                          "focus-ring inline-flex h-10 min-w-[2.5rem] items-center justify-center rounded-lg border px-3 text-sm font-semibold transition disabled:opacity-50 " +
+                          color
+                        }
+                      >
+                        {n}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <label
+                      htmlFor="feedback-comment"
+                      className="text-xs font-medium text-ink-muted"
+                    >
+                      {feedbackScore !== null && feedbackScore < 5
+                        ? "Чего не хватило"
+                        : "Что особенно понравилось (опционально)"}
+                      {feedbackScore !== null && feedbackScore < 5 && (
+                        <span className="ml-1 text-accent">*</span>
+                      )}
+                    </label>
+                    <VoiceInput
+                      ariaLabel="Надиктовать комментарий"
+                      onTranscribed={(text) => {
+                        const sep =
+                          feedbackComment &&
+                          !feedbackComment.endsWith("\n") &&
+                          !feedbackComment.endsWith(" ")
+                            ? " "
+                            : "";
+                        setFeedbackComment((feedbackComment || "") + sep + text);
+                      }}
+                    />
+                  </div>
+                  <textarea
+                    id="feedback-comment"
+                    value={feedbackComment}
+                    onChange={(e) => setFeedbackComment(e.target.value)}
+                    rows={3}
+                    placeholder={
+                      feedbackScore !== null && feedbackScore < 5
+                        ? "Например: вступление слишком длинное, тон не подходит."
+                        : "По желанию — что особенно зашло."
+                    }
+                    className="focus-ring w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm leading-relaxed text-ink placeholder:text-ink-faint"
+                    disabled={feedbackSaving}
+                  />
+                </div>
+                {feedbackError && (
+                  <p className="mt-2 rounded-lg bg-accent-soft px-3 py-2 text-sm text-accent">
+                    {feedbackError}
+                  </p>
+                )}
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleFeedbackSubmit}
+                    disabled={feedbackSaving || feedbackScore === null}
+                    className="focus-ring inline-flex h-10 items-center gap-1.5 rounded-xl bg-accent px-4 text-sm font-semibold text-surface shadow-card transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {feedbackSaving ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Check size={14} />
+                    )}
+                    Сохранить оценку
+                  </button>
+                </div>
+              </div>
+            ))}
+
           {/* Сессия 13: блок Suggested Next Steps. Если агент в финале ответа
               предложил передать задачу дальше — показываем список с кнопками
               «Передать дальше → …», каждая открывает HandoffModal с
@@ -525,6 +682,25 @@ function buildHandoffContext(
     parentTitle: parent.title,
     suggestion,
   };
+}
+
+// Цветовая шкала для кнопок оценки 0-5:
+//   0-1 — красная зона (что-то заметно не так)
+//   2-3 — жёлтая (есть нарекания)
+//   4-5 — зелёная (всё ок / отлично)
+// Selected — заливка соответствующим цветом, остальные — рамка + hover.
+function scoreButtonColor(n: number, selected: boolean): string {
+  const tier = n <= 1 ? "red" : n <= 3 ? "yellow" : "green";
+  if (selected) {
+    if (tier === "red") return "border-rose-500 bg-rose-500 text-white";
+    if (tier === "yellow") return "border-amber-500 bg-amber-500 text-white";
+    return "border-emerald-500 bg-emerald-500 text-white";
+  }
+  if (tier === "red")
+    return "border-line bg-surface text-rose-700 hover:bg-rose-50 hover:border-rose-300";
+  if (tier === "yellow")
+    return "border-line bg-surface text-amber-700 hover:bg-amber-50 hover:border-amber-300";
+  return "border-line bg-surface text-emerald-700 hover:bg-emerald-50 hover:border-emerald-300";
 }
 
 function PromptBlock({ label, value }: { label: string; value: string }) {

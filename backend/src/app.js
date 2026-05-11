@@ -14,6 +14,7 @@ import teamVoiceRouter from "./routes/team/voice.js";
 import teamDatabasesRouter from "./routes/team/databases.js";
 import teamMemoryRouter from "./routes/team/memory.js";
 import teamAgentsRouter from "./routes/team/agents.js";
+import teamFeedbackRouter from "./routes/team/feedback.js";
 
 export function createApp() {
   const app = express();
@@ -54,6 +55,7 @@ export function createApp() {
   app.use("/api/team/databases", teamDatabasesRouter);
   app.use("/api/team/memory", teamMemoryRouter);
   app.use("/api/team/agents", teamAgentsRouter);
+  app.use("/api/team/feedback", teamFeedbackRouter);
 
   // Финальный обработчик ошибок — чтобы не падали сокеты.
   app.use((err, _req, res, _next) => {

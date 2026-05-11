@@ -59,12 +59,15 @@ import {
 import {
   addRule,
   archiveMemoryItem,
-  fetchEpisodes,
   fetchRules,
   updateMemoryItem,
   type TeamMemoryItem,
 } from "@/lib/team/teamMemoryService";
-import { fetchModelsConfig } from "@/lib/team/teamBackendClient";
+import {
+  fetchFeedbackEpisodes,
+  fetchModelsConfig,
+  type FeedbackEpisode,
+} from "@/lib/team/teamBackendClient";
 
 interface Props {
   agentId: string;
@@ -1109,20 +1112,27 @@ function RuleRow({
 
 const EPISODES_PAGE_SIZE = 20;
 
+// Сессия 14: эпизоды теперь читаются из team_feedback_episodes (отдельная
+// таблица для обратной связи Влада). На каждом эпизоде:
+//   • цветной бейдж score (0-5) — красный/жёлтый/зелёный.
+//   • parsed_text — нейтрализованная LLM формулировка (если есть).
+//   • дата.
+//   • ссылка на задачу (открытие в новой вкладке /blog/team/dashboard,
+//     deep-link на задачу появится в Сессии 43).
+//   • раскрывающийся блок raw_input — оригинальный комментарий Влада.
 function EpisodesTab({ agentId }: { agentId: string }) {
-  const [episodes, setEpisodes] = useState<TeamMemoryItem[]>([]);
+  const [episodes, setEpisodes] = useState<FeedbackEpisode[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [expandedRaw, setExpandedRaw] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
     setErr(null);
-    // Запрашиваем щедрый лимит, чтобы пагинировать на клиенте — эпизодов на
-    // одного агента редко больше нескольких сотен, и Сессия 14 ещё не
-    // заполняет таблицу.
-    fetchEpisodes(agentId, { status: "active", limit: 500 })
+    // Щедрый лимит — эпизодов на одного агента редко больше нескольких сотен.
+    fetchFeedbackEpisodes(agentId, { status: "active", limit: 500 })
       .then((items) => {
         if (cancelled) return;
         setEpisodes(items);
@@ -1142,6 +1152,15 @@ function EpisodesTab({ agentId }: { agentId: string }) {
   const start = (page - 1) * EPISODES_PAGE_SIZE;
   const visible = episodes.slice(start, start + EPISODES_PAGE_SIZE);
 
+  function toggleRaw(id: string) {
+    setExpandedRaw((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   return (
     <div className="flex flex-col gap-3">
       {!loaded && (
@@ -1156,34 +1175,69 @@ function EpisodesTab({ agentId }: { agentId: string }) {
       )}
       {loaded && !err && episodes.length === 0 && (
         <p className="text-sm text-ink-muted">
-          Эпизодов пока нет. Они появятся, когда заработает парсер обратной
-          связи (Сессия 14): каждая ваша оценка задачи будет сохраняться сюда.
+          Эпизодов пока нет. Оцени любую задачу этого сотрудника в дашборде —
+          оценка и комментарий запишутся сюда как сырой эпизод обратной связи.
         </p>
       )}
       {loaded && !err && visible.length > 0 && (
         <>
           <ul className="flex flex-col gap-2">
-            {visible.map((ep) => (
-              <li
-                key={ep.id}
-                className="flex flex-col gap-2 rounded-xl border border-line bg-canvas p-3"
-              >
-                <div className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
-                  {ep.score !== null && (
-                    <span className="inline-flex items-center rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent">
-                      {ep.score}/5
-                    </span>
+            {visible.map((ep) => {
+              const rawOpen = expandedRaw.has(ep.id);
+              const hasParsed = ep.parsed_text && ep.parsed_text.trim();
+              const scoreColor = episodeScoreBadgeClass(ep.score);
+              return (
+                <li
+                  key={ep.id}
+                  className="flex flex-col gap-2 rounded-xl border border-line bg-canvas p-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+                    {ep.score !== null && (
+                      <span
+                        className={
+                          "inline-flex items-center rounded-full px-2 py-0.5 font-semibold " +
+                          scoreColor
+                        }
+                      >
+                        {ep.score}/5
+                      </span>
+                    )}
+                    <span>{formatDate(ep.created_at)}</span>
+                    {ep.task_id && (
+                      <a
+                        href="/blog/team/dashboard"
+                        className="font-mono text-ink-faint hover:text-accent hover:underline"
+                        title="Открыть дашборд"
+                      >
+                        {ep.task_id}
+                      </a>
+                    )}
+                  </div>
+                  {hasParsed ? (
+                    <p className="text-sm leading-relaxed text-ink whitespace-pre-wrap">
+                      {ep.parsed_text}
+                    </p>
+                  ) : (
+                    <p className="text-sm italic text-ink-muted">
+                      (нейтрализация не получилась — смотри сырой комментарий ниже)
+                    </p>
                   )}
-                  <span>{formatDate(ep.created_at)}</span>
-                  {ep.task_id && (
-                    <span className="text-ink-faint">task: {ep.task_id}</span>
+                  <button
+                    type="button"
+                    onClick={() => toggleRaw(ep.id)}
+                    className="focus-ring inline-flex w-fit items-center gap-1 text-xs font-medium text-ink-muted hover:text-ink"
+                  >
+                    {rawOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    Сырой комментарий
+                  </button>
+                  {rawOpen && (
+                    <pre className="rounded-md border border-line bg-surface p-2 text-xs leading-relaxed text-ink whitespace-pre-wrap font-sans">
+                      {ep.raw_input}
+                    </pre>
                   )}
-                </div>
-                <p className="text-sm leading-relaxed text-ink whitespace-pre-wrap">
-                  {ep.content}
-                </p>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
           {totalPages > 1 && (
             <div className="flex items-center justify-between text-xs text-ink-muted">
@@ -1212,6 +1266,14 @@ function EpisodesTab({ agentId }: { agentId: string }) {
       )}
     </div>
   );
+}
+
+// Цветной бейдж оценки: 0-1 красный, 2-3 жёлтый, 4-5 зелёный.
+function episodeScoreBadgeClass(score: number | null): string {
+  if (score === null || score === undefined) return "bg-line text-ink-muted";
+  if (score <= 1) return "bg-rose-100 text-rose-800";
+  if (score <= 3) return "bg-amber-100 text-amber-800";
+  return "bg-emerald-100 text-emerald-800";
 }
 
 // ---------------------------------------------------------------------------

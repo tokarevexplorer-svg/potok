@@ -309,6 +309,63 @@ export async function fetchTaskById(taskId: string): Promise<TeamTask> {
   return ((data ?? {}) as { task?: TeamTask }).task as TeamTask;
 }
 
+// =========================================================================
+// Сессия 14: обратная связь — эпизоды
+// =========================================================================
+
+export interface FeedbackEpisode {
+  id: string;
+  agent_id: string;
+  task_id: string | null;
+  channel: "task_card" | "telegram" | "edit_diff";
+  score: number | null;
+  raw_input: string;
+  parsed_text: string | null;
+  status: "active" | "compressed_to_rule" | "dismissed" | "archived";
+  created_at: string;
+}
+
+// Сохранить эпизод обратной связи. comment может быть пустым при score=5.
+// Backend парсит комментарий через LLM, записывая нейтрализованный
+// parsed_text. Возвращает сохранённый эпизод.
+export async function saveFeedback(input: {
+  agentId: string;
+  taskId?: string | null;
+  score: number;
+  comment?: string;
+  channel?: "task_card" | "telegram" | "edit_diff";
+}): Promise<FeedbackEpisode> {
+  const data = await backendFetch("/api/team/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      agent_id: input.agentId,
+      task_id: input.taskId ?? null,
+      score: input.score,
+      comment: input.comment ?? "",
+      channel: input.channel ?? "task_card",
+    }),
+    // LLM-вызов парсера — короткий, но дать запас на холодный старт.
+    timeoutMs: 30_000,
+  });
+  return ((data ?? {}) as { episode?: FeedbackEpisode }).episode as FeedbackEpisode;
+}
+
+export async function fetchFeedbackEpisodes(
+  agentId: string,
+  options: { status?: "active" | "all"; limit?: number; offset?: number } = {},
+): Promise<FeedbackEpisode[]> {
+  const qs = new URLSearchParams();
+  qs.set("status", options.status ?? "active");
+  if (typeof options.limit === "number") qs.set("limit", String(options.limit));
+  if (typeof options.offset === "number") qs.set("offset", String(options.offset));
+  const data = await backendFetch(
+    `/api/team/feedback/${encodeURIComponent(agentId)}?${qs.toString()}`,
+    { method: "GET" },
+  );
+  return ((data ?? {}) as { episodes?: FeedbackEpisode[] }).episodes ?? [];
+}
+
 export interface AppendQuestionResult {
   success: boolean;
   appended_text: string;
