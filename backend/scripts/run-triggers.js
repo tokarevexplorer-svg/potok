@@ -13,9 +13,11 @@ import "dotenv/config";
 import {
   checkAutonomyEnabled,
   getEligibleAgents,
+  pollEventTriggers,
   runWeeklyReflection,
   runWeeklyReflectionForAll,
 } from "../src/services/team/triggerService.js";
+import { expireOldProposals } from "../src/services/team/proposalService.js";
 import { getAgent } from "../src/services/team/agentService.js";
 
 function parseArgs(argv) {
@@ -90,13 +92,36 @@ async function main() {
   }
   console.log(`[run-triggers] К обработке: ${eligible.length} агент(ов).`);
 
+  // 1. Событийные триггеры (Сессия 24).
+  console.log("[run-triggers] poll: события (low_score, new_competitor_entry, goals_changed)…");
+  const pollReport = await pollEventTriggers();
+  for (const item of pollReport.agents) {
+    for (const [type, res] of Object.entries(item.results)) {
+      if (res.triggered) {
+        console.log(`[${item.agentId}/${type}] triggered → ${res.result?.phase ?? "ok"}`);
+      } else {
+        console.log(`[${item.agentId}/${type}] skip: ${res.reason}`);
+      }
+    }
+  }
+
+  // 2. Еженедельное окно.
+  console.log("[run-triggers] weekly: оглянись на свою зону…");
   const results = await runWeeklyReflectionForAll();
   for (const r of results) {
-    console.log(`[${r.agentId}] ${r.result.phase}${r.result.reason ? ` (${r.result.reason})` : ""}`);
+    console.log(`[${r.agentId}/weekly] ${r.result.phase}${r.result.reason ? ` (${r.result.reason})` : ""}`);
   }
   const proposals = results.filter((r) => r.result.phase === "proposal_created").length;
+
+  // 3. Просрочка старых pending.
+  console.log("[run-triggers] expire: pending старше 14 дней…");
+  const expired = await expireOldProposals(14);
+  if (expired > 0) {
+    console.log(`[run-triggers] переведено в expired: ${expired}.`);
+  }
+
   const skipped = results.filter((r) => r.result.phase !== "proposal_created").length;
-  console.log(`[run-triggers] Готово. Создано предложений: ${proposals}, пропущено: ${skipped}.`);
+  console.log(`[run-triggers] Готово. weekly: ${proposals} новых предложений, ${skipped} пропусков; expired: ${expired}.`);
 }
 
 main().catch((err) => {

@@ -21,7 +21,7 @@
 // (Сессия 24, ещё не реализованы).
 
 import { downloadFile } from "./teamStorage.js";
-import { getSetting } from "./teamSupabase.js";
+import { getServiceRoleClient, getSetting } from "./teamSupabase.js";
 import { call as llmCall, LLMError } from "./llmClient.js";
 import { recordCall } from "./costTracker.js";
 import { getApiKey } from "./keysService.js";
@@ -386,4 +386,239 @@ export async function runWeeklyReflectionForAll() {
     }
   }
   return out;
+}
+
+// =========================================================================
+// Сессия 24: событийные триггеры
+// =========================================================================
+//
+// Три типа событий:
+//   • low_score          — за период появился новый team_feedback_episodes
+//                          со score<=2 для этого агента.
+//   • new_competitor_entry — добавлена запись в любую таблицу типа
+//                          'competitor' в team_custom_databases (или сам
+//                          реестр пополнился новой записью competitor).
+//   • goals_changed       — файл strategy/goals.md в Storage обновился.
+//
+// Состояние «когда мы последний раз поллили» — team_trigger_state
+// (миграция 0027). Cooldown 7 дней на одно срабатывание — через
+// proposalService.getLastReflection (живёт независимо).
+
+const STATE_TABLE = "team_trigger_state";
+
+// Возвращает ISO-строку last_checked_at для пары (agent, trigger_type).
+// Если записи нет — возвращает null (значит «никогда не проверяли»; на
+// первом тике поллинга поднимаем точку отсечения, чтобы не задвоить
+// исторические эпизоды).
+async function getTriggerState(agentId, triggerType) {
+  const client = getServiceRoleClient();
+  const { data, error } = await client
+    .from(STATE_TABLE)
+    .select("last_checked_at")
+    .eq("agent_id", agentId)
+    .eq("trigger_type", triggerType)
+    .maybeSingle();
+  if (error) {
+    console.warn(`[triggerService] getTriggerState ${agentId}/${triggerType}:`, error.message);
+    return null;
+  }
+  return data?.last_checked_at ?? null;
+}
+
+async function setTriggerState(agentId, triggerType, at = new Date()) {
+  const client = getServiceRoleClient();
+  const iso = at instanceof Date ? at.toISOString() : String(at);
+  const { error } = await client.from(STATE_TABLE).upsert(
+    {
+      agent_id: agentId,
+      trigger_type: triggerType,
+      last_checked_at: iso,
+    },
+    { onConflict: "agent_id,trigger_type" },
+  );
+  if (error) {
+    console.warn(`[triggerService] setTriggerState ${agentId}/${triggerType}:`, error.message);
+  }
+}
+
+// Если для агента+типа нет состояния — ставим «сейчас», чтобы первый тик
+// не поднял всю историю эпизодов/конкурентов. Возвращает effective cutoff
+// (ISO-строка), от которого ищем новые события.
+async function ensureCutoff(agentId, triggerType) {
+  let cutoff = await getTriggerState(agentId, triggerType);
+  if (!cutoff) {
+    cutoff = new Date().toISOString();
+    await setTriggerState(agentId, triggerType, cutoff);
+  }
+  return cutoff;
+}
+
+// Для goals_changed мы храним «fingerprint» как длину файла. Чтобы
+// уложить в колонку timestamptz, кодируем в sentinel-дату: epoch + length
+// секунд. Длины ≤ 86400 (24ч) дают валидную дату в 1970-01-01, длины
+// больше — следующие сутки и т.д. Чисто опознавательный маркер, не
+// настоящая timestamp.
+function lengthToSentinelDate(length) {
+  const ms = Math.max(0, Math.min(Number(length) || 0, 30 * 365 * 24 * 60 * 60)) * 1000;
+  return new Date(ms).toISOString();
+}
+function sentinelDateToLength(iso) {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  return Math.round(ms / 1000);
+}
+
+// =========================================================================
+// Триггер: low_score
+// =========================================================================
+
+async function pollLowScoreFor(agent) {
+  const cutoff = await ensureCutoff(agent.id, "low_score");
+  const client = getServiceRoleClient();
+  const { data, error } = await client
+    .from("team_feedback_episodes")
+    .select("id, score, task_id, created_at")
+    .eq("agent_id", agent.id)
+    .lte("score", 2)
+    .gt("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) {
+    return { triggered: false, reason: `query_error: ${error.message}` };
+  }
+  const newest = (data ?? [])[0];
+  if (!newest) {
+    return { triggered: false, reason: "no_new_low_score" };
+  }
+  // Двигаем маркер ВСЕГДА (даже если cooldown потом откажет) — иначе
+  // следующий тик найдёт ту же запись.
+  await setTriggerState(agent.id, "low_score", newest.created_at);
+
+  // Cooldown 7 дней по типу.
+  const lastReflection = await getLastReflection(agent.id, "low_score", 7);
+  if (lastReflection) {
+    return { triggered: false, reason: "cooldown" };
+  }
+
+  const result = await runReflectionCycle(agent.id, "low_score", {
+    note: `Получена низкая оценка задачи (score=${newest.score}).`,
+    details: { task_id: newest.task_id, score: newest.score },
+  });
+  return { triggered: true, result };
+}
+
+// =========================================================================
+// Триггер: new_competitor_entry
+// =========================================================================
+//
+// Простой вариант: считаем триггером появление новой записи в реестре
+// `team_custom_databases` с `db_type='competitor'` за период. (Парсинг
+// реальных таблиц конкурентов добавит Сессия 33 — там же триггер можно
+// будет расширить «появилась запись в таблице конкретного блогера».)
+async function pollCompetitorEntryFor(agent) {
+  const cutoff = await ensureCutoff(agent.id, "new_competitor_entry");
+  const client = getServiceRoleClient();
+  const { data, error } = await client
+    .from("team_custom_databases")
+    .select("id, name, created_at, db_type")
+    .eq("db_type", "competitor")
+    .gt("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) {
+    return { triggered: false, reason: `query_error: ${error.message}` };
+  }
+  const newest = (data ?? [])[0];
+  if (!newest) {
+    return { triggered: false, reason: "no_new_competitor" };
+  }
+  await setTriggerState(agent.id, "new_competitor_entry", newest.created_at);
+
+  const lastReflection = await getLastReflection(agent.id, "new_competitor_entry", 7);
+  if (lastReflection) {
+    return { triggered: false, reason: "cooldown" };
+  }
+
+  const result = await runReflectionCycle(agent.id, "new_competitor_entry", {
+    note: `Новый конкурент в базе: ${newest.name}.`,
+    details: { competitor_id: newest.id, name: newest.name },
+  });
+  return { triggered: true, result };
+}
+
+// =========================================================================
+// Триггер: goals_changed
+// =========================================================================
+//
+// Storage не отдаёт updated_at дешёвым способом; качаем файл и берём его
+// длину + последнюю строку как fingerprint (это дёшево и стабильно: если
+// текст не менялся — fingerprint совпадает). Сравниваем с last_checked_at
+// (там храним fingerprint, а не ISO). Если другой — триггерим.
+async function pollGoalsChangedFor(agent) {
+  let length;
+  try {
+    const text = await downloadFile("team-prompts", "strategy/goals.md");
+    length = (text ?? "").length;
+  } catch {
+    return { triggered: false, reason: "goals_unavailable" };
+  }
+  const sentinel = lengthToSentinelDate(length);
+  const prevSentinel = await getTriggerState(agent.id, "goals_changed");
+  if (!prevSentinel) {
+    // Первый тик: запомнили длину как sentinel, не триггерим.
+    await setTriggerState(agent.id, "goals_changed", sentinel);
+    return { triggered: false, reason: "initial_fingerprint" };
+  }
+  const prevLength = sentinelDateToLength(prevSentinel);
+  if (prevLength === length) {
+    return { triggered: false, reason: "unchanged" };
+  }
+  await setTriggerState(agent.id, "goals_changed", sentinel);
+
+  const lastReflection = await getLastReflection(agent.id, "goals_changed", 7);
+  if (lastReflection) {
+    return { triggered: false, reason: "cooldown" };
+  }
+
+  const result = await runReflectionCycle(agent.id, "goals_changed", {
+    note: `Цели на период обновлены (длина файла: ${length} → было ${prevLength ?? "?"}).`,
+  });
+  return { triggered: true, result };
+}
+
+// =========================================================================
+// pollEventTriggers — для каждого eligible-агента проходит три типа.
+// =========================================================================
+
+export async function pollEventTriggers() {
+  const enabled = await checkAutonomyEnabled();
+  if (!enabled) {
+    return { enabled: false, agents: [] };
+  }
+  const agents = await getEligibleAgents();
+  const report = [];
+  for (const agent of agents) {
+    const out = { agentId: agent.id, results: {} };
+    try {
+      out.results.low_score = await pollLowScoreFor(agent);
+    } catch (err) {
+      out.results.low_score = { triggered: false, reason: `error: ${err?.message ?? err}` };
+    }
+    try {
+      out.results.new_competitor_entry = await pollCompetitorEntryFor(agent);
+    } catch (err) {
+      out.results.new_competitor_entry = {
+        triggered: false,
+        reason: `error: ${err?.message ?? err}`,
+      };
+    }
+    try {
+      out.results.goals_changed = await pollGoalsChangedFor(agent);
+    } catch (err) {
+      out.results.goals_changed = { triggered: false, reason: `error: ${err?.message ?? err}` };
+    }
+    report.push(out);
+  }
+  return { enabled: true, agents: report };
 }

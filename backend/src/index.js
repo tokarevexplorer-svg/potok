@@ -6,6 +6,7 @@ import { recoverUnfinishedQueue } from "./services/recoveryService.js";
 import { configureTeamWorkerPool } from "./queue/teamWorkerPool.js";
 import { runTaskInBackground } from "./services/team/taskRunner.js";
 import { recoverUnfinishedTeamTasks } from "./services/team/teamRecoveryService.js";
+import { startAutonomyCron } from "./cron/autonomyCron.js";
 
 // Настраиваем пул до старта сервера: процессор и конкурентность.
 configureWorkerPool({
@@ -33,4 +34,9 @@ app.listen(env.port, () => {
   // health-чек Railway успевал ответить, пока мы сканируем.
   recoverUnfinishedQueue();
   recoverUnfinishedTeamTasks();
+
+  // Сессия 24: cron-задачи автономности. Сами проверяют
+  // autonomy_enabled_globally — стартуем их безусловно, а флаг рулит
+  // фактическим выполнением.
+  startAutonomyCron();
 });
