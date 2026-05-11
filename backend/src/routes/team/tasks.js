@@ -28,6 +28,7 @@ import { getAgent } from "../../services/team/agentService.js";
 import { listFiles, downloadFile } from "../../services/team/teamStorage.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 import { checkDailyLimit } from "../../services/team/costTracker.js";
+import { getTaskTemplateDefaults } from "../../services/team/promptBuilder.js";
 
 const DATABASE_BUCKET = "team-database";
 
@@ -60,6 +61,28 @@ router.get("/templates", (_req, res) => {
     hiddenInLog: HIDDEN_TYPES_IN_LOG.has(type),
   }));
   res.json({ templates });
+});
+
+// =========================================================================
+// GET /api/team/tasks/template-defaults/:taskType
+// Сессия 29: возвращает frontmatter-дефолты конкретного шаблона задачи
+// (поле self_review_default и т.п.). Используется формой постановки задачи,
+// чтобы преселектить чекбоксы.
+// =========================================================================
+router.get("/template-defaults/:taskType", async (req, res) => {
+  const { taskType } = req.params;
+  if (!TASK_HANDLERS[taskType]) {
+    return res.status(400).json({ error: "Неизвестный тип задачи" });
+  }
+  try {
+    const defaults = await getTaskTemplateDefaults(taskType);
+    return res.json({ defaults });
+  } catch (err) {
+    console.error(`[team/tasks] template-defaults ${taskType} failed:`, err);
+    return res
+      .status(500)
+      .json({ error: err?.message ?? "Не удалось получить дефолты шаблона" });
+  }
 });
 
 // =========================================================================
@@ -108,6 +131,8 @@ router.post("/run", async (req, res) => {
     parentTaskId,
     attachParentArtifact,
     projectId,
+    selfReviewEnabled,
+    selfReviewExtraChecks,
   } = req.body ?? {};
 
   if (typeof taskType !== "string" || !TASK_HANDLERS[taskType]) {
@@ -228,6 +253,25 @@ router.post("/run", async (req, res) => {
       }
     }
 
+    // Сессия 29: self-review. Принимаем boolean или null (тогда createTask
+    // возьмёт frontmatter-дефолт шаблона). Extra-checks — текст по строке.
+    let normalizedSelfReview = null;
+    if (typeof selfReviewEnabled === "boolean") {
+      normalizedSelfReview = selfReviewEnabled;
+    } else if (selfReviewEnabled !== undefined && selfReviewEnabled !== null) {
+      return res
+        .status(400)
+        .json({ error: "selfReviewEnabled должен быть boolean или null." });
+    }
+    let normalizedExtraChecks = null;
+    if (typeof selfReviewExtraChecks === "string") {
+      normalizedExtraChecks = selfReviewExtraChecks.trim() || null;
+    } else if (selfReviewExtraChecks !== undefined && selfReviewExtraChecks !== null) {
+      return res
+        .status(400)
+        .json({ error: "selfReviewExtraChecks должен быть строкой или null." });
+    }
+
     const taskId = await createTask({
       taskType,
       params: finalParams,
@@ -237,6 +281,8 @@ router.post("/run", async (req, res) => {
       agentId: normalizedAgentId,
       parentTaskId: normalizedParentId,
       projectId: normalizedProjectId,
+      selfReviewEnabled: normalizedSelfReview,
+      selfReviewExtraChecks: normalizedExtraChecks,
     });
     return res.status(202).json({ taskId });
   } catch (err) {

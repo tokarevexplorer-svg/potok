@@ -8,6 +8,7 @@ import {
   BackendApiError,
   createProject,
   fetchProjects,
+  fetchTaskTemplateDefaults,
   previewPrompt,
   runTask,
   type PreviewPromptResult,
@@ -80,8 +81,11 @@ export default function TaskRunnerModal({
   const [projects, setProjects] = useState<TeamProject[]>([]);
   const [creatingProject, setCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
-  // Сессия 17: чекбокс «Самопроверка» — заглушка до Сессии 29.
+  // Сессия 29: «Самопроверка» — рабочий чекбокс. Дефолт читается из
+  // frontmatter шаблона через GET /tasks/template-defaults/:taskType
+  // (см. useEffect ниже). Дополнительные пункты — textarea, по строке.
   const [selfReview, setSelfReview] = useState(false);
+  const [selfReviewExtraChecks, setSelfReviewExtraChecks] = useState("");
 
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptPreview, setPromptPreview] = useState<PreviewPromptResult | null>(null);
@@ -114,6 +118,7 @@ export default function TaskRunnerModal({
       setCreatingProject(false);
       setNewProjectName("");
       setSelfReview(false);
+      setSelfReviewExtraChecks("");
       setPromptOpen(false);
       setPromptPreview(null);
       setPromptError(null);
@@ -166,10 +171,22 @@ export default function TaskRunnerModal({
       .catch(() => {
         if (!cancelled) setProjects([]);
       });
+    // Сессия 29: дефолт «Самопроверки» — из frontmatter шаблона. Дёргаем
+    // тонкий эндпоинт, который только парсит fronmatter и возвращает дефолты.
+    fetchTaskTemplateDefaults(taskType)
+      .then((defaults) => {
+        if (cancelled) return;
+        if (typeof defaults.self_review_default === "boolean") {
+          setSelfReview(defaults.self_review_default);
+        }
+      })
+      .catch(() => {
+        // Не критично — флажок останется выключенным.
+      });
     return () => {
       cancelled = true;
     };
-  }, [open, handoff, presetAgentId]);
+  }, [open, handoff, presetAgentId, taskType]);
 
   // Esc + блокировка скролла фона.
   useEffect(() => {
@@ -260,6 +277,10 @@ export default function TaskRunnerModal({
         attachParentArtifact: handoff ? attachParentArtifact : undefined,
         // Сессия 16/17: проект-тег.
         projectId,
+        // Сессия 29: пробрасываем самопроверку (или null, если значение
+        // совпадает с дефолтом шаблона — это даст «честный» fallback).
+        selfReviewEnabled: selfReview,
+        selfReviewExtraChecks: selfReviewExtraChecks.trim() || null,
       });
       onCreated(taskId);
     } catch (err) {
@@ -413,22 +434,40 @@ export default function TaskRunnerModal({
             }}
           />
 
-          {/* Сессия 17: «Самопроверка» — заглушка до Сессии 29. */}
-          <label className="flex items-center gap-2 text-sm text-ink-muted">
-            <input
-              type="checkbox"
-              checked={selfReview}
-              onChange={(e) => setSelfReview(e.target.checked)}
-              disabled
-              className="accent-accent"
-            />
-            <span className="opacity-70">
-              🔍 Самопроверка{" "}
-              <span className="text-xs italic">
-                (появится в Сессии 29 — пока флажок неактивен)
+          {/* Сессия 29: «Самопроверка» — рабочий чекбокс + textarea с
+              дополнительными пунктами чек-листа. Дефолт — из frontmatter
+              шаблона (write-text/edit-text-fragments → true, остальные → false). */}
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={selfReview}
+                onChange={(e) => setSelfReview(e.target.checked)}
+                className="accent-accent"
+              />
+              <span>
+                🔍 Самопроверка{" "}
+                <span className="text-xs italic text-ink-faint">
+                  (второй вызов LLM сверяет ответ с правилами Memory,
+                  навыками, табу Mission и доп. пунктами)
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+            {selfReview && (
+              <label className="flex flex-col gap-1 pl-6">
+                <span className="text-xs text-ink-muted">
+                  Доп. пункты проверки — по одному на строку (опц.):
+                </span>
+                <textarea
+                  value={selfReviewExtraChecks}
+                  onChange={(e) => setSelfReviewExtraChecks(e.target.value)}
+                  rows={3}
+                  placeholder="Например:&#10;нет цифр без источника&#10;вступление не длиннее 2 предложений"
+                  className="focus-ring rounded-xl border border-line bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+                />
+              </label>
+            )}
+          </div>
 
           {/* Сессия 19: UI-плейсхолдер «Сделать регулярной».
               Реальная функциональность — в пункте 15 (этап 3). */}

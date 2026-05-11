@@ -76,6 +76,14 @@ export async function appendTaskSnapshot(snapshot) {
     suggested_next_steps: snapshot.suggestedNextSteps ?? null,
     // project_id — Сессия 16. Soft-ref на team_projects.id. NULL = «без проекта».
     project_id: snapshot.projectId ?? null,
+    // self-review — Сессия 29. Три поля переезжают между снапшотами через
+    // mergeSnapshot, чтобы append-only история сохраняла настройки + итог.
+    self_review_enabled:
+      typeof snapshot.selfReviewEnabled === "boolean"
+        ? snapshot.selfReviewEnabled
+        : null,
+    self_review_extra_checks: snapshot.selfReviewExtraChecks ?? null,
+    self_review_result: snapshot.selfReviewResult ?? null,
   };
 
   const { data, error } = await client

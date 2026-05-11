@@ -14,7 +14,8 @@
     "compress:episodes": "node scripts/compress-episodes.js",
     "seed:tools": "node scripts/seed-tool-manifests.js",
     "triggers:run": "node scripts/run-triggers.js",
-    "extract:skills": "node scripts/extract-skills.js"
+    "extract:skills": "node scripts/extract-skills.js",
+    "apply:self-review-defaults": "node scripts/add-self-review-defaults.js"
   },
   "engines": {
     "node": ">=20"

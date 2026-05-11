@@ -40,6 +40,27 @@ import {
 import { enqueueTeamTask } from "../../queue/teamWorkerPool.js";
 import { parseSuggestedNextSteps } from "./handoffParser.js";
 import { createNotification } from "./notificationsService.js";
+import { getTaskTemplateDefaults } from "./promptBuilder.js";
+import {
+  runSelfReview,
+  shouldSkipSelfReview,
+} from "./selfReviewService.js";
+import { getAgent } from "./agentService.js";
+
+// Сессия 29: тихая обёртка над agentService.getAgent — если агента нет
+// или сервис недоступен, возвращает null. Self-review должен корректно
+// падать в skip, а не валить всю задачу.
+async function getAgentSafe(agentId) {
+  if (!agentId) return null;
+  try {
+    return await getAgent(agentId);
+  } catch (err) {
+    console.warn(
+      `[taskRunner] getAgentSafe ${agentId} failed: ${err?.message ?? err}`,
+    );
+    return null;
+  }
+}
 
 const DATABASE_BUCKET = "team-database";
 const PRESETS_PATH = "presets.json";
@@ -116,6 +137,21 @@ function mergeSnapshot(current, update) {
     // действиях (rename/move project) — обычно фиксирован после createTask.
     projectId:
       update.projectId !== undefined ? update.projectId : current.project_id,
+    // self-review (Сессия 29). Флаг и доп. чек-лист фиксируются при
+    // createTask и переносятся как есть. selfReviewResult пишется один раз
+    // в finishTask, дальше неизменно.
+    selfReviewEnabled:
+      typeof update.selfReviewEnabled === "boolean"
+        ? update.selfReviewEnabled
+        : current.self_review_enabled,
+    selfReviewExtraChecks:
+      update.selfReviewExtraChecks !== undefined
+        ? update.selfReviewExtraChecks
+        : current.self_review_extra_checks,
+    selfReviewResult:
+      update.selfReviewResult !== undefined
+        ? update.selfReviewResult
+        : current.self_review_result,
   };
 }
 
@@ -279,6 +315,8 @@ export async function createTask({
   agentId = null,
   parentTaskId = null,
   projectId = null,
+  selfReviewEnabled = null,
+  selfReviewExtraChecks = null,
 }) {
   if (!TASK_HANDLERS[taskType]) {
     throw new Error(`Тип задачи не поддерживается: ${taskType}`);
@@ -318,6 +356,21 @@ export async function createTask({
     };
   }
 
+  // self-review дефолт читается из frontmatter шаблона (`self_review_default`).
+  // Если форма передала boolean — он перекрывает дефолт. Если null — дефолт
+  // из шаблона (false, если шаблона/поля нет).
+  let resolvedSelfReview;
+  if (typeof selfReviewEnabled === "boolean") {
+    resolvedSelfReview = selfReviewEnabled;
+  } else {
+    try {
+      const defaults = await getTaskTemplateDefaults(taskType);
+      resolvedSelfReview = defaults.self_review_default === true;
+    } catch {
+      resolvedSelfReview = false;
+    }
+  }
+
   const taskId = newTaskId();
   const snapshot = {
     id: taskId,
@@ -341,6 +394,12 @@ export async function createTask({
     parentTaskId: parentTaskId || null,
     suggestedNextSteps: null,
     projectId: projectId || null,
+    selfReviewEnabled: resolvedSelfReview,
+    selfReviewExtraChecks:
+      typeof selfReviewExtraChecks === "string" && selfReviewExtraChecks.trim()
+        ? selfReviewExtraChecks.trim()
+        : null,
+    selfReviewResult: null,
   };
 
   await appendTaskSnapshot(snapshot);
@@ -430,21 +489,72 @@ export async function runTaskInBackground(taskId) {
       return;
     }
 
+    // =====================================================================
+    // Self-review (Сессия 29). Запускается после первого вызова, если фича
+    // включена флагом self_review_enabled (либо явно из формы, либо из
+    // frontmatter шаблона). Второй вызов идёт на той же модели, расходы
+    // пишутся отдельной строкой с purpose='self_review'.
+    //
+    // Если revision_needed=true и есть revised_result — финальный артефакт
+    // подменяем на исправленную версию. Если артефакта в Storage не было
+    // (write_text перезаписывает файл, остальные хранят inline), просто
+    // подменяем result.
+    // =====================================================================
+    let finalResult = outcome.result ?? "";
+    let selfReviewResult = null;
+    const skipCheck = shouldSkipSelfReview(task, finalResult);
+    if (!skipCheck.skip) {
+      const agentForReview = task.agent_id
+        ? await getAgentSafe(task.agent_id)
+        : null;
+      try {
+        const review = await runSelfReview(task, agentForReview, finalResult);
+        if (!review.skipped) {
+          selfReviewResult = review;
+          if (review.revised && review.revised_result) {
+            // Если был артефакт в Storage — перезаписываем его исправленной
+            // версией. Для write_text путь у нас на task.artifact_path,
+            // outcome.artifactPath свежий. Используем outcome.artifactPath.
+            if (outcome.artifactPath) {
+              try {
+                await uploadFile(
+                  DATABASE_BUCKET,
+                  outcome.artifactPath,
+                  review.revised_result,
+                  "text/markdown; charset=utf-8",
+                );
+              } catch (err) {
+                console.warn(
+                  `[taskRunner] self-review: не удалось переписать артефакт ${outcome.artifactPath}: ${err?.message ?? err}`,
+                );
+              }
+            }
+            finalResult = review.revised_result;
+          }
+        }
+      } catch (err) {
+        console.warn(
+          `[taskRunner] self-review failed for ${taskId}: ${err?.message ?? err}`,
+        );
+      }
+    }
+
     // Парсим необязательный блок «**Suggested Next Steps:**» в конце ответа
     // (Сессия 13, пункт 8). Пустой массив, если блока нет — это нормальный
     // случай для большинства задач. UI handoff использует этот массив для
     // предзаполнения формы передачи задачи.
-    const suggestedSteps = parseSuggestedNextSteps(outcome.result ?? "");
+    const suggestedSteps = parseSuggestedNextSteps(finalResult);
 
     const update = {
       status: "done",
-      result: outcome.result ?? "",
+      result: finalResult,
       artifactPath: outcome.artifactPath ?? null,
       tokens,
       costUsd: Number(apiEntry?.cost_usd ?? 0),
       startedAt,
       finishedAt: nowIso(),
       suggestedNextSteps: suggestedSteps.length > 0 ? suggestedSteps : null,
+      selfReviewResult,
     };
     if (outcome.prompt) update.prompt = outcome.prompt;
 

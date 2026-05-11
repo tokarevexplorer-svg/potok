@@ -44,6 +44,7 @@
  * @see Claude_team_stage2.MD, Сессия 6
  */
 
+import matter from "gray-matter";
 import { downloadFile, listFiles } from "./teamStorage.js";
 import { getRulesForAgent } from "./memoryService.js";
 import { getAgent, getAgentRoster } from "./agentService.js";
@@ -1042,4 +1043,90 @@ export async function getAgentPromptBreakdown(agentId) {
 function estimateTokens(text) {
   if (!text) return 0;
   return Math.ceil(String(text).length / 4);
+}
+
+// =========================================================================
+// Дефолты из frontmatter шаблона задачи — Сессия 29
+// =========================================================================
+//
+// Каждый markdown-шаблон в team-prompts/task-templates/<slug>.md может нести
+// YAML-frontmatter:
+//   ---
+//   self_review_default: true
+//   batch_default: false
+//   ---
+//
+// Возвращает плоский объект с дефолтами (или пустой объект). Используется
+// фронтом формы постановки задачи, чтобы преселектить чекбоксы, и
+// taskRunner'ом при `selfReviewEnabled=null`.
+//
+// taskTypeOrPath принимает либо taskType (`write_text`), либо готовый путь
+// (`task-templates/write-text.md`). Это нужно, чтобы UI мог запросить
+// дефолты по выбранному типу без знания внутренних путей.
+
+const TEMPLATE_DEFAULTS_TTL_MS = 60_000;
+const templateDefaultsCache = new Map();
+
+// Маппинг taskType → slug файла. Дублирует TEMPLATE_NAMES из taskHandlers,
+// чтобы не создавать циклический импорт (taskHandlers уже импортирует
+// buildPrompt из этого файла). Если расходимость — лучше добавить тип
+// здесь, чем тащить весь модуль handlers.
+const TASK_TYPE_TO_SLUG = {
+  ideas_free: "ideas-free",
+  ideas_questions_for_research: "ideas-questions",
+  research_direct: "research-direct",
+  write_text: "write-text",
+  edit_text_fragments: "edit-text-fragments",
+};
+
+function resolveTaskTemplatePath(taskTypeOrPath) {
+  const key = String(taskTypeOrPath ?? "").trim();
+  if (!key) return null;
+  if (key.includes("/") || key.endsWith(".md")) {
+    return key.endsWith(".md") ? key : `${key}.md`;
+  }
+  const slug = TASK_TYPE_TO_SLUG[key];
+  if (slug) return `task-templates/${slug}.md`;
+  return `${key}.md`;
+}
+
+export async function getTaskTemplateDefaults(taskTypeOrPath) {
+  const key = String(taskTypeOrPath ?? "").trim();
+  if (!key) return {};
+
+  const cached = templateDefaultsCache.get(key);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  const path = resolveTaskTemplatePath(key);
+  if (!path) return {};
+
+  let raw;
+  try {
+    raw = await downloadFile(PROMPTS_BUCKET, path);
+  } catch {
+    templateDefaultsCache.set(key, { value: {}, expiresAt: now + TEMPLATE_DEFAULTS_TTL_MS });
+    return {};
+  }
+
+  let data = {};
+  try {
+    const parsed = matter(raw);
+    if (parsed && parsed.data && typeof parsed.data === "object") {
+      data = parsed.data;
+    }
+  } catch (err) {
+    console.warn(
+      `[promptBuilder] не удалось распарсить frontmatter шаблона ${path}: ${err?.message ?? err}`,
+    );
+    data = {};
+  }
+
+  templateDefaultsCache.set(key, { value: data, expiresAt: now + TEMPLATE_DEFAULTS_TTL_MS });
+  return data;
+}
+
+// Сброс кеша — нужен при редактировании шаблона через UI Инструкций.
+export function invalidateTemplateDefaultsCache() {
+  templateDefaultsCache.clear();
 }

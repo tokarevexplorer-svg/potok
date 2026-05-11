@@ -239,6 +239,28 @@ export interface RunTaskParams {
   attachParentArtifact?: boolean;
   // Сессия 16: проект-тег задачи. NULL = «без проекта».
   projectId?: string | null;
+  // Сессия 29: чекбокс «Самопроверка». null = взять frontmatter-дефолт шаблона.
+  selfReviewEnabled?: boolean | null;
+  // Сессия 29: доп. пункты чек-листа от Влада. Текст по строке.
+  selfReviewExtraChecks?: string | null;
+}
+
+// Сессия 29: frontmatter-дефолты шаблона задачи. Сейчас один ключ —
+// self_review_default; в будущем сюда же может прийти batch_default (пункт 22).
+export interface TaskTemplateDefaults {
+  self_review_default?: boolean;
+  [key: string]: unknown;
+}
+
+export async function fetchTaskTemplateDefaults(
+  taskType: string,
+): Promise<TaskTemplateDefaults> {
+  const data = await backendFetch(
+    `/api/team/tasks/template-defaults/${encodeURIComponent(taskType)}`,
+    { method: "GET" },
+  );
+  const obj = (data ?? {}) as { defaults?: TaskTemplateDefaults };
+  return obj.defaults ?? {};
 }
 
 export async function runTask(input: RunTaskParams): Promise<string> {
