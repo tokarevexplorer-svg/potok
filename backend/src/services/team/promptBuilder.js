@@ -49,6 +49,7 @@ import { getRulesForAgent } from "./memoryService.js";
 import { getAgent, getAgentRoster } from "./agentService.js";
 import { listDatabases } from "./customDatabaseService.js";
 import { getAwarenessVersion, bumpAwarenessVersion } from "./awarenessVersion.js";
+import { getAgentTools, getToolManifest } from "./toolService.js";
 
 // =========================================================================
 // Инвалидация prompt-кеша (Сессия 12 этапа 2)
@@ -411,6 +412,51 @@ const HANDOFF_HINT_BLOCK = [
   "смысл. Ты предлагаешь — решение за Владом.",
 ].join("\n");
 
+async function loadAgentToolsSafe(agentId) {
+  if (!agentId) return [];
+  try {
+    return await getAgentTools(agentId, { onlyActive: true });
+  } catch (err) {
+    console.warn(`[promptBuilder] инструменты агента ${agentId} недоступны: ${err?.message ?? err}`);
+    return [];
+  }
+}
+
+// Третья секция Awareness (Сессия 20, пункт 16): инструменты агента +
+// содержимое их методичек. Каждый инструмент идёт отдельным блоком:
+//
+//   ### NotebookLM
+//   <description одной строкой>
+//
+//   <тело методички из team-prompts/tools/notebooklm.md>
+//
+// Методички — это «как пользоваться» (и в self-review позже добавится
+// чек-лист). Если у инструмента нет manifest_path — выводим только имя +
+// description.
+async function formatToolsAwareness(tools) {
+  if (!Array.isArray(tools) || tools.length === 0) return "";
+  const blocks = ["## Awareness — Доступные инструменты"];
+  for (const tool of tools) {
+    const name = String(tool?.name ?? "").trim();
+    if (!name) continue;
+    const desc = tool?.description ? String(tool.description).trim() : "";
+    let manifest = "";
+    if (tool?.manifest_path) {
+      try {
+        const content = await getToolManifest(tool.id);
+        if (content && content.trim()) manifest = content.trim();
+      } catch {
+        // Если manifest упал — тихо, основной текст не теряем.
+      }
+    }
+    const parts = [`### ${name}`];
+    if (desc) parts.push(desc);
+    if (manifest) parts.push(manifest);
+    blocks.push(parts.join("\n\n"));
+  }
+  return blocks.length > 1 ? blocks.join("\n\n") : "";
+}
+
 async function buildAwareness({ agentId, currentAgent }) {
   const version = getAwarenessVersion();
   const cacheKey = agentId || "__nobody__";
@@ -419,24 +465,34 @@ async function buildAwareness({ agentId, currentAgent }) {
   // database_access самого агента не бампает версию — но при следующем
   // прогоне currentAgent уже свежий, текст пересоберётся. Чтобы не отдавать
   // устаревший по доступам блок — учитываем сериализованные доступы в ключе.
+  // Сессия 20: добавили также fingerprint инструментов агента — это
+  // отдельная таблица team_agent_tools, currentAgent её не несёт.
   const accessFingerprint = currentAgent?.database_access
     ? JSON.stringify(currentAgent.database_access)
     : "";
+
+  const [roster, databases, agentTools] = await Promise.all([
+    loadRosterSafe(),
+    loadDatabasesSafe(),
+    loadAgentToolsSafe(agentId),
+  ]);
+
+  const toolsFingerprint = JSON.stringify(
+    agentTools.map((t) => `${t.id}:${t.updated_at ?? t.status}`).sort(),
+  );
+
   if (
     cached &&
     cached.version === version &&
-    cached.accessFingerprint === accessFingerprint
+    cached.accessFingerprint === accessFingerprint &&
+    cached.toolsFingerprint === toolsFingerprint
   ) {
     return cached.text;
   }
 
-  const [roster, databases] = await Promise.all([
-    loadRosterSafe(),
-    loadDatabasesSafe(),
-  ]);
-
   const teamBlock = formatTeamRoster(roster);
   const dbBlock = formatDatabasesMap(databases, currentAgent);
+  const toolsBlock = await formatToolsAwareness(agentTools);
 
   // Handoff-инструкция нужна только тем, у кого вообще есть кому передавать:
   // если кроме текущего агента в roster никого нет, блок пропускаем.
@@ -445,10 +501,15 @@ async function buildAwareness({ agentId, currentAgent }) {
     : 0;
   const handoffBlock = peersCount > 0 ? HANDOFF_HINT_BLOCK : "";
 
-  const text = [teamBlock, dbBlock, handoffBlock]
+  const text = [teamBlock, dbBlock, toolsBlock, handoffBlock]
     .filter((s) => s && s.trim())
     .join("\n\n");
-  awarenessCache.set(cacheKey, { version, accessFingerprint, text });
+  awarenessCache.set(cacheKey, {
+    version,
+    accessFingerprint,
+    toolsFingerprint,
+    text,
+  });
   return text;
 }
 

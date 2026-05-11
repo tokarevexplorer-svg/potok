@@ -11,7 +11,8 @@
     "migrate:instructions": "node scripts/migrate-instructions.js",
     "validate:mission-goals": "node scripts/validate-mission-goals.js",
     "seed:memory": "node scripts/seed-memory.js",
-    "compress:episodes": "node scripts/compress-episodes.js"
+    "compress:episodes": "node scripts/compress-episodes.js",
+    "seed:tools": "node scripts/seed-tool-manifests.js"
   },
   "engines": {
     "node": ">=20"
