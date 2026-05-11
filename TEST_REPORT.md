@@ -275,3 +275,63 @@ URL: https://potok-omega.vercel.app/blog/team/staff/&lt;agent_id&gt;
 Что должно произойти:
 - Открывается `TaskCreationModal` с пропущенным шагом 1: сразу шаг 2 «Тип задачи» для этого агента.
 - Если у агента ровно один разрешённый шаблон — пропускается и шаг 2 → форма открывается напрямую с пред-выбранным шаблоном.
+
+---
+
+## Сессия 18 — Inbox внимания и сквозной колокольчик
+
+### ✅ Выполнено (автоматически)
+- Миграция `0024_team_notifications.sql` накачена (`supabase db push` → up to date).
+- Backend: `node --check` прошёл для `notificationsService.js`, `routes/team/notifications.js`, `app.js`, `taskRunner.js`, `compress-episodes.js`.
+- Frontend: `next build` — Compiled successfully + Linting + типы прошли. Page-data collection упала на missing local Supabase env (pre-existing).
+- E2E на проде через Playwright:
+  - `GET /api/team-proxy/notifications/summary` → 200 `{total_unread:0, by_type:{}}`.
+  - На `/blog/team/dashboard` блок «Требует внимания» рендерится с пустым состоянием «Всё чисто ✓».
+  - Сквозной колокольчик отображается фиксированно в правом верхнем углу (`button[aria-label="Inbox внимания"]`).
+  - Клик по колокольчику открывает dropdown с заголовком «Уведомления», текст «пусто», «Всё чисто ✓ — новых событий нет.»
+  - Console: ошибки только pre-existing 401 на `/admin/dev-mode` (после холодного старта Railway были временные 404 — прошли сами).
+
+### ⚠️ Требует ручной проверки
+
+#### Сессия 18 — автонотификация task_awaiting_review
+URL: https://potok-omega.vercel.app/blog/team/dashboard
+
+Что сделать:
+1. Поставить любую задачу через дашборд (можно без агента).
+2. Дождаться завершения (статус «Готово»).
+
+Что должно произойти:
+- В Supabase Dashboard → `team_notifications` появилась запись `type='task_awaiting_review'`, `title="Задача «…» ждёт оценки"`, `related_entity_id` = id задачи.
+- В блоке «Требует внимания» на дашборде появилась строка «⭐ Задачи ждут оценки: 1» с переходом на `/blog/team/dashboard`.
+- В колокольчике (правый верх) бейдж с цифрой 1; клик → dropdown показывает группу.
+
+#### Сессия 18 — автонотификация rule_candidate
+URL: терминал backend + `/blog/team/staff/candidates`.
+
+Что сделать:
+1. Накопить 3+ эпизода обратной связи для одного агента (Сессия 14: оценивать задачи в дашборде).
+2. В терминале: `npm run compress:episodes -- --agent <id>`.
+
+Что должно произойти:
+- На каждый созданный кандидат — запись `type='rule_candidate'` в `team_notifications` со ссылкой `/blog/team/staff/candidates`.
+- В колокольчике появляется группа «📝 Кандидаты в правила».
+
+#### Сессия 18 — автонотификация handoff_suggestion
+URL: https://potok-omega.vercel.app/blog/team/dashboard
+
+Что сделать:
+1. Поставить задачу агенту (нужны 2+ агента, чтобы LLM выдала блок Suggested Next Steps).
+2. Если LLM в финале ответа вернёт блок `**Suggested Next Steps:**`.
+
+Что должно произойти:
+- Запись `type='handoff_suggestion'`, `description` содержит имена через запятую («Кому: Маша, Алексей»).
+- В Inbox/колокольчике появляется группа «🔄 Предложения handoff».
+
+#### Сессия 18 — кнопка «Отметить все прочитанными»
+URL: https://potok-omega.vercel.app/blog/team/dashboard или dropdown колокольчика.
+
+Что сделать:
+1. После создания нескольких нотификаций — нажать «Отметить все прочитанными».
+
+Что должно произойти:
+- Все непрочитанные `team_notifications.is_read` → true; счётчик возвращается к 0; «Всё чисто ✓».
