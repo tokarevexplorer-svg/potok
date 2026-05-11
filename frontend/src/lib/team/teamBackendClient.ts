@@ -415,6 +415,90 @@ export async function updateProject(
   return ((data ?? {}) as { project?: TeamProject }).project as TeamProject;
 }
 
+// =========================================================================
+// Сессия 20/21: инструменты команды
+// =========================================================================
+
+export type ToolType = "executor" | "system";
+export type ToolStatus = "active" | "inactive" | "error";
+
+export interface TeamTool {
+  id: string;
+  name: string;
+  description: string | null;
+  tool_type: ToolType;
+  manifest_path: string | null;
+  connection_config: Record<string, unknown>;
+  status: ToolStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchTools(type: ToolType | "all" = "all"): Promise<TeamTool[]> {
+  const data = await backendFetch(
+    `/api/team/tools?type=${encodeURIComponent(type)}`,
+    { method: "GET" },
+  );
+  return ((data ?? {}) as { tools?: TeamTool[] }).tools ?? [];
+}
+
+export async function fetchTool(id: string): Promise<TeamTool> {
+  const data = await backendFetch(`/api/team/tools/${encodeURIComponent(id)}`, {
+    method: "GET",
+  });
+  return ((data ?? {}) as { tool?: TeamTool }).tool as TeamTool;
+}
+
+export async function updateTool(
+  id: string,
+  patch: Partial<{
+    name: string;
+    description: string | null;
+    status: ToolStatus;
+    connection_config: Record<string, unknown>;
+  }>,
+): Promise<TeamTool> {
+  const data = await backendFetch(`/api/team/tools/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return ((data ?? {}) as { tool?: TeamTool }).tool as TeamTool;
+}
+
+export async function fetchToolManifest(id: string): Promise<string | null> {
+  const data = await backendFetch(
+    `/api/team/tools/${encodeURIComponent(id)}/manifest`,
+    { method: "GET" },
+  );
+  const obj = (data ?? {}) as { content?: string | null };
+  return obj.content ?? null;
+}
+
+export async function fetchAgentTools(
+  agentId: string,
+  options: { onlyActive?: boolean } = {},
+): Promise<TeamTool[]> {
+  const qs = options.onlyActive ? "?only_active=true" : "";
+  const data = await backendFetch(
+    `/api/team/tools/by-agent/${encodeURIComponent(agentId)}${qs}`,
+    { method: "GET" },
+  );
+  return ((data ?? {}) as { tools?: TeamTool[] }).tools ?? [];
+}
+
+export async function setAgentTools(agentId: string, toolIds: string[]): Promise<string[]> {
+  const data = await backendFetch(
+    `/api/team/tools/by-agent/${encodeURIComponent(agentId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool_ids: toolIds }),
+    },
+  );
+  return ((data ?? {}) as { tool_ids?: string[] }).tool_ids ?? [];
+}
+
 export interface AppendQuestionResult {
   success: boolean;
   appended_text: string;

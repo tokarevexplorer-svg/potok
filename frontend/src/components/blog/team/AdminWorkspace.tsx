@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   AlertTriangle,
   Check,
+  ExternalLink,
   KeyRound,
   Loader2,
   RefreshCw,
   Trash2,
+  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -17,6 +20,7 @@ import {
   type KeysFullStatus,
   type SecuritySettings,
   type SpendingResult,
+  type TeamTool,
   deleteApiKey,
   fetchAlertThreshold,
   fetchDevMode,
@@ -24,11 +28,13 @@ import {
   fetchKeysFull,
   fetchSecuritySettings,
   fetchSpending,
+  fetchTools,
   patchHardLimits,
   patchSecuritySettings,
   setAlertThreshold,
   setApiKey,
   setDevMode,
+  updateTool,
 } from "@/lib/team/teamBackendClient";
 import { formatUsd } from "@/lib/team/format";
 
@@ -180,6 +186,8 @@ export default function AdminWorkspace() {
         }}
       />
 
+      <ToolsSection />
+
       <DevModeSection
         devMode={devMode}
         error={devModeError}
@@ -188,6 +196,172 @@ export default function AdminWorkspace() {
           setDevModeError(null);
         }}
       />
+    </div>
+  );
+}
+
+// ---------- Сессия 21: Tools ----------
+
+function ToolsSection() {
+  const [executorTools, setExecutorTools] = useState<TeamTool[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetchTools("executor")
+      .then((items) => {
+        if (!cancelled) {
+          setExecutorTools(items);
+          setLoading(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function toggleStatus(tool: TeamTool) {
+    const next: "active" | "inactive" =
+      tool.status === "active" ? "inactive" : "active";
+    try {
+      const updated = await updateTool(tool.id, { status: next });
+      setExecutorTools((prev) => prev.map((t) => (t.id === tool.id ? updated : t)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return (
+    <>
+      <section>
+        <SectionHeader
+          title="Инструменты команды"
+          description="«Руки» агентов: NotebookLM для глубокого ресёрча, Web Search для свежих данных (появится позже). Активный инструмент попадает в Awareness промпта тех агентов, которым он привязан."
+        />
+        {loading && (
+          <div className="inline-flex items-center gap-2 text-sm text-ink-muted">
+            <Loader2 size={14} className="animate-spin" /> Загружаем инструменты…
+          </div>
+        )}
+        {error && (
+          <p className="mb-4 rounded-lg bg-accent-soft px-3 py-2 text-sm text-accent">
+            {error}
+          </p>
+        )}
+        {!loading && !error && executorTools.length === 0 && (
+          <p className="text-sm text-ink-muted">
+            Инструменты ещё не добавлены. Запусти{" "}
+            <code className="rounded bg-canvas px-1.5 py-0.5 font-mono text-xs">
+              npm run seed:tools
+            </code>{" "}
+            в backend, чтобы создать NotebookLM.
+          </p>
+        )}
+        {!loading && executorTools.length > 0 && (
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {executorTools.map((tool) => (
+              <ToolCard key={tool.id} tool={tool} onToggle={() => void toggleStatus(tool)} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <SectionHeader
+          title="Инструменты Системы"
+          description="Системные инструменты — не в Hands агента, а в инфраструктуре (парсинг баз, бэкенды). Идут отдельным реестром."
+        />
+        {/* Сессия 21: placeholder для Apify (Сессия 33). */}
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="rounded-2xl border border-dashed border-line bg-elevated/40 p-5 opacity-70">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-canvas text-ink-muted">
+                <Wrench size={18} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 className="font-display text-base font-semibold text-ink">
+                  Apify
+                </h3>
+                <p className="text-xs text-ink-muted">
+                  Парсинг каналов конкурентов в Instagram. Подключится в этапе 5.
+                </p>
+              </div>
+              <span className="text-xs text-ink-faint italic">этап 5</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function ToolCard({ tool, onToggle }: { tool: TeamTool; onToggle: () => void }) {
+  const isActive = tool.status === "active";
+  const dotClass =
+    tool.status === "active"
+      ? "bg-emerald-500"
+      : tool.status === "error"
+        ? "bg-rose-500"
+        : "bg-ink-faint";
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-line bg-elevated p-5 shadow-card">
+      <div className="flex items-start gap-3">
+        <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent">
+          <Wrench size={18} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-base font-semibold tracking-tight text-ink">
+            {tool.name}
+          </h3>
+          {tool.description && (
+            <p className="mt-0.5 text-sm leading-snug text-ink-muted">
+              {tool.description}
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 text-xs text-ink-muted">
+          <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} />
+          {tool.status === "active"
+            ? "Активен"
+            : tool.status === "error"
+              ? "Ошибка"
+              : "Выключен"}
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          {tool.manifest_path && (
+            <Link
+              href="/blog/team/instructions"
+              className="focus-ring inline-flex h-8 items-center gap-1 rounded-md border border-line bg-surface px-2.5 text-xs font-medium text-ink-muted transition hover:border-line-strong hover:text-ink"
+              title="Открыть методичку в разделе Инструкции"
+            >
+              Методичка <ExternalLink size={11} />
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={onToggle}
+            className={
+              "focus-ring inline-flex h-8 items-center rounded-md px-2.5 text-xs font-semibold transition " +
+              (isActive
+                ? "border border-line bg-surface text-ink-muted hover:border-line-strong hover:text-ink"
+                : "bg-accent text-surface shadow-card hover:bg-accent-hover")
+            }
+          >
+            {isActive ? "Выключить" : "Включить"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

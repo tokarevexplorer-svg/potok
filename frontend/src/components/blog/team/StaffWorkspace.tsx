@@ -19,6 +19,7 @@ import {
   type TeamAgent,
 } from "@/lib/team/teamAgentsService";
 import { fetchCandidates } from "@/lib/team/teamMemoryService";
+import { fetchAgentTools } from "@/lib/team/teamBackendClient";
 import TaskCreationModal from "./TaskCreationModal";
 
 // Сессия 9 этапа 2: страница раздела «Сотрудники».
@@ -87,9 +88,11 @@ function DepartmentBadge({ department }: { department: TeamAgent["department"] }
 
 function AgentCard({
   agent,
+  toolsCount,
   onLaunchTask,
 }: {
   agent: TeamAgent;
+  toolsCount?: number;
   onLaunchTask?: (agentId: string) => void;
 }) {
   const templatesCount = Array.isArray(agent.allowed_task_templates)
@@ -158,6 +161,22 @@ function AgentCard({
           >
             {templatesBadge.label}
           </span>
+          {/* Сессия 21: счётчик инструментов. Показываем только если данные
+              подтянулись (toolsCount !== undefined). */}
+          {typeof toolsCount === "number" && (
+            <span
+              className="inline-flex items-center rounded-full bg-canvas px-2 py-0.5 text-xs text-ink-muted"
+              title={
+                toolsCount === 0
+                  ? "Инструменты не привязаны — Awareness без секции «Инструменты»."
+                  : `Привязано инструментов: ${toolsCount}`
+              }
+            >
+              {toolsCount === 0
+                ? "Нет инструментов"
+                : `${toolsCount} ${pluralizeTools(toolsCount)}`}
+            </span>
+          )}
           {/* Сессия 19: «Поставить задачу» на карточке. Кнопка приподнята
               z-index'ом над <Link>-оверлеем, чтобы клик не уходил на ссылку. */}
           {onLaunchTask && agent.status !== "archived" && (
@@ -189,6 +208,15 @@ function pluralizeTemplates(n: number): string {
   return "шаблонов";
 }
 
+function pluralizeTools(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 14) return "инструментов";
+  if (mod10 === 1) return "инструмент";
+  if (mod10 >= 2 && mod10 <= 4) return "инструмента";
+  return "инструментов";
+}
+
 export default function StaffWorkspace() {
   const [statusFilter, setStatusFilter] = useState<AgentStatus | "all">("active");
   const [agents, setAgents] = useState<TeamAgent[]>([]);
@@ -200,6 +228,11 @@ export default function StaffWorkspace() {
   const [candidatesCount, setCandidatesCount] = useState<number | null>(null);
   // Сессия 19: модалка постановки задачи с preset'ом конкретного агента.
   const [launchForAgent, setLaunchForAgent] = useState<string | null>(null);
+  // Сессия 21: счётчик инструментов на каждой карточке (опц., если запрос
+  // упал — карточка просто не покажет бейдж).
+  const [toolsCountByAgent, setToolsCountByAgent] = useState<Map<string, number>>(
+    new Map(),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -237,6 +270,34 @@ export default function StaffWorkspace() {
       cancelled = true;
     };
   }, []);
+
+  // Сессия 21: подтягиваем счётчик инструментов на каждого активного агента.
+  // Запросы параллельные; провалившиеся просто не дают бейдж.
+  useEffect(() => {
+    if (agents.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        agents.map(async (a) => {
+          try {
+            const tools = await fetchAgentTools(a.id);
+            return [a.id, tools.length] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      if (cancelled) return;
+      const next = new Map<string, number>();
+      for (const entry of entries) {
+        if (entry) next.set(entry[0], entry[1]);
+      }
+      setToolsCountByAgent(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agents]);
 
   const isEmpty = useMemo(() => !loading && !error && agents.length === 0, [loading, error, agents.length]);
 
@@ -327,6 +388,7 @@ export default function StaffWorkspace() {
             <AgentCard
               key={agent.id}
               agent={agent}
+              toolsCount={toolsCountByAgent.get(agent.id)}
               onLaunchTask={(id) => setLaunchForAgent(id)}
             />
           ))}

@@ -38,6 +38,10 @@ const TEMPLATES_FOLDER = "task-templates";
 // Storage отбивал её ключи как `Invalid key`, и Role-файлы вообще не
 // сохранялись (см. agentService.rolePath).
 const ROLES_FOLDER = "roles";
+// Сессия 21 этапа 2: методички инструментов команды
+// (tools/<tool-id>.md). Загружаются seed-скриптом seed-tool-manifests,
+// редактируются здесь же.
+const TOOLS_FOLDER = "tools";
 
 // Маппинг latin-slug → человекочитаемое название для UI. В Storage файл
 // называется `mission.md`, но в интерфейсе показываем «Миссия».
@@ -49,6 +53,9 @@ const FILE_LABELS: Record<string, string> = {
   "research-direct": "Прямое исследование",
   "write-text": "Написание текста",
   "edit-text-fragments": "Правка фрагментов",
+  // Сессия 21: имена инструментов в человекочитаемом виде.
+  notebooklm: "NotebookLM",
+  "web-search": "Web Search",
 };
 
 function displayLabel(slug: string): string {
@@ -99,13 +106,15 @@ export interface InstructionsTree {
   strategy: string[];
   roles: string[];
   templates: string[];
+  // Сессия 21: методички инструментов.
+  tools: string[];
 }
 
 interface InstructionsWorkspaceProps {
   initialTree: InstructionsTree;
 }
 
-type ActiveKind = "strategy" | "template" | "role";
+type ActiveKind = "strategy" | "template" | "role" | "tool";
 interface ActiveFile {
   kind: ActiveKind;
   /** latin-slug файла без расширения .md (то же, что имя в Storage) */
@@ -143,7 +152,7 @@ function SectionGrid({
   onSelect: (file: ActiveFile) => void;
 }) {
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
       <SectionBlock
         title="Стратегия команды"
         description="Миссия и Цели на период — подмешиваются во все промпты как кешируемые блоки."
@@ -197,6 +206,28 @@ function SectionGrid({
               slug,
               path: `${TEMPLATES_FOLDER}/${slug}.md`,
               kind: "template" as ActiveKind,
+            }))}
+            activePath={active?.path ?? null}
+            onSelect={onSelect}
+          />
+        )}
+      </SectionBlock>
+
+      {/* Сессия 21: методички инструментов. Содержимое каждого файла идёт
+          в третью секцию Awareness промпта тех агентов, которым этот
+          инструмент привязан. Активируется в Админке → Инструменты команды. */}
+      <SectionBlock
+        title="Инструменты"
+        description="Методички исполняемых инструментов агентов. Подмешиваются в Awareness промпта."
+      >
+        {tree.tools.length === 0 ? (
+          <EmptyHint text="Методички ещё не загружены. Запусти `npm run seed:tools` в backend." />
+        ) : (
+          <FileList
+            items={tree.tools.map((slug) => ({
+              slug,
+              path: `${TOOLS_FOLDER}/${slug}.md`,
+              kind: "tool" as ActiveKind,
             }))}
             activePath={active?.path ?? null}
             onSelect={onSelect}
@@ -384,7 +415,9 @@ function FileEditorPanel({
               ? "Шаблон задачи"
               : file.kind === "role"
                 ? "Должностная инструкция"
-                : "Стратегия команды"}
+                : file.kind === "tool"
+                  ? "Методичка инструмента"
+                  : "Стратегия команды"}
           </p>
           <h3 className="truncate text-base font-semibold text-ink">{displayLabel(file.slug)}</h3>
         </div>

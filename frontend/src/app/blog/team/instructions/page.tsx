@@ -41,16 +41,17 @@ async function listFolder(folder: string): Promise<string[]> {
 const STRATEGY_REQUIRED = ["mission", "goals"];
 
 async function loadInstructionsTree(): Promise<InstructionsTree> {
-  const [strategyFound, roles, templates] = await Promise.all([
+  const [strategyFound, roles, templates, tools] = await Promise.all([
     listFolder("strategy"),
     listFolder("roles"),
     listFolder("task-templates"),
+    listFolder("tools"),
   ]);
   const extra = strategyFound
     .filter((slug) => !STRATEGY_REQUIRED.includes(slug))
     .sort();
   const strategy = [...STRATEGY_REQUIRED, ...extra];
-  return { strategy, roles, templates };
+  return { strategy, roles, templates, tools };
 }
 
 export default async function TeamInstructionsPage() {

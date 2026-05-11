@@ -65,9 +65,13 @@ import {
   type TeamMemoryItem,
 } from "@/lib/team/teamMemoryService";
 import {
+  fetchAgentTools,
   fetchFeedbackEpisodes,
   fetchModelsConfig,
+  fetchTools,
+  setAgentTools,
   type FeedbackEpisode,
+  type TeamTool,
 } from "@/lib/team/teamBackendClient";
 import TaskCreationModal from "./TaskCreationModal";
 
@@ -1345,10 +1349,159 @@ function AccessSection({
       </p>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <PlaceholderBlock title="Базы данных" />
-        <PlaceholderBlock title="Доступные инструменты" />
+        <ToolsAccessBlock agentId={agent.id} />
         <TaskTemplatesBlock agent={agent} onUpdated={onUpdated} />
       </div>
     </section>
+  );
+}
+
+// Сессия 21: рабочий мультиселект инструментов агента.
+//
+// Тащит список executor-инструментов команды и текущий набор привязок
+// агента; чекбоксы переключают локальный state, «Сохранить» дёргает
+// setAgentTools (бэкенд сам инвалидирует prompt-кеш).
+function ToolsAccessBlock({ agentId }: { agentId: string }) {
+  const [allTools, setAllTools] = useState<TeamTool[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [initial, setInitial] = useState<Set<string>>(new Set());
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setErr(null);
+    Promise.all([fetchTools("executor"), fetchAgentTools(agentId)])
+      .then(([tools, current]) => {
+        if (cancelled) return;
+        setAllTools(tools);
+        const ids = new Set(current.map((t) => t.id));
+        setSelected(ids);
+        setInitial(new Set(ids));
+        setLoaded(true);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setErr(e instanceof Error ? e.message : String(e));
+        setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId]);
+
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await setAgentTools(agentId, [...selected]);
+      setInitial(new Set(selected));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const dirty =
+    initial.size !== selected.size ||
+    [...initial].some((id) => !selected.has(id));
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line bg-canvas px-3 py-3">
+      <span className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
+        Доступные инструменты
+      </span>
+      {!loaded ? (
+        <p className="inline-flex items-center gap-1.5 text-[11px] text-ink-muted">
+          <Loader2 size={11} className="animate-spin" /> Загрузка…
+        </p>
+      ) : allTools.length === 0 ? (
+        <p className="text-[11px] text-ink-faint">
+          Инструменты не настроены. Добавь в Админке → Инструменты команды.
+        </p>
+      ) : (
+        <>
+          <p className="text-[11px] text-ink-faint">
+            {selected.size === 0
+              ? "Нет привязанных инструментов — Awareness без секции «Инструменты»."
+              : `Привязано: ${selected.size} из ${allTools.length}.`}
+          </p>
+          <ul className="flex flex-col gap-1.5">
+            {allTools.map((tool) => {
+              const checked = selected.has(tool.id);
+              const inactive = tool.status !== "active";
+              return (
+                <li key={tool.id}>
+                  <label
+                    className="flex cursor-pointer items-center gap-2 text-xs text-ink"
+                    title={
+                      inactive
+                        ? "Инструмент выключен в Админке — даже если привязан, не попадает в Awareness."
+                        : undefined
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggle(tool.id)}
+                      className="accent-accent"
+                      disabled={saving}
+                    />
+                    <span className={inactive ? "text-ink-muted" : ""}>
+                      {tool.name}
+                      {inactive && (
+                        <span className="ml-1 text-[10px] italic text-ink-faint">
+                          (выключен)
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          {err && (
+            <p className="rounded-md bg-accent-soft px-2 py-1 text-[11px] text-accent">
+              {err}
+            </p>
+          )}
+          <div className="flex items-center justify-end gap-2">
+            {dirty && (
+              <button
+                type="button"
+                onClick={() => setSelected(new Set(initial))}
+                disabled={saving}
+                className="focus-ring inline-flex h-8 items-center rounded-md border border-line bg-surface px-2.5 text-xs font-medium text-ink-muted transition hover:text-ink disabled:opacity-50"
+              >
+                Сбросить
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={save}
+              disabled={!dirty || saving}
+              className="focus-ring inline-flex h-8 items-center gap-1 rounded-md bg-accent px-2.5 text-xs font-semibold text-surface shadow-card transition hover:bg-accent-hover disabled:opacity-50"
+            >
+              {saving ? <Loader2 size={12} className="animate-spin" /> : null}
+              Сохранить
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
