@@ -590,3 +590,71 @@ URL: панель предложений на дашборде.
 - Предложение исчезает из списка.
 - В логе задач на дашборде появляется новая задача с `agent_id` исходного агента; `user_input` = `payload.what`.
 - В `team_proposals` строка получает `status='accepted'`, `resulting_task_id`.
+
+---
+
+## Сессия 24 — Событийные триггеры и cron автономности
+
+### ✅ Выполнено (автоматически)
+- Миграция `0027_team_trigger_state.sql` накачена (`supabase db push` → up to date).
+- `npm install node-cron` — пакет в `dependencies`.
+- Backend: `node --check` прошёл для `triggerService.js`, `cron/autonomyCron.js`, `index.js`, `scripts/run-triggers.js`.
+- Frontend: `next build` — Compiled + типы. Pre-existing fail на collect-page-data /blog/references.
+
+### ⚠️ Требует ручной проверки
+
+#### Сессия 24 — event-триггеры через ручной CLI
+URL: терминал backend.
+
+Что сделать:
+1. Включить тумблер «Проактивность команды» в Админке (или SQL).
+2. У тестового агента поставить `autonomy_level=1`.
+3. Создать одну запись `team_feedback_episodes` с `agent_id=<agent>, score=2, raw_input='тест'` (через UI оценки задачи в дашборде — поставить «2» на завершённую задачу этого агента).
+4. В терминале:
+   ```
+   cd backend
+   npm run triggers:run
+   ```
+
+Что должно произойти:
+- В логе для агента появится строка `[<id>/low_score] triggered → <phase>` (либо `proposal_created`, либо `cooldown`, либо `skip` с reason).
+- Запись `last_checked_at` в `team_trigger_state` для пары (`agent_id`, `'low_score'`) обновится.
+- При повторном запуске сразу — `[<id>/low_score] skip: no_new_low_score` (новых событий нет, маркер уже после старой записи) или `skip: cooldown` (если предложение успело создаться).
+
+#### Сессия 24 — goals_changed
+URL: терминал.
+
+Что сделать:
+1. На странице `/blog/team/instructions` отредактировать «Цели на период» — изменить длину текста.
+2. Запустить `npm run triggers:run`.
+
+Что должно произойти:
+- Первый прогон после редактирования (если до этого был хотя бы один тик) — `[<id>/goals_changed] triggered`.
+- Второй прогон сразу после — `skip: unchanged` или `skip: cooldown`.
+- На самом первом прогоне когда-либо — `skip: initial_fingerprint` (просто запоминает текущую длину).
+
+#### Сессия 24 — auto-cron в Railway
+URL: логи Railway.
+
+Что сделать:
+1. После деплоя посмотреть startup-логи backend.
+2. Должно быть `[autonomy-cron] schedules registered: poll every 6h, weekly at 10:00 UTC, expire at 03:00 UTC`.
+
+Что должно произойти:
+- При выключенном тумблере каждые 6 часов в логе: `[autonomy-cron] poll: autonomy disabled — skip`.
+- При включённом — `[autonomy-cron] poll: checked N agents, triggered M`.
+
+#### Сессия 24 — expireOldProposals
+URL: SQL.
+
+Что сделать:
+1. Найти pending-предложение и руками сместить `created_at` на 15 дней назад:
+   ```sql
+   UPDATE team_proposals SET created_at = NOW() - INTERVAL '15 days'
+   WHERE id = '<id>';
+   ```
+2. Запустить `npm run triggers:run`.
+
+Что должно произойти:
+- В логе `expire: переведено в expired: 1.`
+- В `team_proposals` запись получает `status='expired'`, `decided_at=now()`.
