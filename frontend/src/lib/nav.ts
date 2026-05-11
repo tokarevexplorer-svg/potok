@@ -2,10 +2,12 @@ import type { LucideIcon } from "lucide-react";
 import {
   BookmarkCheck,
   BookOpen,
+  Database,
   Folder,
-  ListTodo,
+  LayoutDashboard,
   Newspaper,
   Settings,
+  ShieldCheck,
   Users,
   Wrench,
 } from "lucide-react";
@@ -16,12 +18,16 @@ export interface NavLeaf {
   href?: string;
   icon?: LucideIcon;
   comingSoon?: boolean;
+  // Приглушённый стиль и без active-подсветки — для пунктов «ещё не сейчас».
+  disabled?: boolean;
 }
 
 export interface NavGroup {
   id: string;
   label: string;
   icon: LucideIcon;
+  // Если href задан — заголовок группы кликабелен и ведёт на этот маршрут.
+  href?: string;
   items: NavLeaf[];
 }
 
@@ -33,7 +39,7 @@ export interface NavSection {
 }
 
 // Навигация расширяема: новый раздел — новый элемент массива.
-// Новая иерархия: секция (Блог) → группы (Инструменты, Команда) → пункты.
+// Иерархия: секция (Блог) → группы (Инструменты, Команда, Базы) → пункты.
 export const navSections: NavSection[] = [
   {
     id: "blog",
@@ -58,18 +64,23 @@ export const navSections: NavSection[] = [
         icon: Users,
         items: [
           {
-            label: "Инструменты",
-            href: "/blog/team/tools",
-            icon: ListTodo,
+            label: "Дашборд",
+            href: "/blog/team/dashboard",
+            icon: LayoutDashboard,
           },
           {
-            label: "Промпты",
-            href: "/blog/team/prompts",
+            label: "Сотрудники",
+            href: "/blog/team/staff",
+            icon: Users,
+          },
+          {
+            label: "Инструкции",
+            href: "/blog/team/instructions",
             icon: BookOpen,
           },
           {
-            label: "База",
-            href: "/blog/team/database",
+            label: "Артефакты",
+            href: "/blog/team/artifacts",
             icon: Folder,
           },
           {
@@ -77,7 +88,20 @@ export const navSections: NavSection[] = [
             href: "/blog/team/admin",
             icon: Settings,
           },
+          {
+            label: "Постпродакшн",
+            href: "/blog/team/postproduction",
+            icon: ShieldCheck,
+            disabled: true,
+          },
         ],
+      },
+      {
+        id: "databases",
+        label: "Базы",
+        icon: Database,
+        href: "/blog/databases",
+        items: [],
       },
     ],
   },

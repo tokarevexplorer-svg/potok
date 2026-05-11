@@ -104,13 +104,13 @@ export default async function TeamPage() {
             }
           />
           <TeamSectionCard
-            href="/blog/team/prompts"
+            href="/blog/team/instructions"
             icon={BookOpen}
             label="Промпты"
             description="Библиотека шаблонов: 5 типов задач, переменные, разделение system/user, версии."
           />
           <TeamSectionCard
-            href="/blog/team/database"
+            href="/blog/team/artifacts"
             icon={Folder}
             label="База"
             description="Артефакты команды: исследования, тексты по точкам, идеи, источники, контекст блога."

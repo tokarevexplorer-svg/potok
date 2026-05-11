@@ -47,7 +47,7 @@ interface DatabaseWorkspaceProps {
   initialConcept: string | null;
 }
 
-// Корень страницы /blog/team/database. Шесть табов:
+// Корень страницы /blog/team/artifacts. Шесть табов:
 //   • Контекст / Концепция — большие markdown-файлы в team-database/ (корень)
 //   • Исследования / Тексты / Идеи / Источники — папки с файлами,
 //     управляются через ArtifactBrowser.

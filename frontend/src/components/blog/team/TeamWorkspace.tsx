@@ -13,7 +13,7 @@ interface TeamWorkspaceProps {
   initialTasks: TeamTask[];
 }
 
-// Главный клиентский компонент страницы /blog/team/tools.
+// Главный клиентский компонент страницы /blog/team/dashboard.
 //
 // Архитектурно копирует AnalystWorkspace Потока:
 //   • useState инициализируется из props (server component передаёт первый

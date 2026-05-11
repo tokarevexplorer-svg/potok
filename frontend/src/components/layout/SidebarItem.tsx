@@ -32,7 +32,9 @@ export default function SidebarItem({ item, onNavigate }: SidebarItemProps) {
     );
   }
 
-  const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+  const active =
+    !item.disabled &&
+    (pathname === item.href || pathname.startsWith(`${item.href}/`));
 
   return (
     <Link
@@ -42,7 +44,8 @@ export default function SidebarItem({ item, onNavigate }: SidebarItemProps) {
         "focus-ring group flex min-h-[44px] items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
         active
           ? "bg-surface text-ink shadow-card"
-          : "text-ink-muted hover:bg-surface/60 hover:text-ink"
+          : "text-ink-muted hover:bg-surface/60 hover:text-ink",
+        item.disabled && "opacity-50 hover:opacity-60"
       )}
     >
       {Icon && (
