@@ -30,6 +30,7 @@ import { recordCall } from "../src/services/team/costTracker.js";
 import { getApiKey } from "../src/services/team/keysService.js";
 import { listAgents, getAgent } from "../src/services/team/agentService.js";
 import { getRulesForAgent } from "../src/services/team/memoryService.js";
+import { createNotification } from "../src/services/team/notificationsService.js";
 
 const MEMORY_TABLE = "team_agent_memory";
 const EPISODES_TABLE = "team_feedback_episodes";
@@ -294,6 +295,23 @@ async function processAgent(agent) {
       const saved = await insertCandidate(agent.id, rule, filtered);
       created += 1;
       console.log(`[${agent.id}] + кандидат ${saved.id}: «${rule}»`);
+      // Сессия 18: нотификация в Inbox — один кандидат = одна нотификация.
+      try {
+        await createNotification({
+          type: "rule_candidate",
+          title: `Новый кандидат в правила для «${agent.display_name}»`,
+          description: rule.length > 120 ? rule.slice(0, 117) + "…" : rule,
+          agent_id: agent.id,
+          related_entity_id: saved.id,
+          related_entity_type: "memory",
+          link: "/blog/team/staff/candidates",
+        });
+      } catch (notifErr) {
+        console.warn(
+          `[${agent.id}] createNotification(rule_candidate) failed:`,
+          notifErr?.message ?? notifErr,
+        );
+      }
     } catch (err) {
       console.error(`[${agent.id}] insert failed: ${err?.message ?? err}`);
     }

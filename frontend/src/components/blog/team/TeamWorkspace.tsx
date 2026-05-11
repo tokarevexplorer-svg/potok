@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bell, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import type { TeamTask } from "@/lib/team/types";
 import { fetchTeamTasksFromBrowser } from "@/lib/team/teamTasksService";
 import { listAgents, type TeamAgent } from "@/lib/team/teamAgentsService";
@@ -10,6 +10,7 @@ import StrategicBelt from "./StrategicBelt";
 import ToolsHeader from "./ToolsHeader";
 import ActionGrid from "./ActionGrid";
 import ActiveAgentsRow from "./ActiveAgentsRow";
+import InboxBlock from "./InboxBlock";
 import KanbanLog from "./KanbanLog";
 import TaskLogFilters, {
   applyTaskFilters,
@@ -267,24 +268,8 @@ export default function TeamWorkspace({ initialTasks }: TeamWorkspaceProps) {
         )}
       </div>
 
-      {/* Сессия 16: Inbox-заглушка. Реальное наполнение — в Сессии 18 (пункт 14). */}
-      <section className="rounded-2xl border border-dashed border-line bg-elevated/30 px-5 py-6">
-        <div className="flex items-start gap-3">
-          <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-canvas text-ink-muted">
-            <Bell size={16} />
-          </span>
-          <div className="flex flex-col gap-1">
-            <h3 className="font-display text-base font-semibold text-ink">
-              Требует внимания
-            </h3>
-            <p className="text-sm text-ink-muted">
-              Inbox внимания появится в следующей сессии: оценки задач,
-              кандидаты в правила, предложения handoff и предложения задач
-              от агентов будут собираться сюда.
-            </p>
-          </div>
-        </div>
-      </section>
+      {/* Сессия 18: Inbox внимания с реальными данными. */}
+      <InboxBlock />
 
       {runner && (
         <TaskRunnerModal

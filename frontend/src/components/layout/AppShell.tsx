@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import Sidebar from "./Sidebar";
 import MobileTopbar from "./MobileTopbar";
+import NotificationsBell from "./NotificationsBell";
 
 const PIN_STORAGE_KEY = "potok:sidebar-pinned";
 
@@ -100,6 +101,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+
+      {/* Сессия 18: сквозной колокольчик с Inbox. Виден из любой страницы
+          раздела (на /auth/* AppShell вообще не оборачивает). */}
+      <NotificationsBell />
     </div>
   );
 }

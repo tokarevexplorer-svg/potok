@@ -39,6 +39,7 @@ import {
 } from "./taskHandlers.js";
 import { enqueueTeamTask } from "../../queue/teamWorkerPool.js";
 import { parseSuggestedNextSteps } from "./handoffParser.js";
+import { createNotification } from "./notificationsService.js";
 
 const DATABASE_BUCKET = "team-database";
 const PRESETS_PATH = "presets.json";
@@ -448,6 +449,52 @@ export async function runTaskInBackground(taskId) {
     if (outcome.prompt) update.prompt = outcome.prompt;
 
     await appendUpdate(taskId, update);
+
+    // Сессия 18: нотификации Inbox внимания. Создаём после успешного
+    // обновления статуса — иначе можно получить notification на «done»,
+    // который потом откатится по rate limit (теоретически).
+    // Завершение задачи — повод для оценки (см. Сессия 14, блок Оценить).
+    try {
+      const taskTitle = task.title || TASK_TITLES[task.type] || task.type;
+      await createNotification({
+        type: "task_awaiting_review",
+        title: `Задача «${taskTitle}» ждёт оценки`,
+        description: null,
+        agent_id: task.agent_id ?? null,
+        related_entity_id: taskId,
+        related_entity_type: "task",
+        link: "/blog/team/dashboard",
+      });
+    } catch (err) {
+      console.warn(
+        `[taskRunner] createNotification(task_awaiting_review) failed for ${taskId}:`,
+        err?.message ?? err,
+      );
+    }
+
+    // Если агент в финале ответа предложил handoff — отдельная нотификация
+    // на каждое предложение нам не нужна (засорит Inbox); делаем одну
+    // общую с count.
+    if (suggestedSteps.length > 0) {
+      try {
+        const taskTitle = task.title || TASK_TITLES[task.type] || task.type;
+        const names = suggestedSteps.map((s) => s.agent_name).join(", ");
+        await createNotification({
+          type: "handoff_suggestion",
+          title: `Агент предлагает передать задачу «${taskTitle}» дальше`,
+          description: `Кому: ${names}`,
+          agent_id: task.agent_id ?? null,
+          related_entity_id: taskId,
+          related_entity_type: "task",
+          link: "/blog/team/dashboard",
+        });
+      } catch (err) {
+        console.warn(
+          `[taskRunner] createNotification(handoff_suggestion) failed for ${taskId}:`,
+          err?.message ?? err,
+        );
+      }
+    }
   } catch (err) {
     const message = err?.message ?? String(err);
     const provider = task?.provider || "unknown";
