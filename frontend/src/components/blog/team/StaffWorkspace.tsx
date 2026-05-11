@@ -338,6 +338,16 @@ export default function StaffWorkspace() {
               </span>
             )}
           </Link>
+          {/* Сессия 27: ссылка на экран кандидатов в навыки. Без счётчика
+              на этом этапе — данные приходят через тот же fetchCandidates,
+              а отдельный poll skill-кандидатов добавим, если будет нужно. */}
+          <Link
+            href="/blog/team/staff/skill-candidates"
+            className="focus-ring inline-flex items-center gap-2 rounded-xl border border-line bg-surface px-4 py-2 text-sm font-medium text-ink-muted shadow-card transition hover:border-line-strong hover:text-ink"
+            title="Извлечённые из задач паттерны на одобрение"
+          >
+            🎓 Кандидаты в навыки
+          </Link>
           <Link
             href="/blog/team/staff/create"
             className="focus-ring inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-surface shadow-card transition hover:bg-accent-hover"

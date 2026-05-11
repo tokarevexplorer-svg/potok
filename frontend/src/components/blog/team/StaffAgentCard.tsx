@@ -65,14 +65,19 @@ import {
   type TeamMemoryItem,
 } from "@/lib/team/teamMemoryService";
 import {
+  archiveAgentSkill,
+  deleteAgentSkill,
   fetchAgentDiary,
+  fetchAgentSkills,
   fetchAgentTools,
   fetchFeedbackEpisodes,
   fetchModelsConfig,
   fetchTools,
+  pinAgentSkill,
   setAgentTools,
   type AgentDiaryEntry,
   type FeedbackEpisode,
+  type TeamSkill,
   type TeamTool,
 } from "@/lib/team/teamBackendClient";
 import TaskCreationModal from "./TaskCreationModal";
@@ -908,7 +913,7 @@ function MemorySection({
   agentId: string;
   autonomyLevel: number;
 }) {
-  type Tab = "rules" | "episodes" | "diary";
+  type Tab = "rules" | "episodes" | "skills" | "diary";
   const [tab, setTab] = useState<Tab>("rules");
   // Сессия 23: вкладка «Дневник» доступна только для агентов с
   // autonomy_level>=1 (иначе записей нет — триггеры не запускаются).
@@ -916,6 +921,7 @@ function MemorySection({
   const tabs: { key: Tab; label: string }[] = [
     { key: "rules", label: "Правила" },
     { key: "episodes", label: "Эпизоды" },
+    { key: "skills", label: "Навыки" },
   ];
   if (showDiary) tabs.push({ key: "diary", label: "Дневник" });
 
@@ -955,8 +961,231 @@ function MemorySection({
 
       {tab === "rules" && <RulesTab agentId={agentId} />}
       {tab === "episodes" && <EpisodesTab agentId={agentId} />}
+      {tab === "skills" && <SkillsTab agentId={agentId} />}
       {tab === "diary" && showDiary && <DiaryTab agentId={agentId} />}
     </section>
+  );
+}
+
+// Сессия 25/27: вкладка «Навыки» — список skill-файлов из Storage с
+// действиями pin/unpin, archive, delete. Создание новых пока — через
+// принятие кандидата на /blog/team/staff/skill-candidates.
+function SkillsTab({ agentId }: { agentId: string }) {
+  const [skills, setSkills] = useState<TeamSkill[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoaded(false);
+    setErr(null);
+    fetchAgentSkills(agentId, {
+      statuses: showArchived ? "all" : ["active", "pinned"],
+    })
+      .then((items) => {
+        if (cancelled) return;
+        setSkills(items);
+        setLoaded(true);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setErr(e instanceof Error ? e.message : String(e));
+        setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, showArchived]);
+
+  async function togglePin(skill: TeamSkill) {
+    if (busy) return;
+    setBusy(skill.slug);
+    setErr(null);
+    try {
+      // pin переключает active ↔ pinned. Для archived — сначала активируем.
+      const target = skill.status === "pinned" ? "active" : "pinned";
+      if (target === "pinned") {
+        await pinAgentSkill(agentId, skill.slug);
+      } else {
+        // Снимаем pin: меняем status на active через PUT (нет отдельного
+        // unpin-эндпоинта — Сессия 25 не предусмотрела).
+        const upd = await (
+          await import("@/lib/team/teamBackendClient")
+        ).updateAgentSkill(agentId, skill.slug, { status: "active" });
+        setSkills((prev) => prev.map((s) => (s.slug === skill.slug ? upd : s)));
+        return;
+      }
+      const upd = await fetchAgentSkills(agentId, {
+        statuses: showArchived ? "all" : ["active", "pinned"],
+      });
+      setSkills(upd);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function archive(skill: TeamSkill) {
+    if (busy) return;
+    setBusy(skill.slug);
+    setErr(null);
+    try {
+      await archiveAgentSkill(agentId, skill.slug);
+      setSkills((prev) =>
+        showArchived
+          ? prev.map((s) => (s.slug === skill.slug ? { ...s, status: "archived" as const } : s))
+          : prev.filter((s) => s.slug !== skill.slug),
+      );
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove(skill: TeamSkill) {
+    if (busy) return;
+    if (!window.confirm(`Удалить навык «${skill.skill_name}» безвозвратно?`)) return;
+    setBusy(skill.slug);
+    setErr(null);
+    try {
+      await deleteAgentSkill(agentId, skill.slug);
+      setSkills((prev) => prev.filter((s) => s.slug !== skill.slug));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!loaded) {
+    return (
+      <div className="inline-flex items-center gap-2 text-sm text-ink-muted">
+        <Loader2 size={14} className="animate-spin" /> Загружаем навыки…
+      </div>
+    );
+  }
+  if (err) {
+    return (
+      <p className="inline-flex items-center gap-1.5 text-xs text-rose-700">
+        <AlertTriangle size={12} /> {err}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-ink-muted">
+          Активные и закреплённые навыки идут в слой Skills промпта. Новые
+          создаются на странице{" "}
+          <Link
+            href="/blog/team/staff/skill-candidates"
+            className="text-accent hover:underline"
+          >
+            Кандидаты в навыки
+          </Link>{" "}
+          (или вручную через API).
+        </p>
+        <label className="inline-flex items-center gap-1.5 text-xs text-ink-muted">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+            className="accent-accent"
+          />
+          Показать архив
+        </label>
+      </div>
+      {skills.length === 0 ? (
+        <p className="text-sm text-ink-muted">
+          {showArchived
+            ? "Навыков нет — ни активных, ни архивированных."
+            : "Активных навыков пока нет."}
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {skills.map((s) => (
+            <li
+              key={s.slug}
+              className="flex flex-col gap-2 rounded-xl border border-line bg-canvas p-3"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h4 className="font-display text-sm font-semibold text-ink">
+                    {s.skill_name}
+                  </h4>
+                  <span
+                    className={
+                      "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium " +
+                      (s.status === "pinned"
+                        ? "bg-accent text-surface"
+                        : s.status === "archived"
+                          ? "bg-line text-ink-muted"
+                          : "bg-emerald-100 text-emerald-800")
+                    }
+                  >
+                    {s.status === "pinned"
+                      ? "📌 закреплён"
+                      : s.status === "archived"
+                        ? "в архиве"
+                        : "активен"}
+                  </span>
+                  <span className="text-[11px] text-ink-faint">
+                    исп.: {s.use_count}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {s.status !== "archived" && (
+                    <button
+                      type="button"
+                      onClick={() => void togglePin(s)}
+                      disabled={busy === s.slug}
+                      className="focus-ring inline-flex h-7 items-center gap-1 rounded-md border border-line bg-surface px-2 text-[11px] text-ink-muted transition hover:text-ink disabled:opacity-50"
+                    >
+                      {s.status === "pinned" ? "Открепить" : "Закрепить"}
+                    </button>
+                  )}
+                  {s.status !== "archived" && (
+                    <button
+                      type="button"
+                      onClick={() => void archive(s)}
+                      disabled={busy === s.slug}
+                      className="focus-ring inline-flex h-7 items-center gap-1 rounded-md border border-line bg-surface px-2 text-[11px] text-ink-muted transition hover:text-ink disabled:opacity-50"
+                    >
+                      Архив
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void remove(s)}
+                    disabled={busy === s.slug}
+                    className="focus-ring inline-flex h-7 items-center gap-1 rounded-md border border-line bg-surface px-2 text-[11px] text-ink-muted transition hover:border-rose-300 hover:text-rose-700 disabled:opacity-50"
+                  >
+                    Удалить
+                  </button>
+                </div>
+              </div>
+              {s.when_to_apply && (
+                <p className="text-xs text-ink-muted">
+                  <span className="font-medium text-ink">Когда:</span>{" "}
+                  {s.when_to_apply}
+                </p>
+              )}
+              {s.what_to_do && (
+                <p className="text-xs text-ink-muted">
+                  <span className="font-medium text-ink">Что:</span>{" "}
+                  {s.what_to_do}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

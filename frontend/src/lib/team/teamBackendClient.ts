@@ -719,6 +719,86 @@ export async function deleteAgentSkill(agentId: string, slug: string): Promise<v
   );
 }
 
+// =========================================================================
+// Сессия 26/27: кандидаты в навыки (team_skill_candidates)
+// =========================================================================
+
+export interface SkillCandidateAgent {
+  id: string;
+  display_name: string;
+  role_title: string | null;
+  avatar_url: string | null;
+  department: string | null;
+  status: string;
+}
+
+export interface SkillCandidate {
+  id: string;
+  agent_id: string;
+  task_id: string | null;
+  score: number | null;
+  skill_name: string;
+  when_to_apply: string;
+  what_to_do: string;
+  why_it_works: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  vlad_comment: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+  agent: SkillCandidateAgent;
+}
+
+export async function fetchSkillCandidates(
+  options: {
+    status?: "pending" | "approved" | "rejected" | "expired" | "all";
+    agentId?: string;
+  } = {},
+): Promise<SkillCandidate[]> {
+  const qs = new URLSearchParams();
+  qs.set("status", options.status ?? "pending");
+  if (options.agentId) qs.set("agent_id", options.agentId);
+  const data = await backendFetch(
+    `/api/team/skill-candidates?${qs.toString()}`,
+    { method: "GET" },
+  );
+  return ((data ?? {}) as { candidates?: SkillCandidate[] }).candidates ?? [];
+}
+
+export async function approveSkillCandidate(
+  id: string,
+  overrides: {
+    skill_name?: string;
+    when_to_apply?: string;
+    what_to_do?: string;
+    why_it_works?: string;
+  } = {},
+): Promise<{ candidate: SkillCandidate; skill: TeamSkill }> {
+  const data = await backendFetch(
+    `/api/team/skill-candidates/${encodeURIComponent(id)}/approve`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(overrides),
+    },
+  );
+  return data as { candidate: SkillCandidate; skill: TeamSkill };
+}
+
+export async function rejectSkillCandidate(
+  id: string,
+  vladComment?: string,
+): Promise<SkillCandidate> {
+  const data = await backendFetch(
+    `/api/team/skill-candidates/${encodeURIComponent(id)}/reject`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(vladComment ? { vlad_comment: vladComment } : {}),
+    },
+  );
+  return ((data ?? {}) as { candidate?: SkillCandidate }).candidate as SkillCandidate;
+}
+
 export interface AppendQuestionResult {
   success: boolean;
   appended_text: string;
