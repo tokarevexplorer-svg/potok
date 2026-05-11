@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Archive, Lightbulb, Loader2, Plus, User } from "lucide-react";
+import {
+  AlertTriangle,
+  Archive,
+  Lightbulb,
+  Loader2,
+  Plus,
+  Sparkles,
+  User,
+} from "lucide-react";
 import {
   DEPARTMENT_LABELS,
   listAgents,
@@ -11,6 +19,7 @@ import {
   type TeamAgent,
 } from "@/lib/team/teamAgentsService";
 import { fetchCandidates } from "@/lib/team/teamMemoryService";
+import TaskCreationModal from "./TaskCreationModal";
 
 // Сессия 9 этапа 2: страница раздела «Сотрудники».
 //
@@ -76,26 +85,45 @@ function DepartmentBadge({ department }: { department: TeamAgent["department"] }
   );
 }
 
-function AgentCard({ agent }: { agent: TeamAgent }) {
+function AgentCard({
+  agent,
+  onLaunchTask,
+}: {
+  agent: TeamAgent;
+  onLaunchTask?: (agentId: string) => void;
+}) {
+  const templatesCount = Array.isArray(agent.allowed_task_templates)
+    ? agent.allowed_task_templates.length
+    : 0;
+  // Сессия 19: бейдж шаблонов. Пустой allowed = «все» (на бэкенде валидация
+  // пропускает). 0 == «все», но Влад не различит «не настроил» и «специально
+  // все»; UI явно говорит «Все шаблоны» для нулевого случая.
+  const templatesBadge =
+    templatesCount === 0
+      ? { label: "Все шаблоны", warn: false }
+      : { label: `${templatesCount} ${pluralizeTemplates(templatesCount)}`, warn: false };
+
   return (
-    <Link
-      href={`/blog/team/staff/${encodeURIComponent(agent.id)}`}
-      className="focus-ring group flex items-start gap-4 rounded-2xl border border-line bg-elevated p-5 shadow-card transition hover:border-line-strong hover:shadow-lg"
-    >
+    <div className="group relative flex items-start gap-4 rounded-2xl border border-line bg-elevated p-5 shadow-card transition hover:border-line-strong hover:shadow-lg">
+      <Link
+        href={`/blog/team/staff/${encodeURIComponent(agent.id)}`}
+        className="focus-ring absolute inset-0 rounded-2xl"
+        aria-label={`Открыть карточку ${agent.display_name}`}
+      />
       {agent.avatar_url ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={agent.avatar_url}
           alt={agent.display_name}
-          className="h-14 w-14 flex-shrink-0 rounded-full object-cover"
+          className="relative h-14 w-14 flex-shrink-0 rounded-full object-cover"
         />
       ) : (
-        <span className="inline-flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
+        <span className="relative inline-flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">
           <User size={26} />
         </span>
       )}
 
-      <div className="min-w-0 flex-1">
+      <div className="relative min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="font-display text-lg font-semibold tracking-tight text-ink">
             {agent.display_name}
@@ -115,10 +143,50 @@ function AgentCard({ agent }: { agent: TeamAgent }) {
               Автономен
             </span>
           )}
+          <span
+            className={
+              "inline-flex items-center rounded-full px-2 py-0.5 text-xs " +
+              (templatesBadge.warn
+                ? "bg-amber-50 text-amber-800"
+                : "bg-canvas text-ink-muted")
+            }
+            title={
+              templatesCount === 0
+                ? "Не настроено ограничение — разрешены все шаблоны задач"
+                : `Разрешённых шаблонов задач: ${templatesCount}`
+            }
+          >
+            {templatesBadge.label}
+          </span>
+          {/* Сессия 19: «Поставить задачу» на карточке. Кнопка приподнята
+              z-index'ом над <Link>-оверлеем, чтобы клик не уходил на ссылку. */}
+          {onLaunchTask && agent.status !== "archived" && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onLaunchTask(agent.id);
+              }}
+              className="focus-ring relative z-10 ml-auto inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface px-2.5 text-xs font-medium text-ink-muted transition hover:border-accent hover:text-accent"
+              title="Поставить задачу этому сотруднику"
+            >
+              <Sparkles size={12} />
+              Поставить задачу
+            </button>
+          )}
         </div>
       </div>
-    </Link>
+    </div>
   );
+}
+
+function pluralizeTemplates(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 14) return "шаблонов";
+  if (mod10 === 1) return "шаблон";
+  if (mod10 >= 2 && mod10 <= 4) return "шаблона";
+  return "шаблонов";
 }
 
 export default function StaffWorkspace() {
@@ -130,6 +198,8 @@ export default function StaffWorkspace() {
   // «Кандидаты в правила». Загружаем один раз вместе с списком агентов;
   // повторно не поллим — экран открывается редко.
   const [candidatesCount, setCandidatesCount] = useState<number | null>(null);
+  // Сессия 19: модалка постановки задачи с preset'ом конкретного агента.
+  const [launchForAgent, setLaunchForAgent] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -254,9 +324,22 @@ export default function StaffWorkspace() {
       {!loading && !error && agents.length > 0 && (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {agents.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} />
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              onLaunchTask={(id) => setLaunchForAgent(id)}
+            />
           ))}
         </div>
+      )}
+
+      {launchForAgent && (
+        <TaskCreationModal
+          open
+          presetAgentId={launchForAgent}
+          onClose={() => setLaunchForAgent(null)}
+          onCreated={() => setLaunchForAgent(null)}
+        />
       )}
     </div>
   );

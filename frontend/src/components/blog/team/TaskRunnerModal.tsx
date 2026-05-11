@@ -430,6 +430,22 @@ export default function TaskRunnerModal({
             </span>
           </label>
 
+          {/* Сессия 19: UI-плейсхолдер «Сделать регулярной».
+              Реальная функциональность — в пункте 15 (этап 3). */}
+          <label className="flex items-center gap-2 text-sm text-ink-muted">
+            <input
+              type="checkbox"
+              disabled
+              className="accent-accent"
+            />
+            <span className="opacity-70">
+              ⏰ Сделать регулярной{" "}
+              <span className="text-xs italic">
+                (появится позже — пока флажок неактивен)
+              </span>
+            </span>
+          </label>
+
           <label className="flex flex-col gap-2">
             <span className="text-sm font-medium text-ink">
               Название задачи
@@ -524,7 +540,17 @@ export default function TaskRunnerModal({
             </p>
           )}
 
-          <div className="flex items-center justify-end gap-3 border-t border-line pt-5">
+          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-line pt-5">
+            {/* Сессия 19: подсказка про незаполненный бриф. Когда есть всё —
+                подсказка исчезает; submit становится активным. */}
+            {!ready && (
+              <p className="mr-auto text-xs text-ink-faint">
+                Заполни бриф задачи
+                {taskType === "research_direct" ? " и источник" : ""}
+                {taskType === "write_text" ? " и название точки" : ""}, чтобы
+                запустить.
+              </p>
+            )}
             <button
               type="button"
               onClick={onClose}
