@@ -9,6 +9,7 @@ import {
   previewPrompt,
   runTask,
   type PreviewPromptResult,
+  type PromptLayersSummary,
 } from "@/lib/team/teamBackendClient";
 import type { TeamTaskModelChoice } from "@/lib/team/types";
 
@@ -264,6 +265,10 @@ export default function TaskRunnerModal({
                   </div>
                 ) : promptPreview ? (
                   <>
+                    <PromptLayersPreview
+                      layeredPreview={promptPreview.layeredPreview}
+                      summary={promptPreview.summary}
+                    />
                     <PromptField
                       label="System"
                       value={systemDraft}
@@ -532,6 +537,38 @@ function ResearchPathsField({
         пустым — текст напишется только по идее.
       </span>
     </label>
+  );
+}
+
+// Read-only превью многослойной структуры промпта (Сессия 6 этапа 2).
+// Показывает все 7 слоёв с визуальными разделителями ═══ MISSION ═══ и
+// пометкой о пропущенных. Бэкенд старее Сессии 6 не вернёт layeredPreview —
+// компонент тогда просто не отрисуется.
+function PromptLayersPreview({
+  layeredPreview,
+  summary,
+}: {
+  layeredPreview?: string;
+  summary?: PromptLayersSummary;
+}) {
+  if (!layeredPreview) return null;
+  const loaded = summary?.layers_loaded ?? [];
+  const skipped = summary?.layers_skipped ?? [];
+  return (
+    <details className="rounded-lg border border-line bg-surface">
+      <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium uppercase tracking-wide text-ink-faint hover:text-ink">
+        Слои промпта{" "}
+        <span className="font-normal normal-case text-ink-faint">
+          · загружено {loaded.length}/{loaded.length + skipped.length}
+          {summary?.total_tokens_estimate
+            ? ` · ~${summary.total_tokens_estimate} токенов`
+            : ""}
+        </span>
+      </summary>
+      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-line px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-muted">
+        {layeredPreview}
+      </pre>
+    </details>
   );
 }
 

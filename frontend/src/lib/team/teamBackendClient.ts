@@ -170,11 +170,39 @@ export async function fetchTaskTemplates(): Promise<TaskTemplate[]> {
   return obj.templates ?? [];
 }
 
+// Один из 7 слоёв многослойной сборки промпта (Сессия 6 этапа 2).
+// loaded=false означает, что слой пропускается на этапе сборки — например,
+// агент не указан, файл отсутствует или таблица memory пуста.
+export interface PromptLayer {
+  key:
+    | "mission"
+    | "author_profile"
+    | "role"
+    | "goals"
+    | "memory"
+    | "skills"
+    | "task";
+  content: string;
+  cacheable: boolean;
+  loaded: boolean;
+}
+
+export interface PromptLayersSummary {
+  layers_loaded: string[];
+  layers_skipped: string[];
+  total_tokens_estimate: number;
+  cache_eligible_tokens: number;
+}
+
 export interface PreviewPromptResult {
   system: string | null;
   user: string | null;
   cacheableBlocks?: unknown;
   template: string | null;
+  // Поля добавлены в Сессии 6 — могут отсутствовать, если бэкенд старее.
+  layers?: PromptLayer[];
+  layeredPreview?: string;
+  summary?: PromptLayersSummary;
 }
 
 export async function previewPrompt(
