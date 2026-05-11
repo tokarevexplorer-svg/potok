@@ -5,14 +5,28 @@
 // Whitelist проверять отдельно НЕ нужно: NextAuth не выдаст сессию
 // неwhitelisted пользователю (см. callbacks.signIn в auth.ts). То есть
 // если сессия есть — email уже прошёл проверку.
+//
+// Исключение: если в Админке включён «тестовый режим без авторизации»
+// (team_settings.dev_mode_until > now()) — пропускаем неавторизованных
+// пользователей. Режим автоматически становится невалидным по таймауту,
+// никакой крон не нужен. См. lib/devMode.ts и блок в AdminWorkspace.
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { getDevModeStatus } from "@/lib/devMode";
 
-export default auth((req) => {
+export default auth(async (req) => {
   if (req.auth?.user?.email) {
     return NextResponse.next();
   }
+
+  // Dev mode: проверяем флаг ДО редиректа. Если активен — пропускаем как
+  // если бы сессия была. Внутри 5-секундного кеша (см. lib/devMode).
+  const devMode = await getDevModeStatus();
+  if (devMode.active) {
+    return NextResponse.next();
+  }
+
   // Сохраняем исходный путь, чтобы после логина вернуться сюда.
   const url = new URL("/auth/signin", req.nextUrl.origin);
   const target = req.nextUrl.pathname + req.nextUrl.search;

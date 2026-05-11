@@ -53,3 +53,7 @@ _reference_dkl/
 # --- Supabase CLI -----------------------------------------------------------
 # Локальный кеш `supabase` CLI — токены сессии, snapshot'ы линка. В Git не нужен.
 supabase/.temp/
+
+# --- Playwright MCP --------------------------------------------------------
+# Снимки/логи Playwright MCP (snapshots, screenshots, console). В Git не нужны.
+.playwright-mcp/

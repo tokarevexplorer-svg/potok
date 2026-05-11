@@ -11,12 +11,15 @@ import {
   X,
 } from "lucide-react";
 import {
+  type DevModeHours,
+  type DevModeStatus,
   type HardLimits,
   type KeysFullStatus,
   type SecuritySettings,
   type SpendingResult,
   deleteApiKey,
   fetchAlertThreshold,
+  fetchDevMode,
   fetchHardLimits,
   fetchKeysFull,
   fetchSecuritySettings,
@@ -25,6 +28,7 @@ import {
   patchSecuritySettings,
   setAlertThreshold,
   setApiKey,
+  setDevMode,
 } from "@/lib/team/teamBackendClient";
 import { formatUsd } from "@/lib/team/format";
 
@@ -56,6 +60,8 @@ export default function AdminWorkspace() {
   const [limitsError, setLimitsError] = useState<string | null>(null);
   const [security, setSecurity] = useState<SecuritySettings | null>(null);
   const [securityError, setSecurityError] = useState<string | null>(null);
+  const [devMode, setDevModeState] = useState<DevModeStatus | null>(null);
+  const [devModeError, setDevModeError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const [editing, setEditing] = useState<Provider | null>(null);
@@ -63,12 +69,13 @@ export default function AdminWorkspace() {
   async function reloadAll() {
     setRefreshing(true);
     try {
-      const [k, sp, t, lim, sec] = await Promise.allSettled([
+      const [k, sp, t, lim, sec, dm] = await Promise.allSettled([
         fetchKeysFull(),
         fetchSpending(),
         fetchAlertThreshold(),
         fetchHardLimits(),
         fetchSecuritySettings(),
+        fetchDevMode(),
       ]);
       if (k.status === "fulfilled") {
         setKeys(k.value);
@@ -97,6 +104,12 @@ export default function AdminWorkspace() {
         setSecurityError(null);
       } else {
         setSecurityError(sec.reason instanceof Error ? sec.reason.message : String(sec.reason));
+      }
+      if (dm.status === "fulfilled") {
+        setDevModeState(dm.value);
+        setDevModeError(null);
+      } else {
+        setDevModeError(dm.reason instanceof Error ? dm.reason.message : String(dm.reason));
       }
     } finally {
       setRefreshing(false);
@@ -164,6 +177,15 @@ export default function AdminWorkspace() {
         onChanged={(next) => {
           setLimits(next);
           setLimitsError(null);
+        }}
+      />
+
+      <DevModeSection
+        devMode={devMode}
+        error={devModeError}
+        onChanged={(next) => {
+          setDevModeState(next);
+          setDevModeError(null);
         }}
       />
     </div>
@@ -975,6 +997,173 @@ function HardLimitsSection({
           <p className="text-xs text-ink-faint lg:col-span-2">
             При превышении дневного лимита новые задачи блокируются до конца суток UTC.
             При превышении лимита задачи — задача переходит в ошибку, остальные продолжают.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------- Dev mode ----------
+
+const DEV_MODE_HOURS_OPTIONS: { value: DevModeHours; label: string }[] = [
+  { value: 1, label: "1 час" },
+  { value: 4, label: "4 часа" },
+  { value: 12, label: "12 часов" },
+  { value: 24, label: "24 часа" },
+];
+
+function DevModeSection({
+  devMode,
+  error,
+  onChanged,
+}: {
+  devMode: DevModeStatus | null;
+  error: string | null;
+  onChanged: (next: DevModeStatus) => void;
+}) {
+  const [hoursChoice, setHoursChoice] = useState<DevModeHours>(12);
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  // tick форсит перерендер каждую минуту, чтобы строка «до HH:MM» и индикатор
+  // «активен» оставались точными без перезагрузки страницы.
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (devMode && [1, 4, 12, 24].includes(devMode.auto_disable_hours)) {
+      setHoursChoice(devMode.auto_disable_hours as DevModeHours);
+    }
+  }, [devMode]);
+
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  async function handleToggle() {
+    if (!devMode) return;
+    if (busy) return;
+    const turningOn = !devMode.active;
+    if (turningOn) {
+      const ok = confirm(
+        `Включить тестовый режим без авторизации на ${hoursChoice} ч?\n\n` +
+          `Сайт будет открыт БЕЗ Google OAuth до автоотключения.`,
+      );
+      if (!ok) return;
+    }
+    setBusy(true);
+    setLocalError(null);
+    try {
+      const next = await setDevMode(turningOn, turningOn ? hoursChoice : undefined);
+      onChanged(next);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const until = devMode?.until ? new Date(devMode.until) : null;
+  const untilLabel = until
+    ? until.toLocaleString("ru", { dateStyle: "short", timeStyle: "short" })
+    : null;
+  const remainingMin =
+    until !== null
+      ? Math.max(0, Math.round((until.getTime() - Date.now()) / 60_000))
+      : null;
+  const remainingLabel =
+    remainingMin === null
+      ? null
+      : remainingMin >= 60
+        ? `${Math.floor(remainingMin / 60)} ч ${remainingMin % 60} мин`
+        : `${remainingMin} мин`;
+
+  return (
+    <section>
+      <SectionHeader
+        title="Режим разработки"
+        description="Временно отключает Google OAuth для автоматизированных проверок (Playwright). Автоотключение через выбранное время — никакого крона не нужно. Жёсткие лимиты расходов продолжают защищать кошелёк."
+      />
+
+      {error && (
+        <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+          {error}
+        </p>
+      )}
+
+      {!devMode && !error && (
+        <div className="mt-4 flex items-center gap-2 rounded-2xl border border-dashed border-line bg-elevated/40 px-4 py-10 text-sm text-ink-muted">
+          <Loader2 size={14} className="animate-spin" /> Грузим статус…
+        </div>
+      )}
+
+      {devMode && (
+        <div className="mt-4 flex flex-col gap-4 rounded-2xl border border-line bg-surface p-5 sm:max-w-2xl">
+          <div className="rounded-xl border-2 border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+            <span className="font-semibold">⚠️ ВНИМАНИЕ:</span> при включении сайт доступен <span className="font-semibold">БЕЗ авторизации</span>. Используется только для автоматизированных проверок. Автоматически отключится через выбранное время.
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
+                Время автоотключения
+              </span>
+              <select
+                value={hoursChoice}
+                onChange={(e) => setHoursChoice(Number(e.target.value) as DevModeHours)}
+                disabled={busy || devMode.active}
+                className="focus-ring h-11 rounded-xl border border-line bg-canvas px-3 text-sm text-ink disabled:opacity-60"
+              >
+                {DEV_MODE_HOURS_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <button
+              type="button"
+              onClick={() => void handleToggle()}
+              disabled={busy}
+              className={
+                "focus-ring inline-flex h-11 items-center gap-2 rounded-xl px-5 text-sm font-semibold shadow-card transition disabled:cursor-not-allowed disabled:opacity-50 " +
+                (devMode.active
+                  ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                  : "bg-rose-600 text-white hover:bg-rose-700")
+              }
+            >
+              {busy ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : devMode.active ? (
+                <>🔒 Выключить dev mode</>
+              ) : (
+                <>🔓 Включить dev mode</>
+              )}
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-ink-muted">Статус:</span>
+            {devMode.active ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-3 py-0.5 text-xs font-semibold uppercase tracking-wide text-rose-800">
+                <span className="h-2 w-2 rounded-full bg-rose-600" /> Активен до {untilLabel} (~{remainingLabel})
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-0.5 text-xs font-semibold uppercase tracking-wide text-emerald-800">
+                <span className="h-2 w-2 rounded-full bg-emerald-600" /> Выключен
+              </span>
+            )}
+          </div>
+
+          {localError && (
+            <p className="text-xs text-rose-700">{localError}</p>
+          )}
+
+          <p className="text-xs text-ink-faint">
+            POST <code className="font-mono">/api/team/admin/dev-mode</code> с
+            <code className="font-mono"> {"{ enabled, hours }"}</code> — для программного управления из Playwright.
+            Защищён whitelisted email: токен на этот путь не синтезируется даже при активном режиме.
           </p>
         </div>
       )}

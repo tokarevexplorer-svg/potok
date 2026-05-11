@@ -26,6 +26,11 @@ import {
   getWhitelistedEmailSources,
   clearWhitelistCache,
 } from "../../services/team/whitelistService.js";
+import {
+  getDevMode,
+  enableDevMode,
+  disableDevMode,
+} from "../../services/team/devModeService.js";
 
 const router = Router();
 
@@ -380,6 +385,68 @@ router.patch("/security", async (req, res) => {
   } catch (err) {
     console.error("[team] admin security PATCH failed:", err);
     return res.status(500).json({ error: err.message ?? "Не удалось сохранить настройки доступа" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/admin/dev-mode
+// Текущий статус «тестового режима без авторизации»: {active, until,
+// auto_disable_hours}. Безопасно отдавать через requireAuth.
+// =========================================================================
+
+router.get("/dev-mode", async (_req, res) => {
+  try {
+    const state = await getDevMode();
+    return res.json(state);
+  } catch (err) {
+    console.error("[team] admin dev-mode GET failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось прочитать статус dev mode" });
+  }
+});
+
+// =========================================================================
+// POST /api/team/admin/dev-mode
+// Body: { enabled: boolean, hours?: 1|4|12|24 }
+// Включает (enabled=true) или выключает (enabled=false) dev mode.
+// При enabled=true hours обязателен (выбор пользователя из выпадашки).
+//
+// ВАЖНО: этот endpoint требует РЕАЛЬНОЙ сессии whitelisted-пользователя.
+// Frontend proxy в dev mode подписывает синтетический JWT для остальных
+// путей, но для admin/dev-mode синтетический токен отбивается (см.
+// frontend/src/app/api/team-proxy/[...path]/route.ts). Если бы атакующий
+// мог продлевать режим из dev mode без логина — backstop в виде
+// auto-expire потерял бы смысл.
+// =========================================================================
+
+router.post("/dev-mode", async (req, res) => {
+  const body = req.body ?? {};
+  if (typeof body.enabled !== "boolean") {
+    return res.status(400).json({ error: "enabled должен быть boolean" });
+  }
+  try {
+    if (body.enabled) {
+      const hours = Number(body.hours);
+      if (![1, 4, 12, 24].includes(hours)) {
+        return res
+          .status(400)
+          .json({ error: "hours должен быть одним из: 1, 4, 12, 24" });
+      }
+      const state = await enableDevMode(hours);
+      console.warn(
+        `[team] DEV MODE ENABLED by ${req.user?.email ?? "unknown"} until ${state.until} (${hours}ч)`,
+      );
+      return res.json(state);
+    }
+    const state = await disableDevMode();
+    console.warn(`[team] DEV MODE DISABLED by ${req.user?.email ?? "unknown"}`);
+    return res.json(state);
+  } catch (err) {
+    console.error("[team] admin dev-mode POST failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось обновить dev mode" });
   }
 });
 

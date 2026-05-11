@@ -661,3 +661,36 @@ export async function patchSecuritySettings(
   });
   return data as SecuritySettings;
 }
+
+// ---------------------------------------------------------------------------
+// Dev mode (тестовый режим без авторизации) — управление флагом из Админки.
+// Backend endpoint: /api/team/admin/dev-mode. Включение требует реальной
+// сессии Влада (proxy не синтезирует токен для этого пути).
+// ---------------------------------------------------------------------------
+
+export type DevModeHours = 1 | 4 | 12 | 24;
+
+export interface DevModeStatus {
+  active: boolean;
+  until: string | null;
+  auto_disable_hours: number;
+}
+
+export async function fetchDevMode(): Promise<DevModeStatus> {
+  const data = await backendFetch("/api/team/admin/dev-mode", { method: "GET" });
+  return data as DevModeStatus;
+}
+
+export async function setDevMode(
+  enabled: boolean,
+  hours?: DevModeHours,
+): Promise<DevModeStatus> {
+  const body: Record<string, unknown> = { enabled };
+  if (enabled) body.hours = hours;
+  const data = await backendFetch("/api/team/admin/dev-mode", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return data as DevModeStatus;
+}

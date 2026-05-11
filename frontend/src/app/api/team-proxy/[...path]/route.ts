@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { signBackendToken } from "@/lib/apiClient";
+import { getDevModeStatus } from "@/lib/devMode";
+import { getWhitelistedEmail } from "@/lib/whitelist";
 
 // Универсальный прокси клиентских вызовов команды на Railway.
 //
@@ -43,12 +45,35 @@ async function proxyRequest(
     );
   }
 
-  // Auth-гейт: middleware в обычном случае не пускает неавторизованных,
-  // но если кто-то обошёл его (например, ошибка matcher) — отказываем тут.
+  const { path } = await ctx.params;
+  const joinedPath = (path ?? []).join("/");
+  // Эндпоинт переключения dev mode НЕ должен пропускаться в dev mode —
+  // иначе атакующий сможет продлить режим самостоятельно после первого
+  // включения. Для него действует только реальная сессия Влада.
+  const isDevModeToggle = joinedPath === "admin/dev-mode";
+
+  // Auth-гейт. Если сессии нет, есть два сценария:
+  //   1. Включён dev mode и путь != admin/dev-mode → синтезируем JWT с
+  //      whitelisted email (как если бы Влад был залогинен).
+  //   2. Иначе — 401.
   const session = await auth();
-  const email = session?.user?.email;
+  let email = session?.user?.email ?? null;
   if (!email) {
-    return NextResponse.json({ error: "Не авторизован" }, { status: 401 });
+    if (isDevModeToggle) {
+      return NextResponse.json({ error: "Не авторизован" }, { status: 401 });
+    }
+    const dev = await getDevModeStatus();
+    if (!dev.active) {
+      return NextResponse.json({ error: "Не авторизован" }, { status: 401 });
+    }
+    const whitelisted = await getWhitelistedEmail();
+    if (!whitelisted) {
+      return NextResponse.json(
+        { error: "Dev mode: whitelisted email не настроен (БД/ENV пуст)" },
+        { status: 500 },
+      );
+    }
+    email = whitelisted;
   }
 
   let token: string;
@@ -62,8 +87,7 @@ async function proxyRequest(
     );
   }
 
-  const { path } = await ctx.params;
-  const target = `${BACKEND_URL}/api/team/${(path ?? []).join("/")}`;
+  const target = `${BACKEND_URL}/api/team/${joinedPath}`;
   const url = new URL(req.url);
   const fullTarget = url.search ? `${target}${url.search}` : target;
 
