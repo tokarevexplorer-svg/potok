@@ -809,3 +809,23 @@ URL: https://potok-omega.vercel.app/blog/team/staff/&lt;agent_id&gt;
 - Список активных и закреплённых навыков с действиями «Закрепить/Открепить», «Архив», «Удалить».
 - Чекбокс «Показать архив» переключает фильтр.
 - Pin меняет бейдж на «📌 закреплён», archive → status='archived' (исчезает или серая плашка при показе архива).
+
+---
+
+## Сессия 28 — Счётчик токенов в UI (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для `backend/src/services/team/promptBuilder.js`, `backend/src/routes/team/agents.js` — OK.
+- `npx tsc --noEmit` во фронтенде — без ошибок.
+- `npx next build` — `Compiled successfully`. Падение на «Collecting page data» из-за отсутствия `NEXT_PUBLIC_SUPABASE_URL` в локальном `.env.local` — известная регрессия окружения, не регрессия Сессии 28 (на Vercel env прокидываются при деплое).
+- `git log --oneline -1` → `b648799 Сессия 28 — счётчик токенов в UI`.
+
+### E2E через Playwright
+1. `GET https://potok-omega.vercel.app/api/team-proxy/agents/igor/token-summary` → `200 {"total":548,"breakdown":{"mission":239,"role":192,"goals":104,"memory":13,"skills":0}}`.
+2. `/blog/team/staff/igor` — в шапке карточки виден блок `Промпт: 548 токенов` (зелёная зона) и разбивка `Mission: 239 · Role: 192 · Goals: 104 · Memory: 13 · Skills: 0`.
+3. `/blog/team/instructions` → клик «Миссия» → в футере редактора виден бейдж `465 токенов` (зелёный, точный счёт через js-tiktoken).
+4. Console errors на обеих страницах — только 401 от `dev-mode` (известная регрессия Dev Mode, не относится к Сессии 28).
+
+### Что осталось руками проверить
+Ничего необязательного — функционал визуальный, проверен.
+
