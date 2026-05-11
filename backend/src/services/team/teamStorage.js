@@ -34,9 +34,14 @@ export async function uploadFile(bucket, path, content) {
   // String → Buffer, чтобы Storage принял правильный размер.
   const body = typeof content === "string" ? Buffer.from(content, "utf-8") : content;
 
+  // cacheControl: '0' — без CDN-кеша. По умолчанию Supabase Storage держит
+  // ответ в smart-CDN 1 час, и хотя upsert триггерит инвалидацию, на практике
+  // браузер всё равно может ещё какое-то время отдавать старую версию
+  // (наблюдалось при перезаписи strategy/mission.md в Сессии 7). Файлы здесь
+  // маленькие, экономия от кеша незначительна — отдаём свежее.
   const { error } = await client.storage
     .from(bucket)
-    .upload(path, body, { contentType, upsert: true });
+    .upload(path, body, { contentType, upsert: true, cacheControl: "0" });
 
   if (error) {
     throw new Error(
