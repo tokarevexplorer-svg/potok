@@ -709,3 +709,49 @@ URL: дашборд.
 
 #### Сессия 25 — UI вкладки «Навыки» и блока «Навыки агентов»
 ТЗ просит вкладку и блок Инструкций, но в этой сессии они отложены на Сессию 27 (см. отклонения). Сейчас управление skills — только через API. Карточка агента покажет skills только когда Сессия 27 добавит UI.
+
+---
+
+## Сессия 26 — Skill extraction: автоматический анализ задач
+
+### ✅ Выполнено (автоматически)
+- Backend: `node --check` прошёл для `skillExtractorService.js`, `feedbackParserService.js`, `scripts/extract-skills.js`.
+- E2E через UI не применим (LLM-фоновая логика — нет страницы под неё).
+
+### ⚠️ Требует ручной проверки
+
+#### Сессия 26 — автоматическое извлечение при оценке 5/5
+URL: дашборд + Supabase.
+
+Что сделать:
+1. У существующего агента поставить задачу через мастер.
+2. Дождаться завершения.
+3. Открыть карточку → блок «Оценить работу» → нажать «5» → опц. написать «получилось особенно хорошо» → «Сохранить оценку».
+
+Что должно произойти:
+- Эпизод сохраняется мгновенно (ответ Владу ≤ 1 сек).
+- В Railway-логах через 5-15 сек: `[feedbackParser] skill extracted for <agent>/task=<id>: candidate=<uuid>` или `skill extraction skipped: <reason>`.
+- В Supabase `team_skill_candidates`: появилась строка `status='pending'` с `skill_name`, `when_to_apply`, `what_to_do`, `why_it_works`.
+- В `team_api_calls`: запись с `purpose='skill_extraction'`, `provider='anthropic'`, расход $0.001-0.005.
+
+#### Сессия 26 — batch extraction
+URL: терминал.
+
+Что сделать:
+1. Накопить несколько эпизодов со score = threshold - 1 (по умолчанию 4 = 5-1) на одного агента.
+2. `cd backend && npm run extract:skills -- --agent <id>`.
+3. Или dry-run: `npm run extract:skills -- --agent <id> --dry-run`.
+
+Что должно произойти:
+- Лог: `[<id>] processed=N, created=M (batchScore=4)`.
+- При dry-run: `processed` отражает количество эпизодов-кандидатов, `created=0`.
+- В Supabase: новые записи в `team_skill_candidates`.
+
+#### Сессия 26 — идемпотентность
+URL: ручной test.
+
+Что сделать:
+1. Оценить ту же задачу повторно на «5».
+
+Что должно произойти:
+- В логе `skill extraction skipped: duplicate_for_task` — новый кандидат не создаётся.
