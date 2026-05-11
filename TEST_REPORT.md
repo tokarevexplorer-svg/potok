@@ -111,3 +111,58 @@ URL: https://potok-omega.vercel.app/blog/team/dashboard
 
 Что должно произойти:
 - Блок «Оценить работу» НЕ показывается. Это правильное поведение: `team_feedback_episodes.agent_id` NOT NULL, эпизод нельзя приписать без сотрудника.
+
+---
+
+## Сессия 15 — Сжатие эпизодов и экран «Кандидаты в правила»
+
+### ✅ Выполнено (автоматически)
+- Миграций в сессии нет (таблица `team_agent_memory` уже умеет `status='candidate'`).
+- Backend: `node --check` прошёл для `compress-episodes.js`, `memoryService.js`, `memory.js`.
+- Frontend: `next build` — Compiled successfully + Linting and checking validity of types прошли. Page-data collection упала на missing local Supabase env (pre-existing).
+- E2E на проде через Playwright:
+  - `/blog/team/staff/candidates` — новая страница рендерится. Title «Кандидаты в правила — Поток», описание из ТЗ, пустое состояние «Нет новых кандидатов» с подсказкой команды `npm run compress:episodes`.
+  - `/blog/team/staff` — в шапке появилась кнопка «Кандидаты в правила» → `/blog/team/staff/candidates` (бейдж счётчика скрыт, потому что pending=0).
+  - Console clean (только pre-existing 401 на `/admin/dev-mode`).
+
+### ⚠️ Требует ручной проверки
+
+#### Сессия 15 — реальное сжатие эпизодов через LLM
+URL: запускается в терминале backend, проверяется в браузере.
+
+Что сделать:
+1. Накопить минимум 3 активных эпизода обратной связи для одного агента (см. Сессию 14: оценивать задачи в дашборде).
+2. В терминале:
+   ```
+   cd backend
+   npm run compress:episodes -- --agent <agent_id>
+   ```
+3. В логе должны быть строки вида `[<agent_id>] + кандидат <uuid>: «<текст правила>»`.
+4. Открыть `/blog/team/staff/candidates`. Появятся карточки кандидатов сгруппированные по агенту.
+
+Что должно произойти:
+- В таблице `team_agent_memory` создаются записи с `type='rule'`, `status='candidate'`, `source='feedback'`, `source_episode_ids` = uuid'ы эпизодов.
+- В `team_api_calls` появляется запись с `purpose='compress_episodes'`.
+
+#### Сессия 15 — действия с кандидатами
+URL: https://potok-omega.vercel.app/blog/team/staff/candidates
+
+Что сделать:
+1. На карточке нажать «Принять» → кандидат пропадает.
+2. На другой — «Принять с правкой» → раскрывается inline-textarea, изменить текст, «Сохранить и принять».
+3. На третьей — «Отклонить».
+4. Открыть карточку соответствующего сотрудника, вкладка «Правила»: принятые правила должны появиться в списке active.
+5. В Supabase Dashboard → `team_feedback_episodes`: эпизоды, привязанные к отклонённому кандидату, перешли в `status='dismissed'`.
+
+Что должно произойти:
+- Принятые кандидаты становятся `status='active'` и попадают в промпт агента (Memory-слой).
+- Отклонённые кандидаты получают `status='rejected'`, их source-эпизоды dismiss'ятся.
+
+#### Сессия 15 — раскрытие источников
+URL: https://potok-omega.vercel.app/blog/team/staff/candidates
+
+Что сделать:
+1. На карточке нажать «Источники (N)».
+
+Что должно произойти:
+- Появляется список из N эпизодов с цветным бейджем score, кратким parsed_text/raw_input, частичным id.
