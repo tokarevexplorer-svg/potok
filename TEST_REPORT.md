@@ -1010,3 +1010,46 @@ URL: https://potok-omega.vercel.app/blog/databases/competitors
 - В Supabase: `team_competitor_posts` содержит N строк (по resultsLimit), `ai_summary` — JSONB с `{type, topic, hook, summary}`.
 - В `team_api_calls` появились строки: `provider='apify'` + `purpose='apify'` (одна), `purpose='competitor_analysis'` (N штук по числу постов).
 
+
+---
+
+## Сессия 34 — Мерджинг артефактов + Мульти-LLM клонирование (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для mergeService, taskRunner, routes/tasks, routes/artifacts — OK.
+- `npx tsc --noEmit` — без ошибок.
+- `git log --oneline -1` → `e76c8a7 Сессия 34 — мерджинг артефактов + клонирование задач`.
+
+### E2E через Playwright
+1. `GET /api/team-proxy/tasks/compare/nonexistent` → `200 {"group_id":"nonexistent","tasks":[]}` — эндпоинт live.
+2. `/blog/team/tasks/compare/nonexistent` рендерит заголовок «Сравнение задач», подзаголовок и плашку «В группе nonexistent нет задач».
+3. `/blog/team/artifacts` → «Идеи» → видны 6 чекбоксов «Выбрать для объединения». Клик по двум — появляется sticky bar внизу страницы «Выбрано 2 артефакта · Сбросить · Объединить».
+
+### Что осталось руками проверить
+#### Сессия 34 — реальный мерджинг (требует API-ключ LLM)
+URL: https://potok-omega.vercel.app/blog/team/artifacts
+
+Что сделать:
+1. На «Идеи» отметить 2-3 файла.
+2. Нажать «Объединить» внизу.
+3. Ввести инструкцию (например, «Объедини в один документ по порядку, убери дубли вопросов»).
+4. Нажать «Объединить» в модалке.
+
+Что должно произойти:
+- Запрос идёт ~10-30 секунд. После него страница перезагружает список.
+- В папке `merges/` (видна в табе «Тексты»→merges или через listFiles) появляется файл `merge_<timestamp>.md` с шапкой «# Объединение N артефактов», секциями «## Инструкция / ## Источники / ## Результат».
+- В `team_api_calls` — строка с `purpose='merge'` и стоимостью.
+
+#### Сессия 34 — мульти-LLM сравнение
+URL: https://potok-omega.vercel.app/blog/team/dashboard
+
+Что сделать:
+1. Открыть любую завершённую задачу (status='done').
+2. В шапке появилась кнопка «Сравнить с другой моделью» рядом с «Передать дальше».
+3. Нажать → выбрать другую модель → «Запустить клон».
+
+Что должно произойти:
+- Редирект на `/blog/team/tasks/compare/<groupId>`.
+- Две колонки: оригинал и клон. Когда клон отработает, его результат появится в правой колонке.
+- В обеих задачах `team_tasks.comparison_group_id` одинаковый.
+
