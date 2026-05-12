@@ -144,8 +144,10 @@ export async function getActiveTaskIds() {
   }
 
   // По каждому id берём последний снапшот; включаем id если status = running.
-  // Сессия 31: 'awaiting_input' и 'awaiting_resource' НЕ заводим в очередь —
-  // они ждут внешнего сигнала (ответа Влада или внешнего воркера).
+  // Сессия 31: 'awaiting_input' НЕ заводим в очередь — ждёт ответа Влада.
+  // Сессия 38: 'awaiting_resource' ЗАВОДИМ — это означает «многошаговая
+  // задача в работе, упала где-то на шаге». Handler сам резюмирует с
+  // current_step из step_state.
   // 'clarifying' тоже не идёт в worker-pool: воркер вызывает обычный handler,
   // а clarifying нужен отдельный путь (generateClarificationsForTask). Для
   // таких застрявших задач есть отдельный getStuckClarifyingTaskIds.
@@ -154,7 +156,7 @@ export async function getActiveTaskIds() {
   for (const row of data ?? []) {
     if (seen.has(row.id)) continue;
     seen.add(row.id);
-    if (row.status === "running") {
+    if (row.status === "running" || row.status === "awaiting_resource") {
       active.push(row.id);
     }
   }

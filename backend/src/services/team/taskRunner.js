@@ -817,6 +817,22 @@ export async function markTaskDone(taskId) {
 }
 
 // =========================================================================
+// Сессия 38: helpers для многошаговых задач (NotebookLM-исследователь).
+// =========================================================================
+//
+// persistStepState — записывает новый снапшот с обновлённым step_state.
+// Используется handler'ом deep_research_notebooklm после каждого шага,
+// чтобы UI показывал прогресс «Шаг N из M» в реальном времени.
+// markAwaitingResource — переводит задачу в статус awaiting_resource
+// (для случаев, когда мы хотим, чтобы внешний воркер подхватил её).
+export async function persistStepState(taskId, stepState) {
+  return await appendUpdate(taskId, { stepState });
+}
+export async function markAwaitingResource(taskId, stepState) {
+  return await appendUpdate(taskId, { status: "awaiting_resource", stepState });
+}
+
+// =========================================================================
 // Сессия 34: клонирование задачи под другую модель (Multi-LLM сравнение).
 // =========================================================================
 //

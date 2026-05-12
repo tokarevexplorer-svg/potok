@@ -214,6 +214,14 @@ export default function TaskRunnerModal({
   // Готов к запуску: для всех есть user_input, для research — source, для
   // write — point_name. Кнопка disabled, пока не заполнено.
   const ready = useMemo(() => {
+    // Сессия 38: deep_research_notebooklm не требует user_input,
+    // вместо него — notebook_id + questions_list.
+    if (taskType === "deep_research_notebooklm") {
+      const notebookId = String(params.notebook_id ?? "").trim();
+      const questions = String(params.questions_list ?? "").trim();
+      if (!notebookId || !questions) return false;
+      return true;
+    }
     const userInput = String(params.user_input ?? "").trim();
     if (!userInput) return false;
     if (taskType === "research_direct" && !String(params.source ?? "").trim()) {
@@ -676,6 +684,37 @@ function TaskFields({
   params: TaskParams;
   setParam: (key: string, value: string | string[]) => void;
 }) {
+  // Сессия 38: deep_research_notebooklm — multistep с Notebook ID и
+  // списком вопросов.
+  if (taskType === "deep_research_notebooklm") {
+    return (
+      <>
+        <Field
+          label="Notebook ID или ссылка на NotebookLM"
+          value={String(params.notebook_id ?? "")}
+          onChange={(v) => setParam("notebook_id", v)}
+          placeholder="например: 9e4c1d2a-... или https://notebooklm.google.com/notebook/..."
+          required
+        />
+        <TextAreaField
+          label="Список вопросов (по одному на строку)"
+          value={String(params.questions_list ?? "")}
+          onChange={(v) => setParam("questions_list", v)}
+          placeholder={"1. Какова география концентрации домов терпимости...\n2. Какие источники упоминают...\n3. ..."}
+          rows={8}
+          required
+        />
+        <TextAreaField
+          label="Дополнительный контекст (опционально)"
+          value={String(params.additional_context ?? "")}
+          onChange={(v) => setParam("additional_context", v)}
+          placeholder="Любые уточнения к ресёрчу: акцент, стиль, формат ответов"
+          rows={3}
+        />
+      </>
+    );
+  }
+
   if (taskType === "research_direct") {
     return (
       <>

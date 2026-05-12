@@ -18,6 +18,13 @@ import { uploadFile, downloadFile, listFiles } from "./teamStorage.js";
 import { call as llmCall, callForTask } from "./llmClient.js";
 import { buildPrompt } from "./promptBuilder.js";
 import { fetchSource } from "./contentFetcher.js";
+import {
+  initMultistepTask,
+  continueTask as continueMultistepTask,
+} from "./taskContinuationService.js";
+// persistStepState импортируется динамически внутри хендлера, чтобы
+// избежать циклической зависимости с taskRunner (он импортирует
+// TASK_HANDLERS отсюда).
 
 const DATABASE_BUCKET = "team-database";
 
@@ -558,8 +565,173 @@ async function handleFreeResearch(task) {
 // шаги) появится в Сессии 38.
 // =========================================================================
 
+// Сессия 38: настоящий multistep для глубокого ресёрча через NotebookLM.
+//
+// Поток:
+//   1. Парсим questions_list (по одной строке на вопрос) из params.
+//   2. Инициализируем step_state, сохраняем в team_tasks.
+//   3. Для каждого шага: callForTask на основной модели агента с user
+//      промптом «<вопрос> · контекст: notebook_id».
+//   4. После каждого шага — persistStepState (UI показывает прогресс).
+//   5. Когда все шаги done — финальный синтез: один LLM-вызов со всеми
+//      Q/A на сборку структурированного артефакта.
+//   6. Артефакт сохраняется в research/preprod/researcher/notebook/.
+//
+// Реальной интеграции с NotebookLM в Сессии 38 нет — для каждого вопроса
+// agent работает «по знаниям + Web Search если есть», notebook_id идёт в
+// промпт как метаданные. Полноценный NotebookLM-воркер — Сессия 38+ за
+// рамками текущего sprint'а.
 async function handleDeepResearchNotebookLM(task) {
-  return handleScoutGeneric(task, "Глубокий ресёрч через NotebookLM");
+  const { params, prompt, provider, model } = task;
+  const { persistStepState } = await import("./taskRunner.js");
+
+  const notebookId = String(params.notebook_id ?? "").trim();
+  const rawQuestions = String(params.questions_list ?? "").trim();
+  const additionalContext = String(params.additional_context ?? "").trim();
+
+  // Парсим вопросы: одна строка = один вопрос, пустые и закомментированные
+  // (начинаются с #) — пропускаем.
+  const questions = rawQuestions
+    .split("\n")
+    .map((q) => q.trim().replace(/^[-*\d.)\s]+/, ""))
+    .filter((q) => q.length > 0 && !q.startsWith("#"));
+
+  if (questions.length === 0) {
+    // Нет вопросов — деградируем до обычного scout-handler'а.
+    return handleScoutGeneric(task, "Глубокий ресёрч через NotebookLM");
+  }
+
+  // Инициализация step_state. Если задача уже в работе (recovery после
+  // рестарта) — продолжаем с current_step, не сбрасываем результаты.
+  let state = task.step_state ?? null;
+  if (!state || !Array.isArray(state.steps) || state.total_steps !== questions.length) {
+    state = initMultistepTask(questions, { notebook_id: notebookId || null });
+    await persistStepState(task.id, state);
+  }
+
+  let totalInput = 0;
+  let totalOutput = 0;
+  let totalCached = 0;
+
+  while (state.current_step < state.total_steps) {
+    const idx = state.current_step;
+    const question = state.steps[idx]?.question ?? `Вопрос ${idx + 1}`;
+    const stepUserPrompt = buildStepUserPrompt({
+      question,
+      notebookId,
+      additionalContext,
+      previousAnswers: state.accumulated_results,
+    });
+    const stepSystemPrompt = prompt.system ?? "";
+
+    const stepResult = await callForTask(task, {
+      systemPrompt: stepSystemPrompt,
+      userPrompt: stepUserPrompt,
+      cacheableBlocks: prompt.cacheable_blocks ?? prompt.cacheableBlocks ?? [],
+      maxTokens: 4096,
+    });
+
+    totalInput += Number(stepResult.inputTokens ?? 0);
+    totalOutput += Number(stepResult.outputTokens ?? 0);
+    totalCached += Number(stepResult.cachedTokens ?? 0);
+
+    const advanced = continueMultistepTask(state, stepResult.text ?? "");
+    state = advanced.nextState;
+    await persistStepState(task.id, state);
+  }
+
+  // Финальный синтез.
+  const synthesisPrompt = buildSynthesisUserPrompt(
+    state.accumulated_results,
+    notebookId,
+    additionalContext,
+  );
+  const synthesis = await callForTask(task, {
+    systemPrompt: prompt.system ?? "",
+    userPrompt: synthesisPrompt,
+    cacheableBlocks: prompt.cacheable_blocks ?? prompt.cacheableBlocks ?? [],
+    maxTokens: 8192,
+  });
+
+  totalInput += Number(synthesis.inputTokens ?? 0);
+  totalOutput += Number(synthesis.outputTokens ?? 0);
+  totalCached += Number(synthesis.cachedTokens ?? 0);
+
+  // Финальное состояние: synthesis_pending=false.
+  state = { ...state, synthesis_pending: false };
+  await persistStepState(task.id, state);
+
+  const path = await artifactPathFor("deep_research_notebooklm", params);
+  const headerLines = [
+    `# ${task.title || "Глубокий ресёрч через NotebookLM"}`,
+    "",
+    `_${task.created_at} · ${provider}/${model} · task \`${task.id}\`_`,
+    "",
+    `**Notebook ID:** ${notebookId || "(не задан)"}`,
+    `**Вопросов:** ${state.total_steps}`,
+    "",
+    "## Ответы по вопросам",
+    "",
+    ...state.accumulated_results.flatMap((qa, i) => [
+      `### ${i + 1}. ${qa.question}`,
+      "",
+      qa.answer,
+      "",
+    ]),
+    "## Синтез",
+    "",
+  ];
+  await saveArtifact(path, synthesis.text ?? "", headerLines);
+
+  return {
+    result: synthesis.text ?? "",
+    artifactPath: path,
+    tokens: {
+      input: totalInput,
+      output: totalOutput,
+      cached: totalCached,
+    },
+  };
+}
+
+function buildStepUserPrompt({ question, notebookId, additionalContext, previousAnswers }) {
+  const lines = [];
+  if (notebookId) lines.push(`Контекст: данные из NotebookLM (ID: ${notebookId}).`);
+  if (additionalContext) lines.push(`Дополнительные указания: ${additionalContext}`);
+  if (Array.isArray(previousAnswers) && previousAnswers.length > 0) {
+    lines.push("");
+    lines.push("Что уже ответили в предыдущих шагах (для согласованности):");
+    for (const qa of previousAnswers.slice(-3)) {
+      lines.push(`- ${qa.question}: ${(qa.answer ?? "").slice(0, 200)}…`);
+    }
+  }
+  lines.push("");
+  lines.push(`Вопрос: ${question}`);
+  lines.push("");
+  lines.push("Дай структурированный ответ с цитатами/источниками, если применимо.");
+  return lines.join("\n");
+}
+
+function buildSynthesisUserPrompt(accumulated, notebookId, additionalContext) {
+  const lines = [
+    "Финальный шаг исследования: собери единый структурированный артефакт.",
+    "",
+    notebookId ? `Notebook: ${notebookId}` : "Без привязки к Notebook.",
+    additionalContext ? `Контекст: ${additionalContext}` : "",
+    "",
+    "Ответы по вопросам:",
+    "",
+  ];
+  for (const qa of accumulated) {
+    lines.push(`### ${qa.question}`);
+    lines.push("");
+    lines.push(qa.answer ?? "");
+    lines.push("");
+  }
+  lines.push(
+    "Собери из этого единый артефакт: структурированные ответы с цитатами, без пересказа вопросов.",
+  );
+  return lines.join("\n");
 }
 async function handleWebResearch(task) {
   return handleScoutGeneric(task, "Ресёрч через Web Search");
