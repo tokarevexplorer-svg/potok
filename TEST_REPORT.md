@@ -1245,3 +1245,44 @@ URL: https://potok-omega.vercel.app/blog/team/staff/<agentId>
 1. В карточке агента должна быть секция/вкладка «Telegram-бот» (пока НЕ реализована — `bindTelegramBot` есть в backend client, виджет нужно дописать).
 2. Альтернатива через API: `curl -X POST https://your-backend/api/team/telegram/bots -d '{"agent_id":"...","bot_token":"..."}'` — привяжет бота, проверит токен через getMe, заполнит bot_username и telegram_bot_id.
 
+
+---
+
+## Сессия 40 — ежедневные отчёты + push при task done (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для jobs/dailyReportsJob, cron/telegramCron, services/team/taskRunner — OK.
+- `git log --oneline -1` → `359cdc0 Сессия 40 — ежедневные Telegram-отчёты + push при task done`.
+- Backend stayed alive после деплоя — `/api/team-proxy/telegram/settings` отвечает 200 с правильными дефолтами.
+
+### E2E через Playwright
+- Сессия 40 чисто бэкенд — никаких новых UI элементов. Smoke: telegram settings endpoint живёт без регрессий.
+
+### Что осталось руками проверить
+#### Сессия 40 — ежедневный отчёт (требует Telegram + LLM-ключ)
+URL: https://potok-omega.vercel.app/blog/team/admin
+
+Что сделать:
+1. Telegram настроен (Сессия 39 manual check).
+2. Поставить телеграмное время отчёта на пару минут вперёд (например текущее +2).
+3. Создать пару задач у разных агентов с привязанными ботами, дождаться done.
+4. Дождаться установленного времени.
+
+Что должно произойти:
+- В Telegram-чат от ботов-агентов приходят отчёты в формате «📋 Отчёт за день — <имя>».
+- Агенты без задач за сегодня молчат.
+- В `team_api_calls`: строки с `purpose='telegram_report'`, recorded per agent.
+- В `team_settings`: ключ `telegram_last_report_date` обновился до сегодняшней даты.
+
+#### Сессия 40 — push при task done
+URL: https://potok-omega.vercel.app/blog/team/dashboard
+
+Что сделать:
+1. Telegram включён, у агента привязан бот.
+2. Поставить задачу агенту, дождаться done.
+
+Что должно произойти:
+- Через ~1 секунду после done в Telegram-чат приходит «✅ Готово: <название>» + первые 200 символов результата + ссылка `/blog/team/tasks/<id>`.
+- Если сейчас тихий час — сообщение в `team_telegram_queue` со status='queued'.
+- Если у задачи нет agent_id или у агента нет бота — push не отправляется, ошибки нет.
+
