@@ -141,6 +141,33 @@ async function artifactPathFor(taskType, params) {
     const slug = slugify(firstLine(params.user_input) || "research");
     return `research/scout/${ts}_research_${slug}.md`;
   }
+  // Сессия 37: задачи предпродакшна → research/preprod/<role>/...
+  const PREPROD_PATHS = {
+    deep_research_notebooklm: ["researcher", "notebook"],
+    web_research: ["researcher", "web"],
+    free_research_with_files: ["researcher", "free"],
+    find_cross_references: ["researcher", "cross"],
+    video_plan_from_research: ["scriptwriter", "plan"],
+    creative_takes: ["scriptwriter", "creative"],
+    script_draft: ["scriptwriter", "draft"],
+    factcheck_artifact: ["factchecker", "artifact"],
+    compare_two_versions: ["factchecker", "compare"],
+    cold_factcheck: ["factchecker", "cold"],
+    generate_ideas: ["chief", "ideas"],
+    review_artifact: ["chief", "review"],
+    daily_plan_breakdown: ["chief", "plan"],
+  };
+  if (PREPROD_PATHS[taskType]) {
+    const [role, kind] = PREPROD_PATHS[taskType];
+    const slug = slugify(
+      firstLine(params.topic) ||
+        firstLine(params.competitor_name) ||
+        firstLine(params.focus) ||
+        firstLine(params.user_input) ||
+        taskType,
+    );
+    return `research/preprod/${role}/${ts}_${kind}_${slug}.md`;
+  }
   // Фолбэк: ideas/<ts>_<slug>.md.
   const slug = slugify(taskType);
   return `ideas/${ts}_${slug}.md`;
@@ -525,6 +552,53 @@ async function handleFreeResearch(task) {
 }
 
 // =========================================================================
+// Сессия 37: handlers задач предпродакшна (исследователь / сценарист /
+// фактчекер / шеф-редактор). Все 13 задач — обёртки над handleScoutGeneric
+// с разным fallback-title. Уникальная логика (NotebookLM multistep,
+// шаги) появится в Сессии 38.
+// =========================================================================
+
+async function handleDeepResearchNotebookLM(task) {
+  return handleScoutGeneric(task, "Глубокий ресёрч через NotebookLM");
+}
+async function handleWebResearch(task) {
+  return handleScoutGeneric(task, "Ресёрч через Web Search");
+}
+async function handleFreeResearchWithFiles(task) {
+  return handleScoutGeneric(task, "Свободный ресёрч с файлами");
+}
+async function handleFindCrossReferences(task) {
+  return handleScoutGeneric(task, "Поиск пересечений в базах");
+}
+async function handleVideoPlanFromResearch(task) {
+  return handleScoutGeneric(task, "План видео по ресёрчу");
+}
+async function handleCreativeTakes(task) {
+  return handleScoutGeneric(task, "Креативные решения подачи");
+}
+async function handleScriptDraft(task) {
+  return handleScoutGeneric(task, "Драфт сценарного текста");
+}
+async function handleFactcheckArtifact(task) {
+  return handleScoutGeneric(task, "Проверка артефакта по фактам");
+}
+async function handleCompareTwoVersions(task) {
+  return handleScoutGeneric(task, "Сверка двух версий");
+}
+async function handleColdFactcheck(task) {
+  return handleScoutGeneric(task, "Холодный фактчек");
+}
+async function handleGenerateIdeas(task) {
+  return handleScoutGeneric(task, "Генерация идей");
+}
+async function handleReviewArtifact(task) {
+  return handleScoutGeneric(task, "Ревью артефакта");
+}
+async function handleDailyPlanBreakdown(task) {
+  return handleScoutGeneric(task, "Декомпозиция плана дня");
+}
+
+// =========================================================================
 // реестр
 // =========================================================================
 
@@ -540,6 +614,20 @@ export const TASK_HANDLERS = {
   analyze_competitor: handleAnalyzeCompetitor,
   search_trends: handleSearchTrends,
   free_research: handleFreeResearch,
+  // Сессия 37: задачи предпродакшна.
+  deep_research_notebooklm: handleDeepResearchNotebookLM,
+  web_research: handleWebResearch,
+  free_research_with_files: handleFreeResearchWithFiles,
+  find_cross_references: handleFindCrossReferences,
+  video_plan_from_research: handleVideoPlanFromResearch,
+  creative_takes: handleCreativeTakes,
+  script_draft: handleScriptDraft,
+  factcheck_artifact: handleFactcheckArtifact,
+  compare_two_versions: handleCompareTwoVersions,
+  cold_factcheck: handleColdFactcheck,
+  generate_ideas: handleGenerateIdeas,
+  review_artifact: handleReviewArtifact,
+  daily_plan_breakdown: handleDailyPlanBreakdown,
 };
 
 // Человекочитаемые названия для UI и заголовков артефактов.
@@ -553,6 +641,20 @@ export const TASK_TITLES = {
   analyze_competitor: "Анализ конкурента",
   search_trends: "Поиск трендов",
   free_research: "Свободный ресёрч",
+  // Сессия 37: предпродакшн.
+  deep_research_notebooklm: "Глубокий ресёрч через NotebookLM",
+  web_research: "Ресёрч через Web Search",
+  free_research_with_files: "Свободный ресёрч с файлами",
+  find_cross_references: "Поиск пересечений в базах",
+  video_plan_from_research: "План видео по ресёрчу",
+  creative_takes: "Креативные решения подачи",
+  script_draft: "Драфт сценарного текста",
+  factcheck_artifact: "Проверка артефакта по фактам",
+  compare_two_versions: "Сверка двух версий",
+  cold_factcheck: "Холодный фактчек",
+  generate_ideas: "Генерация идей",
+  review_artifact: "Ревью артефакта",
+  daily_plan_breakdown: "Декомпозиция плана дня",
 };
 
 // Имена шаблонов задач в bucket team-prompts после Сессии 4 этапа 2 (без .md).
@@ -568,6 +670,20 @@ const TEMPLATE_NAMES = {
   analyze_competitor: "analyze-competitor",
   search_trends: "search-trends",
   free_research: "free-research",
+  // Сессия 37.
+  deep_research_notebooklm: "deep-research-notebooklm",
+  web_research: "web-research",
+  free_research_with_files: "free-research-with-files",
+  find_cross_references: "find-cross-references",
+  video_plan_from_research: "video-plan-from-research",
+  creative_takes: "creative-takes",
+  script_draft: "script-draft",
+  factcheck_artifact: "factcheck-artifact",
+  compare_two_versions: "compare-two-versions",
+  cold_factcheck: "cold-factcheck",
+  generate_ideas: "generate-ideas",
+  review_artifact: "review-artifact",
+  daily_plan_breakdown: "daily-plan-breakdown",
 };
 
 // Старые имена шаблонов (плоские, в корне bucket'а) — фолбэк, если новый

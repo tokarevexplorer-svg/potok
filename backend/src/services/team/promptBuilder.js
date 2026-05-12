@@ -1081,6 +1081,20 @@ const TASK_TYPE_TO_SLUG = {
   analyze_competitor: "analyze-competitor",
   search_trends: "search-trends",
   free_research: "free-research",
+  // Сессия 37.
+  deep_research_notebooklm: "deep-research-notebooklm",
+  web_research: "web-research",
+  free_research_with_files: "free-research-with-files",
+  find_cross_references: "find-cross-references",
+  video_plan_from_research: "video-plan-from-research",
+  creative_takes: "creative-takes",
+  script_draft: "script-draft",
+  factcheck_artifact: "factcheck-artifact",
+  compare_two_versions: "compare-two-versions",
+  cold_factcheck: "cold-factcheck",
+  generate_ideas: "generate-ideas",
+  review_artifact: "review-artifact",
+  daily_plan_breakdown: "daily-plan-breakdown",
 };
 
 function resolveTaskTemplatePath(taskTypeOrPath) {

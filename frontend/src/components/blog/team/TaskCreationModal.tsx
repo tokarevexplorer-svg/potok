@@ -67,6 +67,59 @@ const TEMPLATE_META: Record<string, { title: string; description: string }> = {
     title: "Свободный ресёрч",
     description: "Произвольный поиск/анализ с использованием инструментов агента",
   },
+  // Сессия 37: задачи предпродакшна (исследователь / сценарист / фактчекер / шеф).
+  deep_research_notebooklm: {
+    title: "Глубокий ресёрч через NotebookLM",
+    description: "Многошаговое исследование по подгруженным в Notebook источникам",
+  },
+  web_research: {
+    title: "Ресёрч через Web Search",
+    description: "Поиск источников и фактуры по теме с цитатами",
+  },
+  free_research_with_files: {
+    title: "Свободный ресёрч с файлами",
+    description: "Анализ прикреплённых PDF/материалов по заданию Влада",
+  },
+  find_cross_references: {
+    title: "Поиск пересечений в базах",
+    description: "Какие записи из баз команды пересекаются с темой",
+  },
+  video_plan_from_research: {
+    title: "План видео по ресёрчу",
+    description: "Структура видео (хук / основные точки / концовка) из артефакта исследования",
+  },
+  creative_takes: {
+    title: "Креативные решения подачи",
+    description: "Минимум 3 альтернативные подачи темы через приёмы",
+  },
+  script_draft: {
+    title: "Драфт сценарного текста",
+    description: "Рабочий полуфабрикат текста (не финал) — для последующей переработки Владом",
+  },
+  factcheck_artifact: {
+    title: "Проверка артефакта по фактам",
+    description: "Утверждение → источник → статус по каждой фактической строчке",
+  },
+  compare_two_versions: {
+    title: "Сверка двух версий",
+    description: "Сравнение версий A и B текста по фактической стороне",
+  },
+  cold_factcheck: {
+    title: "Холодный фактчек",
+    description: "Проверка отдельных утверждений без контекста — только Web Search",
+  },
+  generate_ideas: {
+    title: "Генерация идей",
+    description: "5+ идей видео под текущий фокус периода (Goals)",
+  },
+  review_artifact: {
+    title: "Ревью артефакта",
+    description: "Оценка плана/драфта/ресёрча по 5 критериям",
+  },
+  daily_plan_breakdown: {
+    title: "Декомпозиция плана дня",
+    description: "Раскладка общего плана дня на задачи для команды",
+  },
 };
 const ALL_TASK_TYPES = Object.keys(TEMPLATE_META);
 

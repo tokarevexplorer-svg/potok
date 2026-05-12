@@ -13,6 +13,20 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   analyze_competitor: "Анализ конкурента",
   search_trends: "Поиск трендов",
   free_research: "Свободный ресёрч",
+  // Сессия 37: предпродакшн.
+  deep_research_notebooklm: "NotebookLM ресёрч",
+  web_research: "Web-ресёрч",
+  free_research_with_files: "Ресёрч с файлами",
+  find_cross_references: "Пересечения в базах",
+  video_plan_from_research: "План видео",
+  creative_takes: "Креативные подачи",
+  script_draft: "Драфт текста",
+  factcheck_artifact: "Фактчек артефакта",
+  compare_two_versions: "Сверка версий",
+  cold_factcheck: "Холодный фактчек",
+  generate_ideas: "Генерация идей",
+  review_artifact: "Ревью",
+  daily_plan_breakdown: "Декомпозиция плана",
 };
 
 export function taskTypeLabel(type: TeamTaskType | string): string {

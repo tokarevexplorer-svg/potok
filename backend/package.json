@@ -18,6 +18,7 @@
     "apply:self-review-defaults": "node scripts/add-self-review-defaults.js",
     "seed:web-search": "node scripts/seed-web-search.js",
     "seed:scout-templates": "node scripts/seed-scout-templates.js",
+    "seed:preproduction-templates": "node scripts/seed-preproduction-templates.js",
     "test:p17": "node scripts/test-p17-integration.js"
   },
   "engines": {
