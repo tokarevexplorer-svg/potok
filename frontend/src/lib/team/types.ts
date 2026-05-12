@@ -103,6 +103,39 @@ export interface TeamTask {
   selfReviewEnabled?: boolean | null;
   selfReviewExtraChecks?: string | null;
   selfReviewResult?: SelfReviewResultPayload | null;
+  // Сессия 31: уточнения от агента + многошаговая инфраструктура.
+  // clarificationQuestions заполняется в статусе clarifying → awaiting_input.
+  // clarificationAnswers — после сабмита формы ответами Влада.
+  // stepState — состояние многошаговой задачи (Сессия 38, NotebookLM).
+  clarificationEnabled?: boolean | null;
+  clarificationQuestions?: TaskClarificationQuestion[] | null;
+  clarificationAnswers?: TaskClarificationAnswer[] | null;
+  stepState?: TaskStepState | null;
+}
+
+// Сессия 31: типы для уточнений и многошаговой задачи.
+export interface TaskClarificationQuestion {
+  question: string;
+  required: boolean;
+}
+
+export interface TaskClarificationAnswer {
+  question: string;
+  answer: string;
+}
+
+export interface TaskStepState {
+  current_step: number;
+  total_steps: number;
+  steps: Array<{
+    question: string;
+    status: "pending" | "done" | (string & {});
+    result?: string | null;
+  }>;
+  accumulated_results: Array<{ question: string; answer: string }>;
+  notebook_id?: string | null;
+  synthesis_pending?: boolean;
+  started_at?: string;
 }
 
 // Сессия 29: что лежит в team_tasks.self_review_result (JSONB) после

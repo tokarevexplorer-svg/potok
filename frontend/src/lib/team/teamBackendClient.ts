@@ -243,6 +243,32 @@ export interface RunTaskParams {
   selfReviewEnabled?: boolean | null;
   // Сессия 29: доп. пункты чек-листа от Влада. Текст по строке.
   selfReviewExtraChecks?: string | null;
+  // Сессия 31: чекбокс «Уточнения от агента». Если true — задача стартует
+  // в статусе clarifying, агент формулирует до 3 вопросов, после ответов
+  // Влада переходит в running.
+  clarificationEnabled?: boolean | null;
+}
+
+// Сессия 31: вопрос агента + ответ Влада.
+export interface ClarificationQuestion {
+  question: string;
+  required: boolean;
+}
+
+export interface ClarificationAnswer {
+  question: string;
+  answer: string;
+}
+
+export async function submitClarificationAnswers(
+  taskId: string,
+  answers: ClarificationAnswer[],
+): Promise<void> {
+  await backendFetch(`/api/team/tasks/${encodeURIComponent(taskId)}/clarify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answers }),
+  });
 }
 
 // Сессия 29: frontmatter-дефолты шаблона задачи. Сейчас один ключ —

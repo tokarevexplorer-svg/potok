@@ -84,6 +84,15 @@ export async function appendTaskSnapshot(snapshot) {
         : null,
     self_review_extra_checks: snapshot.selfReviewExtraChecks ?? null,
     self_review_result: snapshot.selfReviewResult ?? null,
+    // Сессия 31: многошаговая инфраструктура + уточнения от агента.
+    step_state: snapshot.stepState ?? null,
+    clarification_enabled:
+      typeof snapshot.clarificationEnabled === "boolean"
+        ? snapshot.clarificationEnabled
+        : null,
+    clarification_questions: snapshot.clarificationQuestions ?? null,
+    clarification_answers: snapshot.clarificationAnswers ?? null,
+    comparison_group_id: snapshot.comparisonGroupId ?? null,
   };
 
   const { data, error } = await client
@@ -135,6 +144,11 @@ export async function getActiveTaskIds() {
   }
 
   // По каждому id берём последний снапшот; включаем id если status = running.
+  // Сессия 31: 'awaiting_input' и 'awaiting_resource' НЕ заводим в очередь —
+  // они ждут внешнего сигнала (ответа Влада или внешнего воркера).
+  // 'clarifying' тоже не идёт в worker-pool: воркер вызывает обычный handler,
+  // а clarifying нужен отдельный путь (generateClarificationsForTask). Для
+  // таких застрявших задач есть отдельный getStuckClarifyingTaskIds.
   const seen = new Set();
   const active = [];
   for (const row of data ?? []) {
@@ -145,6 +159,29 @@ export async function getActiveTaskIds() {
     }
   }
   return active;
+}
+
+// Сессия 31: задачи, застрявшие в clarifying — recovery вызывает для них
+// generateClarificationsForTask ещё раз. Обычно это короткая операция,
+// но если процесс упал между записью статуса 'clarifying' и LLM-ответом,
+// задача остаётся «висеть» — нам нужно повторно её дёрнуть.
+export async function getStuckClarifyingTaskIds() {
+  const client = getServiceRoleClient();
+  const { data, error } = await client
+    .from("team_tasks")
+    .select("id, created_at, status")
+    .order("created_at", { ascending: false });
+  if (error) {
+    throw new Error(`Supabase select clarifying team_tasks failed: ${error.message}`);
+  }
+  const seen = new Set();
+  const stuck = [];
+  for (const row of data ?? []) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    if (row.status === "clarifying") stuck.push(row.id);
+  }
+  return stuck;
 }
 
 // Все задачи (текущие состояния, по одному на id). Сортировка по created_at

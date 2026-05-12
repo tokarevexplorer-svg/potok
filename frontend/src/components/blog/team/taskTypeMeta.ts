@@ -44,6 +44,13 @@ export function statusBadge(status: TeamTaskStatus | string): {
       return { label: "В архиве", className: "bg-zinc-100 text-zinc-600" };
     case "error":
       return { label: "Ошибка", className: "bg-rose-100 text-rose-800" };
+    // Сессия 31: новые статусы.
+    case "clarifying":
+      return { label: "Уточнения", className: "bg-violet-100 text-violet-800" };
+    case "awaiting_input":
+      return { label: "Жду ответа", className: "bg-violet-100 text-violet-800" };
+    case "awaiting_resource":
+      return { label: "Многошаговая", className: "bg-sky-100 text-sky-800" };
     default:
       return { label: String(status), className: "bg-zinc-100 text-zinc-600" };
   }
@@ -53,7 +60,17 @@ export function statusBadge(status: TeamTaskStatus | string): {
 // архив — нигде в основной сетке (он отдельный список под катом). revision
 // — пока в «Готово к ревью».
 export function statusToColumn(status: TeamTaskStatus | string): KanbanColumn | null {
-  if (status === "running" || status === "error") return "running";
+  if (
+    status === "running" ||
+    status === "error" ||
+    // Сессия 31: clarifying / awaiting_input / awaiting_resource считаются
+    // активными — всё, что ещё не завершено. Видны в первой колонке «В работе».
+    status === "clarifying" ||
+    status === "awaiting_input" ||
+    status === "awaiting_resource"
+  ) {
+    return "running";
+  }
   if (status === "done" || status === "revision") return "done";
   if (status === "marked_done") return "marked_done";
   if (status === "archived") return null;

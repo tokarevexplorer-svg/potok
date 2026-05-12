@@ -32,6 +32,7 @@ import WriteTextEditor from "./WriteTextEditor";
 import AppendQuestionModal from "./AppendQuestionModal";
 import TaskRunnerModal, { type HandoffContext } from "./TaskRunnerModal";
 import SelfReviewResult from "./SelfReviewResult";
+import ClarificationsPanel from "./ClarificationsPanel";
 import {
   fetchTaskCostBreakdown,
   type TaskCostBreakdown,
@@ -374,6 +375,14 @@ export default function TaskViewerModal({
               <p className="font-semibold">Ошибка выполнения</p>
               <p className="mt-1 whitespace-pre-wrap">{task.error}</p>
             </div>
+          )}
+
+          {/* Сессия 31: уточнения от агента и многошаговая инфраструктура.
+              Виден для статусов clarifying / awaiting_input / awaiting_resource. */}
+          {(task.status === "clarifying" ||
+            task.status === "awaiting_input" ||
+            task.status === "awaiting_resource") && (
+            <ClarificationsPanel task={task} onTaskUpdated={onTaskUpdated} />
           )}
 
           {/* Тело результата зависит от типа задачи */}

@@ -152,6 +152,27 @@ function mergeSnapshot(current, update) {
       update.selfReviewResult !== undefined
         ? update.selfReviewResult
         : current.self_review_result,
+    // Сессия 31: многошаговая инфраструктура + уточнения. step_state — JSONB,
+    // обновляется на каждом шаге. clarification_* фиксируются при createTask
+    // (enabled), затем при генерации (questions) и при ответе Влада (answers).
+    stepState:
+      update.stepState !== undefined ? update.stepState : current.step_state,
+    clarificationEnabled:
+      typeof update.clarificationEnabled === "boolean"
+        ? update.clarificationEnabled
+        : current.clarification_enabled,
+    clarificationQuestions:
+      update.clarificationQuestions !== undefined
+        ? update.clarificationQuestions
+        : current.clarification_questions,
+    clarificationAnswers:
+      update.clarificationAnswers !== undefined
+        ? update.clarificationAnswers
+        : current.clarification_answers,
+    comparisonGroupId:
+      update.comparisonGroupId !== undefined
+        ? update.comparisonGroupId
+        : current.comparison_group_id,
   };
 }
 
@@ -317,6 +338,7 @@ export async function createTask({
   projectId = null,
   selfReviewEnabled = null,
   selfReviewExtraChecks = null,
+  clarificationEnabled = false,
 }) {
   if (!TASK_HANDLERS[taskType]) {
     throw new Error(`Тип задачи не поддерживается: ${taskType}`);
@@ -371,12 +393,19 @@ export async function createTask({
     }
   }
 
+  // Сессия 31: если включены уточнения, задача стартует в clarifying —
+  // taskRunner НЕ кладёт её в воркер-пул. Задача провисит в clarifying
+  // до отдельного triggera (POST /api/team/tasks/:id/clarify), который
+  // запустит генерацию вопросов и перевод в awaiting_input.
+  const useClarifications = clarificationEnabled === true;
+  const initialStatus = useClarifications ? "clarifying" : "running";
+
   const taskId = newTaskId();
   const snapshot = {
     id: taskId,
     type: taskType,
     title: title || TASK_TITLES[taskType] || taskType,
-    status: "running",
+    status: initialStatus,
     params: { ...(params || {}) },
     modelChoice: { ...(modelChoice || {}) },
     provider,
@@ -400,11 +429,139 @@ export async function createTask({
         ? selfReviewExtraChecks.trim()
         : null,
     selfReviewResult: null,
+    clarificationEnabled: useClarifications,
+    clarificationQuestions: null,
+    clarificationAnswers: null,
+    stepState: null,
+    comparisonGroupId: null,
   };
 
   await appendTaskSnapshot(snapshot);
-  enqueueTeamTask(taskId);
+
+  if (useClarifications) {
+    // Запускаем генерацию вопросов асинхронно — не блокируем ответ роуту.
+    // generateClarificationsForTask сам решит, есть ли вопросы; если нет —
+    // переведёт в running и enqueue. Если есть — переведёт в awaiting_input.
+    setImmediate(() => {
+      void generateClarificationsForTask(taskId).catch((err) => {
+        console.warn(
+          `[taskRunner] generateClarificationsForTask ${taskId} failed:`,
+          err?.message ?? err,
+        );
+      });
+    });
+  } else {
+    enqueueTeamTask(taskId);
+  }
+
   return taskId;
+}
+
+// Сессия 31: публичная обёртка для recoveryService — повторно дёргает
+// generateClarificationsForTask для задач, застрявших в clarifying после
+// рестарта бэкенда.
+export async function generateClarificationsForStuckTask(taskId) {
+  return generateClarificationsForTask(taskId);
+}
+
+// Сессия 31: фоновый шаг — формирование уточняющих вопросов агентом.
+// Вызывается из createTask, когда clarification_enabled=true. Если LLM
+// вернул [] — статус сразу 'running' + enqueue (вопросов не нужно). Иначе —
+// 'awaiting_input', ждём ответов Влада через /clarify.
+async function generateClarificationsForTask(taskId) {
+  const { generateClarifications } = await import("./clarificationService.js");
+  const task = await getTaskById(taskId);
+  if (!task) return;
+  if (task.status !== "clarifying") {
+    // Кто-то уже переключил статус — выходим без действий.
+    return;
+  }
+
+  const questions = await generateClarifications(task);
+  if (!Array.isArray(questions) || questions.length === 0) {
+    // Вопросов нет — двигаем в running и кладём в очередь.
+    await appendUpdate(taskId, {
+      status: "running",
+      clarificationQuestions: [],
+    });
+    enqueueTeamTask(taskId);
+    return;
+  }
+
+  await appendUpdate(taskId, {
+    status: "awaiting_input",
+    clarificationQuestions: questions,
+  });
+}
+
+// Сессия 31: применить ответы Влада на уточняющие вопросы — публичная.
+// Вызывается из роута POST /api/team/tasks/:id/clarify. Записывает ответы,
+// расширяет params.user_input, переводит задачу в running, кладёт в очередь.
+export async function applyClarificationAnswers(taskId, answers) {
+  const { buildEnrichedParams } = await import("./clarificationService.js");
+  const task = await getTaskById(taskId);
+  if (!task) throw new Error(`Задача не найдена: ${taskId}`);
+  if (task.status !== "awaiting_input") {
+    throw new Error(
+      `Задача в статусе '${task.status}' — ответы на уточнения принимаются только в 'awaiting_input'.`,
+    );
+  }
+  const cleaned = Array.isArray(answers)
+    ? answers.filter(
+        (e) =>
+          e &&
+          typeof e === "object" &&
+          typeof e.question === "string" &&
+          typeof e.answer === "string" &&
+          e.question.trim() &&
+          e.answer.trim(),
+      )
+    : [];
+
+  // Проверка required: все обязательные вопросы должны быть отвечены.
+  const required = Array.isArray(task.clarification_questions)
+    ? task.clarification_questions.filter((q) => q?.required !== false)
+    : [];
+  for (const r of required) {
+    const ok = cleaned.some((c) => c.question.trim() === String(r.question ?? "").trim());
+    if (!ok) {
+      throw new Error(`Не отвечен обязательный вопрос: "${r.question}"`);
+    }
+  }
+
+  const enrichedParams = buildEnrichedParams(task.params ?? {}, cleaned);
+
+  await appendUpdate(taskId, {
+    status: "running",
+    params: enrichedParams,
+    clarificationAnswers: cleaned,
+  });
+  // Перепересобираем промпт — params изменились, кешируемые блоки те же,
+  // но user_input расширился. Самый простой путь: вызвать previewPrompt и
+  // обновить snapshot.prompt. На текущем коде runTaskInBackground читает
+  // task.prompt — поэтому промпт надо обновить ДО enqueue.
+  try {
+    const previewVars = { ...enrichedParams };
+    if (task.agent_id) previewVars.agent_id = task.agent_id;
+    const built = await previewPrompt(task.type, previewVars);
+    await appendUpdate(taskId, {
+      prompt: {
+        system: built.system,
+        user: built.user,
+        cacheable_blocks: built.cacheableBlocks,
+        template: built.template,
+      },
+    });
+  } catch (err) {
+    // Если пересборка не удалась — продолжаем с прежним промптом.
+    // Уточнения всё равно уйдут как часть user_input, потому что мы
+    // обновили params (handler пересоберёт user-часть из params).
+    console.warn(
+      `[taskRunner] не удалось пересобрать промпт для ${taskId} после clarify:`,
+      err?.message ?? err,
+    );
+  }
+  enqueueTeamTask(taskId);
 }
 
 // Главный воркер задачи. Дёргается из teamWorkerPool. Не должен бросать —

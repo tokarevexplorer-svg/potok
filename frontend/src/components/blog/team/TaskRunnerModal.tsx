@@ -86,6 +86,11 @@ export default function TaskRunnerModal({
   // (см. useEffect ниже). Дополнительные пункты — textarea, по строке.
   const [selfReview, setSelfReview] = useState(false);
   const [selfReviewExtraChecks, setSelfReviewExtraChecks] = useState("");
+  // Сессия 31: «Уточнения от агента» — рабочий чекбокс. Дефолт false;
+  // дёргается только когда Влад явно поставил галку (включение по
+  // умолчанию для всех задач засорило бы UX). Бэкенд при таком флаге
+  // перед запуском задачи запросит у агента до 3 уточняющих вопросов.
+  const [clarification, setClarification] = useState(false);
 
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptPreview, setPromptPreview] = useState<PreviewPromptResult | null>(null);
@@ -119,6 +124,7 @@ export default function TaskRunnerModal({
       setNewProjectName("");
       setSelfReview(false);
       setSelfReviewExtraChecks("");
+      setClarification(false);
       setPromptOpen(false);
       setPromptPreview(null);
       setPromptError(null);
@@ -281,6 +287,9 @@ export default function TaskRunnerModal({
         // совпадает с дефолтом шаблона — это даст «честный» fallback).
         selfReviewEnabled: selfReview,
         selfReviewExtraChecks: selfReviewExtraChecks.trim() || null,
+        // Сессия 31: уточнения от агента. Если true — бэкенд переведёт
+        // задачу в clarifying → awaiting_input и UI покажет форму ответов.
+        clarificationEnabled: clarification,
       });
       onCreated(taskId);
     } catch (err) {
@@ -468,6 +477,26 @@ export default function TaskRunnerModal({
               </label>
             )}
           </div>
+
+          {/* Сессия 31: чекбокс «Уточнения от агента». До запуска задачи
+              агент через дешёвую модель формулирует до 3 коротких вопросов
+              на основе брифа + Role. UI задачи покажет форму ответов; после
+              сабмита задача переходит в running. */}
+          <label className="flex items-center gap-2 text-sm text-ink">
+            <input
+              type="checkbox"
+              checked={clarification}
+              onChange={(e) => setClarification(e.target.checked)}
+              className="accent-accent"
+            />
+            <span>
+              ❓ Уточнения от агента{" "}
+              <span className="text-xs italic text-ink-faint">
+                (агент сформулирует до 3 коротких вопросов перед стартом,
+                чтобы убедиться, что бриф понял правильно)
+              </span>
+            </span>
+          </label>
 
           {/* Сессия 19: UI-плейсхолдер «Сделать регулярной».
               Реальная функциональность — в пункте 15 (этап 3). */}

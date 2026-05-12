@@ -22,6 +22,7 @@ import {
   applyFragmentEditsInline,
   saveDirectEdit,
   appendQuestionToResearch,
+  applyClarificationAnswers,
 } from "../../services/team/taskRunner.js";
 import { getTaskById, getChildTasks } from "../../services/team/teamSupabase.js";
 import { getAgent } from "../../services/team/agentService.js";
@@ -136,6 +137,7 @@ router.post("/run", async (req, res) => {
     projectId,
     selfReviewEnabled,
     selfReviewExtraChecks,
+    clarificationEnabled,
   } = req.body ?? {};
 
   if (typeof taskType !== "string" || !TASK_HANDLERS[taskType]) {
@@ -275,6 +277,16 @@ router.post("/run", async (req, res) => {
         .json({ error: "selfReviewExtraChecks должен быть строкой или null." });
     }
 
+    // Сессия 31: clarificationEnabled — boolean, дефолт false.
+    let normalizedClarification = false;
+    if (typeof clarificationEnabled === "boolean") {
+      normalizedClarification = clarificationEnabled;
+    } else if (clarificationEnabled !== undefined && clarificationEnabled !== null) {
+      return res
+        .status(400)
+        .json({ error: "clarificationEnabled должен быть boolean или null." });
+    }
+
     const taskId = await createTask({
       taskType,
       params: finalParams,
@@ -286,6 +298,7 @@ router.post("/run", async (req, res) => {
       projectId: normalizedProjectId,
       selfReviewEnabled: normalizedSelfReview,
       selfReviewExtraChecks: normalizedExtraChecks,
+      clarificationEnabled: normalizedClarification,
     });
     return res.status(202).json({ taskId });
   } catch (err) {
@@ -652,6 +665,33 @@ router.get("/:taskId", async (req, res) => {
   } catch (err) {
     console.error(`[team] get ${taskId} failed:`, err);
     return res.status(500).json({ error: err.message ?? "Не удалось получить задачу" });
+  }
+});
+
+// =========================================================================
+// POST /api/team/tasks/:taskId/clarify
+// Body: { answers: [{ question, answer }] }
+// Сессия 31: применяет ответы Влада на уточняющие вопросы агента и
+// переводит задачу в running. Бросает 400, если задача не в awaiting_input
+// или если не отвечены обязательные вопросы.
+// =========================================================================
+router.post("/:taskId/clarify", async (req, res) => {
+  const taskId = ensureTaskId(req, res);
+  if (!taskId) return;
+  const body = req.body ?? {};
+  if (!Array.isArray(body.answers)) {
+    return res
+      .status(400)
+      .json({ error: "Поле answers обязательно и должно быть массивом." });
+  }
+  try {
+    await applyClarificationAnswers(taskId, body.answers);
+    return res.status(202).json({ ok: true });
+  } catch (err) {
+    console.error(`[team] clarify ${taskId} failed:`, err);
+    const status =
+      /не отвечен обязательный|статусе|не найдена/i.test(err?.message ?? "") ? 400 : 500;
+    return res.status(status).json({ error: err.message ?? "Не удалось применить ответы" });
   }
 });
 

@@ -17,6 +17,9 @@ import {
 import type {
   SelfReviewResultPayload,
   SuggestedNextStep,
+  TaskClarificationAnswer,
+  TaskClarificationQuestion,
+  TaskStepState,
   TeamTask,
   TeamTaskModelChoice,
   TeamTaskPrompt,
@@ -56,6 +59,11 @@ interface TeamTaskRow {
   self_review_enabled: boolean | null;
   self_review_extra_checks: string | null;
   self_review_result: SelfReviewResultPayload | null;
+  // Сессия 31
+  clarification_enabled: boolean | null;
+  clarification_questions: TaskClarificationQuestion[] | null;
+  clarification_answers: TaskClarificationAnswer[] | null;
+  step_state: TaskStepState | null;
 }
 
 function toNumber(value: number | string | null): number | null {
@@ -92,6 +100,10 @@ function mapTask(row: TeamTaskRow): TeamTask {
     selfReviewEnabled: row.self_review_enabled ?? null,
     selfReviewExtraChecks: row.self_review_extra_checks ?? null,
     selfReviewResult: row.self_review_result ?? null,
+    clarificationEnabled: row.clarification_enabled ?? null,
+    clarificationQuestions: row.clarification_questions ?? null,
+    clarificationAnswers: row.clarification_answers ?? null,
+    stepState: row.step_state ?? null,
   };
 }
 
@@ -111,7 +123,7 @@ function dedupeLatest(rows: TeamTaskRow[]): TeamTask[] {
 }
 
 const TASK_SELECT =
-  "id, type, title, status, params, model_choice, provider, model, prompt, prompt_override_used, result, artifact_path, tokens, cost_usd, error, created_at, updated_at, started_at, finished_at, agent_id, parent_task_id, suggested_next_steps, project_id, self_review_enabled, self_review_extra_checks, self_review_result";
+  "id, type, title, status, params, model_choice, provider, model, prompt, prompt_override_used, result, artifact_path, tokens, cost_usd, error, created_at, updated_at, started_at, finished_at, agent_id, parent_task_id, suggested_next_steps, project_id, self_review_enabled, self_review_extra_checks, self_review_result, clarification_enabled, clarification_questions, clarification_answers, step_state";
 
 // Все задачи (по последнему снапшоту), включая архивированные.
 // Используется на главной для подсчёта статистики и в Сессии 6 как
