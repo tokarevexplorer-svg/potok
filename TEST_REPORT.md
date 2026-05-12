@@ -1210,3 +1210,38 @@ URL: https://potok-omega.vercel.app/blog/team/dashboard
 - В team_api_calls: N+1 строк (N вопросов + 1 синтез) с одним task_id.
 - Финальный артефакт в team-database/research/preprod/researcher/notebook/<ts>_notebook_<slug>.md с шапкой «Ответы по вопросам / Синтез».
 
+
+---
+
+## Сессия 39 — Telegram-инфраструктура (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для всех новых файлов (telegramService, routes/telegram, cron/telegramCron, app.js, index.js) — OK.
+- `npx tsc --noEmit` во фронте — без ошибок.
+- `npx supabase db push` — миграция `0032_team_telegram.sql` применена.
+- `git log --oneline -1` → `a9c4fd6 Сессия 39 — Telegram-инфраструктура (боты, очередь, тихий час)`.
+
+### E2E через Playwright
+- `GET /api/team-proxy/telegram/settings` → `200 {"enabled":false,"chatId":"","dailyReportTime":"19:00","quietHours":{"end_hour":9,"timezone":"Europe/Moscow","start_hour":22},"systemTokenPresent":true,"webhookSecretPresent":false,"currentlyInQuietHours":false}` — все дефолты корректны, бэкенд видит TELEGRAM_SYSTEM_BOT_TOKEN в Railway ENV.
+- UI блок «Telegram» в Admin: рендер проверен после Vercel-деплоя (deploy в процессе на момент финализации).
+
+### Что осталось руками проверить
+#### Сессия 39 — рабочий цикл Telegram (требует Bot Father и chat_id)
+URL: https://potok-omega.vercel.app/blog/team/admin
+
+Что сделать:
+1. Получить @BotFather → `/newbot` → системный бот + по одному на каждого агента.
+2. Railway → Variables: `TELEGRAM_SYSTEM_BOT_TOKEN=<system_token>`, `TELEGRAM_WEBHOOK_SECRET=<random_hex>`. Передеплоить.
+3. В Админке → блок «Telegram»:
+   - Установить chat_id (id группы, куда добавлены все боты).
+   - Включить тумблер «Telegram включён».
+   - Кнопка «Тестовое сообщение» → в чате должно появиться сообщение от системного бота.
+4. Указать base_url Railway (например `https://your-backend.railway.app`) и нажать «Зарегистрировать вебхуки» — все боты получат webhook URL вида `/api/team/telegram/webhook/<hash>`.
+
+#### Сессия 39 — карточка агента: привязка Telegram-бота
+URL: https://potok-omega.vercel.app/blog/team/staff/<agentId>
+
+Что сделать:
+1. В карточке агента должна быть секция/вкладка «Telegram-бот» (пока НЕ реализована — `bindTelegramBot` есть в backend client, виджет нужно дописать).
+2. Альтернатива через API: `curl -X POST https://your-backend/api/team/telegram/bots -d '{"agent_id":"...","bot_token":"..."}'` — привяжет бота, проверит токен через getMe, заполнит bot_username и telegram_bot_id.
+

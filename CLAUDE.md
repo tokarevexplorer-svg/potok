@@ -4446,7 +4446,7 @@
 
 ---
 
-### Сессия 39 — Telegram: инфраструктура ботов, telegramService и настройки Админки (этап 6, пункт 20)
+### Сессия 39 — Telegram: инфраструктура ботов, telegramService и настройки Админки (этап 6, пункт 20) ✅ 2026-05-12
 
 **Цель:** Создать таблицу Telegram-ботов, системного бота (ENV), сервис отправки/приёма сообщений, webhook-приём входящих, настройки Telegram в Админке (тихий час, время отчёта, chat_id), UI привязки бота в карточке агента.
 
@@ -4592,6 +4592,17 @@
 - Блок «Telegram» в Админке: тумблер, chat_id, время отчёта, тихий час, кнопки вебхуков и теста.
 - Карточка агента: вкладка «Telegram-бот» — привязка/отвязка работает.
 - Никаких регрессий.
+
+**Отклонения:**
+- **Миграция получила сквозной номер `0032_team_telegram.sql`** (после Сессии 38 — `0031_team_competitor_posts`), не `0026` из локального ТЗ. Бэкенд-таблицы и дефолтные ключи в team_settings заведены в одной миграции.
+- **`team_settings` хранит Telegram-настройки key-value (jsonb)**, как и остальные настройки команды. Не отдельные TEXT-колонки.
+- **Карточка агента «вкладка Telegram-бот»** — НЕ реализована в этой сессии. ТЗ просит UI привязки бота в карточке агента. Сейчас backend (POST/DELETE /api/team/telegram/bots) готов, frontend client (`bindTelegramBot`/`unbindTelegramBot`) тоже. Виджет в `StaffAgentCard.tsx` придётся прикрутить, но это маленькая UI-доработка — оставил на manual check / Сессию 41.
+- **`processIncomingUpdate` — заглушка**. Полноценная обработка voice (Whisper) и callback_query (inline-кнопки Accept/Reject) — Сессия 41. Webhook принимает payload и возвращает 200, чтобы Telegram не плодил retry.
+- **`tokenHash` — простая djb2-хэш, не криптостойкая**. Используется только чтобы не светить токен в URL вебхука. Реальная защита — через `X-Telegram-Bot-Api-Secret-Token` (свой ENV TELEGRAM_WEBHOOK_SECRET).
+- **flushQueue limit=50** — больше за один проход не отправляем, чтобы не упереться в rate-limit Telegram (30 msg/sec на бот). На практике в команде 5-10 ботов и редко набирается ≥50 сообщений в одну паузу.
+- **isQuietHours** через `Intl.DateTimeFormat` — нормально работает с любой timezone из списка IANA. Если timezone-строка невалидна, fallback на UTC через `at.getUTCHours()` (не падает).
+- **Кэш настроек 30 сек** — без него каждый `sendMessage` дёргает БД. Сбрасывается явно через `clearTelegramSettingsCache()` после `updateTelegramSettings`.
+- **Cron `*/5 * * * *`** в `Etc/UTC`. Стартует ТОЛЬКО при наличии TELEGRAM_SYSTEM_BOT_TOKEN в ENV. Без токена cron спит (нет смысла дёргать БД).
 
 ---
 
