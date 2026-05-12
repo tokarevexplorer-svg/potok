@@ -976,3 +976,37 @@ URL: https://potok-omega.vercel.app/blog/team/admin
 - В user-промпте задачи (видно в preview) появляется блок «## Результаты Web Search» с результатами от внешнего провайдера.
 - Ответ агента опирается на эти результаты.
 
+
+---
+
+## Сессия 33 — База конкурентов: Apify + AI-саммари + UI (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для apifyService, competitorService, routes/competitors, app.js — OK.
+- `npx tsc --noEmit` — без ошибок.
+- `npx supabase db push` — миграция `0031_team_competitor_posts.sql` применена.
+- `git log --oneline -1` → `054bc15 Сессия 33 — База конкурентов: Apify, AI-саммари, UI`.
+
+### E2E через Playwright
+1. `GET /api/team-proxy/competitors` → `200 { competitors: [...], apify_token_present: false }`. Виден seed-блогер «Конкуренты» из миграции 0015.
+2. `/blog/databases/competitors` — заменён placeholder на CompetitorsWorkspace: жёлтая полоса «APIFY_TOKEN не задан», кнопка «Добавить блогера» (disabled), карточка существующей записи.
+3. `/blog/team/admin` → блок «Инструменты Системы» → карточка Apify рендерит «Токен не задан / Конкурентов: 1» + красную подсказку «Установи APIFY_TOKEN».
+
+### Что осталось руками проверить
+#### Сессия 33 — реальный парсинг блогера (требует APIFY_TOKEN)
+URL: https://potok-omega.vercel.app/blog/databases/competitors
+
+Что сделать:
+1. Получить токен на https://console.apify.com/account/integrations.
+2. Railway → Variables → добавить `APIFY_TOKEN=<token>`, перезапустить сервис.
+3. На странице «Конкуренты» жёлтая полоса исчезнет; кнопка «Добавить блогера» станет активной.
+4. Нажать «Добавить блогера», вставить ссылку (например, `https://instagram.com/lurie_d`), нажать «Оценить» — увидеть предполагаемую стоимость.
+5. Нажать «Добавить» → карточка появится со статусом «Парсинг» (Loader2).
+6. Подождать 30-90 секунд (поллинг каждые 15 сек обновит статус).
+
+Что должно произойти:
+- Статус карточки становится «Готово», `last_parsed_at` заполнен.
+- Клик по карточке → таблица постов с колонками Дата / Тип / Тема / Хук / Саммари / ❤ / 💬 / URL.
+- В Supabase: `team_competitor_posts` содержит N строк (по resultsLimit), `ai_summary` — JSONB с `{type, topic, hook, summary}`.
+- В `team_api_calls` появились строки: `provider='apify'` + `purpose='apify'` (одна), `purpose='competitor_analysis'` (N штук по числу постов).
+
