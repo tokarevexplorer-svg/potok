@@ -15,7 +15,7 @@
 // читаем все файлы, ищем максимальный vN, прибавляем 1.
 
 import { uploadFile, downloadFile, listFiles } from "./teamStorage.js";
-import { call as llmCall } from "./llmClient.js";
+import { call as llmCall, callForTask } from "./llmClient.js";
 import { buildPrompt } from "./promptBuilder.js";
 import { fetchSource } from "./contentFetcher.js";
 
@@ -229,9 +229,7 @@ export async function buildPreviewVariables(taskType, params) {
 async function handleIdeasFree(task) {
   const { params, prompt, provider, model } = task;
 
-  const result = await llmCall({
-    provider,
-    model,
+  const result = await callForTask(task, {
     systemPrompt: prompt.system,
     userPrompt: prompt.user,
     cacheableBlocks: prompt.cacheable_blocks ?? prompt.cacheableBlocks ?? [],
@@ -265,9 +263,7 @@ async function handleIdeasFree(task) {
 async function handleIdeasQuestionsForResearch(task) {
   const { params, prompt, provider, model } = task;
 
-  const result = await llmCall({
-    provider,
-    model,
+  const result = await callForTask(task, {
     systemPrompt: prompt.system,
     userPrompt: prompt.user,
     cacheableBlocks: prompt.cacheable_blocks ?? prompt.cacheableBlocks ?? [],
@@ -324,9 +320,7 @@ async function handleResearchDirect(task) {
     });
   }
 
-  const result = await llmCall({
-    provider,
-    model,
+  const result = await callForTask(task, {
     systemPrompt: usedPrompt.system,
     userPrompt: usedPrompt.user,
     cacheableBlocks: usedPrompt.cacheable_blocks ?? usedPrompt.cacheableBlocks ?? [],
@@ -377,9 +371,7 @@ async function handleWriteText(task) {
     });
   }
 
-  const result = await llmCall({
-    provider,
-    model,
+  const result = await callForTask(task, {
     systemPrompt: usedPrompt.system,
     userPrompt: usedPrompt.user,
     cacheableBlocks: usedPrompt.cacheable_blocks ?? usedPrompt.cacheableBlocks ?? [],
@@ -437,9 +429,7 @@ async function handleEditFragments(task) {
     });
   }
 
-  const result = await llmCall({
-    provider,
-    model,
+  const result = await callForTask(task, {
     systemPrompt: usedPrompt.system,
     userPrompt: usedPrompt.user,
     cacheableBlocks: usedPrompt.cacheable_blocks ?? usedPrompt.cacheableBlocks ?? [],

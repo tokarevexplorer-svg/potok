@@ -21,6 +21,7 @@ import { getSkillsForAgent } from "./skillService.js";
 import { call as llmCall } from "./llmClient.js";
 import { recordCall } from "./costTracker.js";
 import { downloadFile } from "./teamStorage.js";
+import { getAgentTools, getToolManifest } from "./toolService.js";
 
 const MIN_RESULT_LENGTH = 100;
 const PROMPTS_BUCKET = "team-prompts";
@@ -148,11 +149,59 @@ export async function buildChecklist(task, agent) {
     });
   }
 
-  // TODO Сессия 32+ (пункт 17): шестой источник — секции «Самопроверка»
-  // из методичек инструментов, привязанных к агенту. Добавим, когда
-  // toolService начнёт жить рядом с self-review.
+  // 6. Tool manifests — секции «## Самопроверка после использования» из
+  // методичек инструментов, привязанных к агенту (Сессия 32, пункт 17).
+  if (agent?.id) {
+    try {
+      const tools = await getAgentTools(agent.id, { onlyActive: true });
+      for (const tool of tools) {
+        if (!tool?.id) continue;
+        let manifestText = "";
+        try {
+          manifestText = (await getToolManifest(tool.id)) ?? "";
+        } catch {
+          continue;
+        }
+        const items = extractToolSelfCheckItems(manifestText);
+        for (const item of items) {
+          checklist.push({
+            source: "tool_manifest",
+            item: `${tool.name ?? tool.id}: ${item}`,
+            check: "Соблюдено по методичке инструмента?",
+          });
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[selfReview] не удалось подтянуть методички инструментов: ${err?.message ?? err}`,
+      );
+    }
+  }
 
   return checklist;
+}
+
+// Парсит из методички секцию «## Самопроверка после использования»
+// (синонимы: «## Самопроверка»). Возвращает массив строк-пунктов
+// из списка `- ...`. Если секции нет — пустой массив.
+export function extractToolSelfCheckItems(manifestText) {
+  if (!manifestText || typeof manifestText !== "string") return [];
+  const re = /^[ \t]*##[ \t]+Самопроверка(?:[ \t]+после[ \t]+использования)?[ \t]*$/im;
+  const m = manifestText.match(re);
+  if (!m) return [];
+  const after = manifestText.slice(m.index + m[0].length);
+  const nextRe = /^[ \t]*#{1,2}[ \t]+\S/m;
+  const next = after.match(nextRe);
+  const body = next ? after.slice(0, next.index) : after;
+  const out = [];
+  for (const line of body.split("\n")) {
+    const lm = line.match(/^[ \t]*[-*][ \t]+(.+)$/);
+    if (lm) {
+      const text = lm[1].trim();
+      if (text) out.push(text);
+    }
+  }
+  return out;
 }
 
 async function loadStorageFile(path) {

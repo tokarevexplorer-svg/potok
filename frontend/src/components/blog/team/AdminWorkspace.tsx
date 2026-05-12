@@ -368,6 +368,97 @@ function ToolCard({ tool, onToggle }: { tool: TeamTool; onToggle: () => void }) 
           </button>
         </div>
       </div>
+
+      {/* Сессия 32: настройка провайдера для Web Search */}
+      {tool.id === "web-search" && <WebSearchProviderSettings tool={tool} />}
+    </div>
+  );
+}
+
+// Сессия 32: блок выбора провайдера Web Search (anthropic / tavily / perplexity).
+// Для Anthropic ключ берётся из team_api_keys (как для обычных LLM-вызовов);
+// для Tavily / Perplexity — отдельный API-ключ кладётся в connection_config.api_key.
+function WebSearchProviderSettings({ tool }: { tool: TeamTool }) {
+  const cfg = (tool.connection_config ?? {}) as Record<string, unknown>;
+  const initialProvider =
+    typeof cfg.provider === "string" && cfg.provider ? (cfg.provider as string) : "anthropic";
+  const initialApiKey = typeof cfg.api_key === "string" ? (cfg.api_key as string) : "";
+
+  const [provider, setProvider] = useState(initialProvider);
+  const [apiKey, setApiKey] = useState(initialApiKey);
+  const [busy, setBusy] = useState(false);
+  const [savedHint, setSavedHint] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const dirty = provider !== initialProvider || apiKey !== initialApiKey;
+  const needsKey = provider === "tavily" || provider === "perplexity";
+
+  async function handleSave() {
+    if (!dirty || busy) return;
+    if (needsKey && !apiKey.trim()) {
+      setError(`Для провайдера ${provider} нужен API-ключ.`);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setSavedHint(null);
+    try {
+      const nextConfig: Record<string, unknown> = { provider };
+      if (apiKey.trim()) nextConfig.api_key = apiKey.trim();
+      await updateTool(tool.id, { connection_config: nextConfig });
+      setSavedHint("Сохранено");
+      setTimeout(() => setSavedHint(null), 2500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-xl border border-line bg-canvas px-3 py-3 text-xs">
+      <p className="mb-2 font-medium uppercase tracking-wide text-ink-faint">
+        Провайдер поиска
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={provider}
+          onChange={(e) => setProvider(e.target.value)}
+          disabled={busy}
+          className="focus-ring h-8 rounded-md border border-line bg-surface px-2 text-xs text-ink"
+        >
+          <option value="anthropic">Anthropic (нативный tool-use)</option>
+          <option value="tavily">Tavily (REST)</option>
+          <option value="perplexity">Perplexity (sonar)</option>
+        </select>
+        {needsKey && (
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={provider === "tavily" ? "Tavily API key" : "Perplexity API key"}
+            disabled={busy}
+            className="focus-ring h-8 min-w-[12rem] flex-1 rounded-md border border-line bg-surface px-2 text-xs text-ink placeholder:text-ink-faint"
+          />
+        )}
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={!dirty || busy}
+          className="focus-ring inline-flex h-8 items-center rounded-md bg-ink px-3 text-xs font-semibold text-canvas transition hover:bg-ink/90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? "Сохраняю…" : "Сохранить"}
+        </button>
+      </div>
+      {savedHint && <p className="mt-2 text-emerald-700">{savedHint}</p>}
+      {error && (
+        <p className="mt-2 rounded-md bg-rose-50 px-2 py-1 text-rose-800">{error}</p>
+      )}
+      {!needsKey && (
+        <p className="mt-2 text-ink-faint">
+          Anthropic-провайдер использует ключ из «Ключи API» (поле Anthropic выше).
+        </p>
+      )}
     </div>
   );
 }

@@ -80,9 +80,14 @@ export async function call({
   userPrompt = "",
   cacheableBlocks = [],
   maxTokens = 4096,
+  // Сессия 32: webSearch — { enabled: boolean, maxUses?: number, allowedDomains?: string[] }.
+  // Поддерживается только для Anthropic (нативный tool web_search). Остальные
+  // провайдеры игнорируют поле; для них вызывающий код должен сам подкладывать
+  // результаты Tavily/Perplexity в userPrompt до запроса.
+  webSearch = null,
 }) {
   if (provider === "anthropic") {
-    return callAnthropic({ model, systemPrompt, userPrompt, cacheableBlocks, maxTokens });
+    return callAnthropic({ model, systemPrompt, userPrompt, cacheableBlocks, maxTokens, webSearch });
   }
   if (provider === "openai") {
     return callOpenAI({ model, systemPrompt, userPrompt, maxTokens });
@@ -93,9 +98,100 @@ export async function call({
   throw new LLMError(`Неизвестный провайдер: ${provider}`);
 }
 
+// Сессия 32: обёртка над call(), которая автоматически подтягивает Web Search
+// для агента-исполнителя задачи. Поведение зависит от провайдера активного
+// Web Search инструмента (см. webSearchService.getWebSearchConfig):
+//
+//   * anthropic → пробрасываем встроенный tool web_search в Messages API.
+//     Цитаты встроены в ответ модели.
+//   * tavily / perplexity → делаем предварительный поиск, результаты
+//     добавляются в начало userPrompt как блок «## Результаты Web Search».
+//
+// Если у агента не привязан Web Search или ошибка конфигурации — fallback
+// на обычный call() без поиска. Никогда не падаем из-за проблем Web Search —
+// логируем и продолжаем без него.
+export async function callForTask(task, overrides = {}) {
+  const { provider, model } = task;
+  const prompt = task?.prompt ?? {};
+  const baseArgs = {
+    provider: overrides.provider ?? provider,
+    model: overrides.model ?? model,
+    systemPrompt: overrides.systemPrompt ?? prompt.system ?? "",
+    userPrompt: overrides.userPrompt ?? prompt.user ?? "",
+    cacheableBlocks:
+      overrides.cacheableBlocks ??
+      prompt.cacheable_blocks ??
+      prompt.cacheableBlocks ??
+      [],
+    maxTokens: overrides.maxTokens ?? 4096,
+  };
+
+  const agentId = task?.agent_id ?? task?.agentId ?? null;
+  if (!agentId) {
+    return call(baseArgs);
+  }
+
+  // Локальный импорт, чтобы избежать циклической зависимости в загрузке.
+  let wsConfig;
+  let agentHasIt;
+  try {
+    const ws = await import("./webSearchService.js");
+    agentHasIt = await ws.agentHasWebSearch(agentId);
+    if (!agentHasIt) return call(baseArgs);
+    wsConfig = await ws.getWebSearchConfig();
+  } catch (err) {
+    console.warn(
+      `[llmClient] Web Search недоступен для задачи ${task?.id ?? "?"}: ${err?.message ?? err}`,
+    );
+    return call(baseArgs);
+  }
+
+  // Anthropic — нативный tool-use. Прокидываем webSearch в call().
+  if (baseArgs.provider === "anthropic" && wsConfig.provider === "anthropic") {
+    return call({ ...baseArgs, webSearch: { enabled: true, maxUses: 5 } });
+  }
+
+  // Tavily/Perplexity (или anthropic-задача с не-anthropic поиском) — делаем
+  // предварительный запрос. Запрос — userPrompt верхнего уровня; в реальности
+  // тут можно было бы попросить LLM сначала придумать поисковый запрос, но
+  // для MVP берём бриф как есть.
+  try {
+    const ws = await import("./webSearchService.js");
+    const query = (baseArgs.userPrompt || "").slice(0, 500);
+    const found = await ws.search(query);
+    const block = renderSearchResults(found.results);
+    if (block) {
+      return call({
+        ...baseArgs,
+        userPrompt: `${block}\n\n${baseArgs.userPrompt}`,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      `[llmClient] предварительный Web Search упал, продолжаем без него: ${err?.message ?? err}`,
+    );
+  }
+  return call(baseArgs);
+}
+
+function renderSearchResults(results) {
+  if (!Array.isArray(results) || results.length === 0) return "";
+  const lines = ["## Результаты Web Search", ""];
+  for (const r of results) {
+    const title = (r?.title ?? "").trim() || "(без названия)";
+    const url = (r?.url ?? "").trim();
+    const content = (r?.content ?? "").trim();
+    lines.push(`### ${title}`);
+    if (url) lines.push(url);
+    if (content) lines.push("", content);
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 // ---------- Anthropic ----------
 
-async function callAnthropic({ model, systemPrompt, userPrompt, cacheableBlocks, maxTokens }) {
+async function callAnthropic({ model, systemPrompt, userPrompt, cacheableBlocks, maxTokens, webSearch = null }) {
   const apiKey = await ensureKey("anthropic");
   const client = new Anthropic({ apiKey });
 
@@ -125,6 +221,25 @@ async function callAnthropic({ model, systemPrompt, userPrompt, cacheableBlocks,
   // если контента действительно нет.
   if (systemBlocks.length > 0) {
     requestBody.system = systemBlocks;
+  }
+
+  // Сессия 32: нативный Web Search через tool-use. Если webSearch.enabled —
+  // прокидываем встроенный tool web_search_20250305. Anthropic сам
+  // сделает поиск, вставит цитаты как блоки в content, и выдаст финальный
+  // ответ. Дополнительные расходы биллятся отдельно — но в нашей текущей
+  // схеме costTracker считает только tokens, web-search-fee не выделяется.
+  if (webSearch && webSearch.enabled) {
+    const tool = {
+      type: "web_search_20250305",
+      name: "web_search",
+    };
+    if (Number.isFinite(webSearch.maxUses) && webSearch.maxUses > 0) {
+      tool.max_uses = Math.floor(webSearch.maxUses);
+    }
+    if (Array.isArray(webSearch.allowedDomains) && webSearch.allowedDomains.length > 0) {
+      tool.allowed_domains = webSearch.allowedDomains.filter((d) => typeof d === "string" && d.trim());
+    }
+    requestBody.tools = [tool];
   }
 
   let response;
