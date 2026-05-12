@@ -7,6 +7,7 @@ import { configureTeamWorkerPool } from "./queue/teamWorkerPool.js";
 import { runTaskInBackground } from "./services/team/taskRunner.js";
 import { recoverUnfinishedTeamTasks } from "./services/team/teamRecoveryService.js";
 import { startAutonomyCron } from "./cron/autonomyCron.js";
+import { startTelegramCron } from "./cron/telegramCron.js";
 
 // Настраиваем пул до старта сервера: процессор и конкурентность.
 configureWorkerPool({
@@ -39,4 +40,8 @@ app.listen(env.port, () => {
   // autonomy_enabled_globally — стартуем их безусловно, а флаг рулит
   // фактическим выполнением.
   startAutonomyCron();
+
+  // Сессия 39: cron Telegram-очереди. Сам проверит наличие
+  // TELEGRAM_SYSTEM_BOT_TOKEN и переменных, иначе не запустится.
+  startTelegramCron();
 });

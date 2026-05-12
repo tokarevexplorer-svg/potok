@@ -22,6 +22,7 @@ import teamProposalsRouter from "./routes/team/proposals.js";
 import teamSkillsRouter from "./routes/team/skills.js";
 import teamSkillCandidatesRouter from "./routes/team/skillCandidates.js";
 import teamCompetitorsRouter from "./routes/team/competitors.js";
+import teamTelegramRouter from "./routes/team/telegram.js";
 
 export function createApp() {
   const app = express();
@@ -70,6 +71,7 @@ export function createApp() {
   app.use("/api/team/skills", teamSkillsRouter);
   app.use("/api/team/skill-candidates", teamSkillCandidatesRouter);
   app.use("/api/team/competitors", teamCompetitorsRouter);
+  app.use("/api/team/telegram", teamTelegramRouter);
 
   // Финальный обработчик ошибок — чтобы не падали сокеты.
   app.use((err, _req, res, _next) => {

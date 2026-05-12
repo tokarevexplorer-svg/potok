@@ -42,6 +42,7 @@ import {
   updateTool,
 } from "@/lib/team/teamBackendClient";
 import { formatUsd } from "@/lib/team/format";
+import TelegramSection from "./TelegramSection";
 
 type Provider = "anthropic" | "openai" | "google";
 
@@ -192,6 +193,8 @@ export default function AdminWorkspace() {
       />
 
       <ToolsSection />
+
+      <TelegramSection />
 
       <AutonomySection />
 

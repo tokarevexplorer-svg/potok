@@ -1467,3 +1467,92 @@ export async function fetchComparisonGroup(
   );
   return data as ComparisonGroupResult;
 }
+
+// =========================================================================
+// Сессия 39: Telegram
+// =========================================================================
+
+export interface TelegramSettings {
+  enabled: boolean;
+  chatId: string;
+  dailyReportTime: string;
+  quietHours: {
+    start_hour: number;
+    end_hour: number;
+    timezone: string;
+  };
+  systemTokenPresent: boolean;
+  webhookSecretPresent: boolean;
+  currentlyInQuietHours: boolean;
+}
+
+export async function fetchTelegramSettings(): Promise<TelegramSettings> {
+  const data = await backendFetch("/api/team/telegram/settings", { method: "GET" });
+  return data as TelegramSettings;
+}
+
+export async function patchTelegramSettings(
+  patch: Partial<Pick<TelegramSettings, "enabled" | "chatId" | "dailyReportTime" | "quietHours">>,
+): Promise<TelegramSettings> {
+  const data = await backendFetch("/api/team/telegram/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return data as TelegramSettings;
+}
+
+export interface TelegramAgentBot {
+  id: string;
+  agent_id: string;
+  bot_token: string;
+  bot_username: string | null;
+  telegram_bot_id: number | null;
+  status: "active" | "inactive";
+  created_at: string;
+}
+
+export async function fetchTelegramBots(): Promise<TelegramAgentBot[]> {
+  const data = await backendFetch("/api/team/telegram/bots", { method: "GET" });
+  return ((data ?? {}) as { bots?: TelegramAgentBot[] }).bots ?? [];
+}
+
+export async function bindTelegramBot(
+  agentId: string,
+  botToken: string,
+): Promise<TelegramAgentBot> {
+  const data = await backendFetch("/api/team/telegram/bots", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent_id: agentId, bot_token: botToken }),
+  });
+  return ((data ?? {}) as { bot?: TelegramAgentBot }).bot as TelegramAgentBot;
+}
+
+export async function unbindTelegramBot(agentId: string): Promise<void> {
+  await backendFetch(`/api/team/telegram/bots/${encodeURIComponent(agentId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function registerTelegramWebhooks(
+  baseUrl: string,
+): Promise<{ registered: number; failed: number; details: unknown[] }> {
+  const data = await backendFetch("/api/team/telegram/register-webhooks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base_url: baseUrl }),
+  });
+  return data as { registered: number; failed: number; details: unknown[] };
+}
+
+export async function sendTelegramTest(text?: string): Promise<{ ok: boolean }> {
+  const body: Record<string, unknown> = {};
+  if (text) body.text = text;
+  const data = await backendFetch("/api/team/telegram/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return data as { ok: boolean };
+}
