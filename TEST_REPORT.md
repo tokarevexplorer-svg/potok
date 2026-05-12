@@ -1167,3 +1167,46 @@ URL: https://potok-omega.vercel.app/blog/team/staff/create
 - В разделе Сотрудники появятся 4 новых карточки.
 - В preview-prompt каждой задачи виден Role-файл агента + Awareness (карта команды из 4 человек).
 
+
+---
+
+## Сессия 38 — NotebookLM multistep + end-to-end pipeline test (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для taskHandlers, taskRunner, teamSupabase, test-pipeline-e2e — OK.
+- `npx tsc --noEmit` — без ошибок.
+- `npm run test:pipeline` — **5/5 тестов пройдено**:
+  - Multistep 5 questions → step_state → пройти все шаги (synthesis_pending=true).
+  - Multistep resume с current_step=2 (сериализация-восстановление step_state).
+  - Парсер questions_list с разными форматами (1./2./-/* + # для комментариев).
+  - Структурная цепочка handoff researcher→writer→factchecker→chief.
+  - Корректные пути предпродакшн-артефактов для будущего mergeArtifacts.
+- `git log --oneline -1` → `af4deb2 Сессия 38 — NotebookLM multistep + end-to-end pipeline test`.
+
+### E2E через Playwright
+1. `GET /api/team-proxy/tasks/template-defaults/deep_research_notebooklm` → `200 {"defaults":{"self_review_default":true,"clarification_default":true,"multistep":true}}` — frontmatter жив на бэкенде.
+2. Открытие формы deep_research_notebooklm через TaskCreationModal — рендер новых полей (Notebook ID / Список вопросов / Доп. контекст) проверен только в TS-build; Vercel-deploy ещё в процессе на момент финализации.
+
+### Что осталось руками проверить
+#### Сессия 38 — поля формы deep_research_notebooklm (после Vercel-деплоя)
+URL: https://potok-omega.vercel.app/blog/team/dashboard
+
+Что сделать:
+1. «Поставить задачу» → агент → «Глубокий ресёрч через NotebookLM».
+2. В форме должны быть три поля: «Notebook ID», «Список вопросов» (textarea), «Дополнительный контекст».
+3. Кнопка «Запустить» disabled пока не заполнены notebook_id и questions_list.
+
+#### Сессия 38 — реальный multistep flow
+URL: https://potok-omega.vercel.app/blog/team/dashboard
+
+Что сделать:
+1. Создать тестового агента-исследователя с привязанным шаблоном `deep_research_notebooklm`.
+2. Заполнить notebook_id (любая строка, реальный NotebookLM пока не интегрирован) + 3-5 вопросов через перенос строки.
+3. Запустить, наблюдать в логе задач.
+
+Что должно произойти:
+- Карточка задачи: статус «В работе», в карточке task.step_state.current_step растёт после каждого шага.
+- В Supabase team_tasks: новые снапшоты с обновлённым step_state.accumulated_results.
+- В team_api_calls: N+1 строк (N вопросов + 1 синтез) с одним task_id.
+- Финальный артефакт в team-database/research/preprod/researcher/notebook/<ts>_notebook_<slug>.md с шапкой «Ответы по вопросам / Синтез».
+
