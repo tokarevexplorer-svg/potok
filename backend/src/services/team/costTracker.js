@@ -148,15 +148,22 @@ export async function recordCall({
   error = null,
   agentId = null,
   purpose = null,
+  // Сессия 33: для внешних провайдеров без token-based pricing (Apify,
+  // tavily/perplexity) calculateCost не знает ставок — даём caller'у
+  // возможность передать готовую сумму.
+  costOverrideUsd = null,
 }) {
-  const cost = await calculateCost({
-    provider,
-    model,
-    inputTokens,
-    outputTokens,
-    cachedTokens,
-    audioMinutes,
-  });
+  const cost =
+    typeof costOverrideUsd === "number" && Number.isFinite(costOverrideUsd)
+      ? costOverrideUsd
+      : await calculateCost({
+          provider,
+          model,
+          inputTokens,
+          outputTokens,
+          cachedTokens,
+          audioMinutes,
+        });
 
   return await recordApiCall({
     provider,

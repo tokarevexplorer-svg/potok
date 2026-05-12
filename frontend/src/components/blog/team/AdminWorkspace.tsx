@@ -31,6 +31,7 @@ import {
   fetchKeysFull,
   fetchSecuritySettings,
   fetchSpending,
+  fetchCompetitors,
   fetchTools,
   patchHardLimits,
   patchSecuritySettings,
@@ -286,24 +287,11 @@ function ToolsSection() {
           title="Инструменты Системы"
           description="Системные инструменты — не в Hands агента, а в инфраструктуре (парсинг баз, бэкенды). Идут отдельным реестром."
         />
-        {/* Сессия 21: placeholder для Apify (Сессия 33). */}
+        {/* Сессия 33: реальная карточка Apify. Статус читается по
+            конкурентам — если хоть один competitor имеет
+            schema_definition.last_parsed_at, значит токен живой. */}
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div className="rounded-2xl border border-dashed border-line bg-elevated/40 p-5 opacity-70">
-            <div className="flex items-center gap-3">
-              <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-canvas text-ink-muted">
-                <Wrench size={18} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <h3 className="font-display text-base font-semibold text-ink">
-                  Apify
-                </h3>
-                <p className="text-xs text-ink-muted">
-                  Парсинг каналов конкурентов в Instagram. Подключится в этапе 5.
-                </p>
-              </div>
-              <span className="text-xs text-ink-faint italic">этап 5</span>
-            </div>
-          </div>
+          <ApifyCard />
         </div>
       </section>
     </>
@@ -1557,6 +1545,89 @@ function SectionHeader({ title, description }: { title: string; description: str
     <div>
       <h2 className="font-display text-xl font-semibold tracking-tight text-ink">{title}</h2>
       <p className="mt-1 max-w-2xl text-sm text-ink-muted">{description}</p>
+    </div>
+  );
+}
+
+// Сессия 33: карточка Apify в блоке «Инструменты Системы». Показывает
+// статус (по наличию хотя бы одного успешно спарсенного конкурента) и
+// напоминает о токене.
+function ApifyCard() {
+  const [loading, setLoading] = useState(true);
+  const [tokenPresent, setTokenPresent] = useState<boolean | null>(null);
+  const [count, setCount] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchCompetitors()
+      .then((res) => {
+        if (cancelled) return;
+        setTokenPresent(res.apify_token_present);
+        setCount(res.competitors.length);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const statusLabel = loading
+    ? "Загружаем…"
+    : tokenPresent
+      ? "Токен задан"
+      : "Токен не задан";
+  const dotClass = loading
+    ? "bg-ink-faint"
+    : tokenPresent
+      ? "bg-emerald-500"
+      : "bg-rose-500";
+
+  return (
+    <div className="rounded-2xl border border-line bg-elevated p-5 shadow-card">
+      <div className="flex items-start gap-3">
+        <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-accent-soft text-accent">
+          <Wrench size={18} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-base font-semibold text-ink">Apify</h3>
+          <p className="mt-0.5 text-sm leading-snug text-ink-muted">
+            Парсинг каналов конкурентов в Instagram. Стоимость ~$0.002 за пост.
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span className="inline-flex items-center gap-1.5 text-ink-muted">
+          <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} />
+          {statusLabel}
+        </span>
+        <span className="text-ink-faint">
+          Конкурентов: {loading ? "…" : count}
+        </span>
+      </div>
+      {tokenPresent === false && (
+        <p className="mt-3 text-xs text-rose-700">
+          Установи APIFY_TOKEN в Railway → Variables (получить:&nbsp;
+          <a
+            href="https://console.apify.com/account/integrations"
+            target="_blank"
+            rel="noreferrer"
+            className="underline"
+          >
+            console.apify.com/account/integrations
+          </a>
+          ).
+        </p>
+      )}
+      {error && (
+        <p className="mt-2 rounded-lg bg-rose-50 px-2 py-1 text-xs text-rose-800">{error}</p>
+      )}
     </div>
   );
 }

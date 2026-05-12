@@ -1306,3 +1306,96 @@ export async function setDevMode(
   });
   return data as DevModeStatus;
 }
+
+// =========================================================================
+// Сессия 33: база конкурентов
+// =========================================================================
+
+export interface Competitor {
+  id: string;
+  name: string;
+  description: string | null;
+  table_name: string;
+  db_type: "competitor";
+  schema_definition: {
+    username?: string;
+    processing?: boolean;
+    last_error?: string | null;
+    last_parsed_at?: string | null;
+  } | null;
+  created_at: string;
+}
+
+export interface CompetitorPost {
+  id: string;
+  competitor_id: string;
+  external_id: string;
+  url: string | null;
+  type: string | null;
+  caption: string | null;
+  likes_count: number | null;
+  comments_count: number | null;
+  video_url: string | null;
+  transcription: string | null;
+  ai_summary: {
+    type?: string | null;
+    topic?: string | null;
+    hook?: string | null;
+    summary?: string | null;
+  } | null;
+  posted_at: string | null;
+  created_at: string;
+}
+
+export interface CompetitorEstimate {
+  username: string;
+  estimated_posts: number;
+  apify_usd: number;
+  ai_usd: number;
+  total_usd: number;
+  apify_token_present?: boolean;
+}
+
+export async function fetchCompetitors(): Promise<{
+  competitors: Competitor[];
+  apify_token_present: boolean;
+}> {
+  const data = await backendFetch("/api/team/competitors", { method: "GET" });
+  return data as { competitors: Competitor[]; apify_token_present: boolean };
+}
+
+export async function estimateCompetitor(
+  instagramUrl: string,
+  resultsLimit = 30,
+): Promise<CompetitorEstimate> {
+  const data = await backendFetch("/api/team/competitors/estimate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ instagram_url: instagramUrl, results_limit: resultsLimit }),
+  });
+  return data as CompetitorEstimate;
+}
+
+export async function addCompetitor(
+  instagramUrl: string,
+  resultsLimit = 30,
+): Promise<Competitor> {
+  const data = await backendFetch("/api/team/competitors/add", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ instagram_url: instagramUrl, results_limit: resultsLimit }),
+  });
+  return ((data ?? {}) as { competitor?: Competitor }).competitor as Competitor;
+}
+
+export async function fetchCompetitorPosts(
+  competitorId: string,
+  { limit = 30, offset = 0 }: { limit?: number; offset?: number } = {},
+): Promise<{ posts: CompetitorPost[]; total: number }> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const data = await backendFetch(
+    `/api/team/competitors/${encodeURIComponent(competitorId)}/posts?${params.toString()}`,
+    { method: "GET" },
+  );
+  return data as { posts: CompetitorPost[]; total: number };
+}
