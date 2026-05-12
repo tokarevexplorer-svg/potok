@@ -901,3 +901,35 @@ URL: https://potok-omega.vercel.app/blog/team/dashboard
 - Под блоком — «Разбивка стоимости»: «Основной вызов $X.XX», «Самопроверка $Y.YY», «Итого $Z.ZZ».
 - В логе задач у этой карточки рядом с моделью виден эмодзи `🔍✅` (или ⚠️/❌).
 
+
+---
+
+## Сессия 31 — Новые статусы + многошаговая инфраструктура + уточнения (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для taskRunner, clarificationService, taskContinuationService, teamSupabase, teamRecoveryService, routes/team/tasks — OK.
+- `npx tsc --noEmit` — без ошибок.
+- `npx supabase db push` — миграция `0030_team_multistep_tasks.sql` применена.
+- `git log --oneline -1` → `d15856b Сессия 31 — статусы clarifying/awaiting_*, step_state, уточнения от агента`.
+
+### E2E через Playwright
+1. `POST /api/team-proxy/tasks/tsk_doesnotexist/clarify` → 500 с правильным русским сообщением «Задача не найдена: tsk_doesnotexist» — роут зарегистрирован.
+2. Форма «Поставить задачу → Игорь → Написать текст»: в модалке виден чекбокс «❓ Уточнения от агента» с `checked=false disabled=false`. Рядом — «🔍 Самопроверка» с `checked=true` (дефолт write-text), «⏰ Сделать регулярной» с `disabled=true` (плейсхолдер).
+3. Supabase select-список включает новые поля `clarification_enabled, clarification_questions, clarification_answers, step_state` (видно в URL запросов дашборда).
+
+### Что осталось руками проверить
+#### Сессия 31 — полный flow уточнений (требует запуска задачи)
+URL: https://potok-omega.vercel.app/blog/team/dashboard
+
+Что сделать:
+1. «Поставить задачу» → выбрать агента → «Написать текст».
+2. Поставить галочку «❓ Уточнения от агента». Запустить.
+3. В логе задач карточка должна получить бейдж «Уточнения» (фиолетовый), затем «Жду ответа».
+4. Открыть задачу — должен появиться блок «❓ Вопросы агента (N)» с textarea на каждый вопрос.
+5. Заполнить ответы, нажать «Продолжить».
+
+Что должно произойти:
+- Задача переходит в статус «Идёт» (running).
+- `team_tasks.clarification_questions` непустой массив, `clarification_answers` — заполнены, `params.user_input` расширен блоком «## Уточнения от автора».
+- В `team_api_calls` есть строка с `purpose='clarification'`.
+
