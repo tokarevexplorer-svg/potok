@@ -53,6 +53,20 @@ const TEMPLATE_META: Record<string, { title: string; description: string }> = {
     title: "Написать текст",
     description: "Собрать готовый текст из идеи и подключённых источников",
   },
+  // Сессия 35: задачи разведчика. Доступны только тем агентам, у которых
+  // эти типы в allowed_task_templates (UI карточки сотрудника).
+  analyze_competitor: {
+    title: "Анализ конкурента",
+    description: "Разбор контента блогера-конкурента из базы (форматы, хуки, темы)",
+  },
+  search_trends: {
+    title: "Поиск трендов",
+    description: "Свежие тренды в нише через Web Search с привязкой к Goals",
+  },
+  free_research: {
+    title: "Свободный ресёрч",
+    description: "Произвольный поиск/анализ с использованием инструментов агента",
+  },
 };
 const ALL_TASK_TYPES = Object.keys(TEMPLATE_META);
 

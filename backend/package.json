@@ -16,7 +16,8 @@
     "triggers:run": "node scripts/run-triggers.js",
     "extract:skills": "node scripts/extract-skills.js",
     "apply:self-review-defaults": "node scripts/add-self-review-defaults.js",
-    "seed:web-search": "node scripts/seed-web-search.js"
+    "seed:web-search": "node scripts/seed-web-search.js",
+    "seed:scout-templates": "node scripts/seed-scout-templates.js"
   },
   "engines": {
     "node": ">=20"

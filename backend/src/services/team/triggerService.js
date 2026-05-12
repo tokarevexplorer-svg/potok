@@ -512,37 +512,116 @@ async function pollLowScoreFor(agent) {
 // Триггер: new_competitor_entry
 // =========================================================================
 //
-// Простой вариант: считаем триггером появление новой записи в реестре
-// `team_custom_databases` с `db_type='competitor'` за период. (Парсинг
-// реальных таблиц конкурентов добавит Сессия 33 — там же триггер можно
-// будет расширить «появилась запись в таблице конкретного блогера».)
+// Сессия 35: расширили — триггерим и на нового блогера (новая запись
+// `team_custom_databases` с `db_type='competitor'`), и на новые посты в
+// `team_competitor_posts` (которые наполнились в Сессии 33). Берём более
+// свежий из двух источников для last_checked.
 async function pollCompetitorEntryFor(agent) {
   const cutoff = await ensureCutoff(agent.id, "new_competitor_entry");
   const client = getServiceRoleClient();
-  const { data, error } = await client
+
+  const { data: newBlogger, error: errBlogger } = await client
     .from("team_custom_databases")
     .select("id, name, created_at, db_type")
     .eq("db_type", "competitor")
     .gt("created_at", cutoff)
     .order("created_at", { ascending: false })
     .limit(1);
-  if (error) {
-    return { triggered: false, reason: `query_error: ${error.message}` };
+  if (errBlogger) {
+    return { triggered: false, reason: `query_error: ${errBlogger.message}` };
   }
-  const newest = (data ?? [])[0];
-  if (!newest) {
+
+  const { data: newPosts, error: errPosts } = await client
+    .from("team_competitor_posts")
+    .select("id, competitor_id, external_id, created_at, posted_at")
+    .gt("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  // team_competitor_posts появилась в Сессии 33 — игнорируем «таблица не
+  // существует» как ноль-результат, чтобы триггер не падал на старых
+  // инстансах.
+  if (errPosts && !/relation .* does not exist/i.test(errPosts.message ?? "")) {
+    return { triggered: false, reason: `query_error: ${errPosts.message}` };
+  }
+
+  const newestBlogger = (newBlogger ?? [])[0] ?? null;
+  const newestPost = (newPosts ?? [])[0] ?? null;
+  if (!newestBlogger && !newestPost) {
     return { triggered: false, reason: "no_new_competitor" };
   }
-  await setTriggerState(agent.id, "new_competitor_entry", newest.created_at);
+
+  // Берём более свежий из двух — он определяет, что мы коммитим как
+  // last_checked. Контекст для размышления тоже берёт более свежий.
+  const newestCreatedAt =
+    newestBlogger && newestPost
+      ? newestBlogger.created_at > newestPost.created_at
+        ? newestBlogger.created_at
+        : newestPost.created_at
+      : (newestBlogger ?? newestPost).created_at;
+  await setTriggerState(agent.id, "new_competitor_entry", newestCreatedAt);
 
   const lastReflection = await getLastReflection(agent.id, "new_competitor_entry", 7);
   if (lastReflection) {
     return { triggered: false, reason: "cooldown" };
   }
 
-  const result = await runReflectionCycle(agent.id, "new_competitor_entry", {
-    note: `Новый конкурент в базе: ${newest.name}.`,
-    details: { competitor_id: newest.id, name: newest.name },
+  const note = newestBlogger
+    ? `Новый конкурент в базе: ${newestBlogger.name}.`
+    : `Новые посты в базе конкурентов (${newestPost.external_id}).`;
+  const details = {
+    new_blogger: newestBlogger ? { id: newestBlogger.id, name: newestBlogger.name } : null,
+    new_post: newestPost
+      ? {
+          id: newestPost.id,
+          competitor_id: newestPost.competitor_id,
+          external_id: newestPost.external_id,
+        }
+      : null,
+  };
+
+  const result = await runReflectionCycle(agent.id, "new_competitor_entry", { note, details });
+  return { triggered: true, result };
+}
+
+// =========================================================================
+// Сессия 35: триггер new_reference_entry
+// =========================================================================
+//
+// Срабатывает при INSERT в таблицу public.videos (база референсов Потока).
+// Реализован минимально: если в `videos` появилась хотя бы одна строка
+// свежее `cutoff` — триггерим. Cooldown 7 дней, как у остальных событийных
+// триггеров.
+async function pollReferenceEntryFor(agent) {
+  const cutoff = await ensureCutoff(agent.id, "new_reference_entry");
+  const client = getServiceRoleClient();
+  const { data, error } = await client
+    .from("videos")
+    .select("id, created_at")
+    .gt("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) {
+    // Если таблицы videos нет (например, в чистом тестовом окружении) —
+    // не валим — просто пропускаем триггер.
+    if (/relation .* does not exist/i.test(error.message ?? "")) {
+      return { triggered: false, reason: "no_videos_table" };
+    }
+    return { triggered: false, reason: `query_error: ${error.message}` };
+  }
+  const newest = (data ?? [])[0];
+  if (!newest) {
+    return { triggered: false, reason: "no_new_reference" };
+  }
+  await setTriggerState(agent.id, "new_reference_entry", newest.created_at);
+
+  const lastReflection = await getLastReflection(agent.id, "new_reference_entry", 7);
+  if (lastReflection) {
+    return { triggered: false, reason: "cooldown" };
+  }
+
+  const result = await runReflectionCycle(agent.id, "new_reference_entry", {
+    note: `Новая запись в базе референсов (videos).`,
+    details: { video_id: newest.id },
   });
   return { triggered: true, result };
 }
@@ -609,6 +688,15 @@ export async function pollEventTriggers() {
       out.results.new_competitor_entry = await pollCompetitorEntryFor(agent);
     } catch (err) {
       out.results.new_competitor_entry = {
+        triggered: false,
+        reason: `error: ${err?.message ?? err}`,
+      };
+    }
+    // Сессия 35: новый триггер на изменения в базе референсов Потока.
+    try {
+      out.results.new_reference_entry = await pollReferenceEntryFor(agent);
+    } catch (err) {
+      out.results.new_reference_entry = {
         triggered: false,
         reason: `error: ${err?.message ?? err}`,
       };

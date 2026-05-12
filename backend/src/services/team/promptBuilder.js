@@ -1077,6 +1077,10 @@ const TASK_TYPE_TO_SLUG = {
   research_direct: "research-direct",
   write_text: "write-text",
   edit_text_fragments: "edit-text-fragments",
+  // Сессия 35.
+  analyze_competitor: "analyze-competitor",
+  search_trends: "search-trends",
+  free_research: "free-research",
 };
 
 function resolveTaskTemplatePath(taskTypeOrPath) {

@@ -128,6 +128,19 @@ async function artifactPathFor(taskType, params) {
     const version = await nextVersion(pointDir);
     return `${pointDir}/v${version}_${ts}.md`;
   }
+  // Сессия 35: задачи разведчика складываются в research/scout/.
+  if (taskType === "analyze_competitor") {
+    const slug = slugify(firstLine(params.competitor_name) || firstLine(params.user_input) || "competitor");
+    return `research/scout/${ts}_competitor_${slug}.md`;
+  }
+  if (taskType === "search_trends") {
+    const slug = slugify(firstLine(params.focus) || firstLine(params.user_input) || "trends");
+    return `research/scout/${ts}_trends_${slug}.md`;
+  }
+  if (taskType === "free_research") {
+    const slug = slugify(firstLine(params.user_input) || "research");
+    return `research/scout/${ts}_research_${slug}.md`;
+  }
   // Фолбэк: ideas/<ts>_<slug>.md.
   const slug = slugify(taskType);
   return `ideas/${ts}_${slug}.md`;
@@ -458,6 +471,60 @@ async function handleEditFragments(task) {
 }
 
 // =========================================================================
+// Сессия 35: handlers задач разведчика
+// =========================================================================
+//
+// Три новые задачи под аналитика-разведчика (Сессия 37 создаст самого
+// агента через UI мастера). Все три — тонкие обёртки над одним LLM-вызовом
+// + сохранение артефакта в research/scout/.
+//
+// callForTask автоматически подмешает Web Search, если у агента в Hands
+// привязан web-search (Сессия 32).
+
+async function handleScoutGeneric(task, fallbackTitle) {
+  const { params, prompt, provider, model } = task;
+  const result = await callForTask(task, {
+    systemPrompt: prompt.system,
+    userPrompt: prompt.user,
+    cacheableBlocks: prompt.cacheable_blocks ?? prompt.cacheableBlocks ?? [],
+  });
+  const path = await artifactPathFor(task.type, params);
+  const headerLines = [
+    `# ${task.title || fallbackTitle}`,
+    "",
+    `_${task.created_at} · ${provider}/${model} · task \`${task.id}\`_`,
+    "",
+    "## Запрос",
+    "",
+    (params.user_input ?? "").trim(),
+    "",
+    "## Ответ",
+  ];
+  await saveArtifact(path, result.text, headerLines);
+  return {
+    result: result.text,
+    artifactPath: path,
+    tokens: {
+      input: result.inputTokens ?? 0,
+      output: result.outputTokens ?? 0,
+      cached: result.cachedTokens ?? 0,
+    },
+  };
+}
+
+async function handleAnalyzeCompetitor(task) {
+  return handleScoutGeneric(task, "Анализ конкурента");
+}
+
+async function handleSearchTrends(task) {
+  return handleScoutGeneric(task, "Поиск трендов");
+}
+
+async function handleFreeResearch(task) {
+  return handleScoutGeneric(task, "Свободный ресёрч");
+}
+
+// =========================================================================
 // реестр
 // =========================================================================
 
@@ -469,6 +536,10 @@ export const TASK_HANDLERS = {
   research_direct: handleResearchDirect,
   write_text: handleWriteText,
   edit_text_fragments: handleEditFragments,
+  // Сессия 35: задачи разведчика.
+  analyze_competitor: handleAnalyzeCompetitor,
+  search_trends: handleSearchTrends,
+  free_research: handleFreeResearch,
 };
 
 // Человекочитаемые названия для UI и заголовков артефактов.
@@ -478,6 +549,10 @@ export const TASK_TITLES = {
   research_direct: "Исследовать напрямую",
   write_text: "Написать текст",
   edit_text_fragments: "Правка через AI",
+  // Сессия 35.
+  analyze_competitor: "Анализ конкурента",
+  search_trends: "Поиск трендов",
+  free_research: "Свободный ресёрч",
 };
 
 // Имена шаблонов задач в bucket team-prompts после Сессии 4 этапа 2 (без .md).
@@ -489,6 +564,10 @@ const TEMPLATE_NAMES = {
   research_direct: "research-direct",
   write_text: "write-text",
   edit_text_fragments: "edit-text-fragments",
+  // Сессия 35.
+  analyze_competitor: "analyze-competitor",
+  search_trends: "search-trends",
+  free_research: "free-research",
 };
 
 // Старые имена шаблонов (плоские, в корне bucket'а) — фолбэк, если новый

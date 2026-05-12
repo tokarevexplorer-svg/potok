@@ -9,6 +9,10 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   research_direct: "Исследование",
   write_text: "Текст",
   edit_text_fragments: "Правка через AI",
+  // Сессия 35: задачи разведчика.
+  analyze_competitor: "Анализ конкурента",
+  search_trends: "Поиск трендов",
+  free_research: "Свободный ресёрч",
 };
 
 export function taskTypeLabel(type: TeamTaskType | string): string {
