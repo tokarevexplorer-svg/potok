@@ -933,3 +933,46 @@ URL: https://potok-omega.vercel.app/blog/team/dashboard
 - `team_tasks.clarification_questions` непустой массив, `clarification_answers` — заполнены, `params.user_input` расширен блоком «## Уточнения от автора».
 - В `team_api_calls` есть строка с `purpose='clarification'`.
 
+
+---
+
+## Сессия 32 — Web Search: адаптер, seed, методичка (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для webSearchService, llmClient, selfReviewService, taskHandlers — OK.
+- `npx tsc --noEmit` во фронте — без ошибок.
+- `npm run seed:web-search` — записан tool `web-search` (provider=anthropic, status=active), методичка `tools/web-search.md` (1937 символов).
+- `git log --oneline -1` → `4372045 Сессия 32 — Web Search: адаптер, seed, методичка`.
+
+### E2E через Playwright
+1. `GET /api/team-proxy/tools?type=executor` → массив с `{id: "web-search", status: "active"}` живёт на проде.
+2. `/blog/team/admin` → карточка «Web Search» рендерится с блоком «ПРОВАЙДЕР ПОИСКА» (uppercase из-за CSS), внутри select `Anthropic (нативный tool-use) | Tavily (REST) | Perplexity (sonar)` и кнопка «Сохранить». Текст-подсказка «Anthropic-провайдер использует ключ из «Ключи API»…».
+3. Карточка инструмента в Админке использует существующие toggle «Выключить/Включить» — без регрессий.
+
+### Что осталось руками проверить
+#### Сессия 32 — Web Search в реальной задаче (Anthropic + tool-use)
+URL: https://potok-omega.vercel.app/blog/team/admin → /blog/team/staff/<agentId>
+
+Что сделать:
+1. В Админке убедиться, что Web Search активен, провайдер Anthropic.
+2. В карточке агента (Игорь) → секция «Доступы» → блок «Доступные инструменты» → отметить «Web Search».
+3. Поставить агенту research_direct-задачу с актуальным вопросом («какие новости вышли вчера в РБК»).
+4. Дождаться done.
+
+Что должно произойти:
+- В ответе агента — цитаты с URL'ами (нативный Anthropic Web Search встроил citation-блоки).
+- В `team_api_calls` есть строка с `agent_id`, `purpose='task'`, `provider='anthropic'`.
+- В системном промпте (через preview-prompt) видна 3-я секция Awareness «Доступные инструменты» с методичкой Web Search.
+
+#### Сессия 32 — переключение на Tavily/Perplexity (требует API-ключа)
+URL: https://potok-omega.vercel.app/blog/team/admin
+
+Что сделать:
+1. Получить тестовый ключ Tavily (https://app.tavily.com/) или Perplexity (https://www.perplexity.ai/settings/api).
+2. В карточке Web Search в Админке выбрать соответствующего провайдера, вставить ключ, «Сохранить».
+3. Поставить задачу research_direct.
+
+Что должно произойти:
+- В user-промпте задачи (видно в preview) появляется блок «## Результаты Web Search» с результатами от внешнего провайдера.
+- Ответ агента опирается на эти результаты.
+

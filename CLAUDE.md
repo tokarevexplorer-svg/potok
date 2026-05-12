@@ -3660,7 +3660,7 @@
 
 ---
 
-### Сессия 32 — Web Search: адаптер, seed, методичка (этап 5, пункт 17)
+### Сессия 32 — Web Search: адаптер, seed, методичка (этап 5, пункт 17) ✅ 2026-05-12
 
 **Цель:** Подключить Web Search как инструмент команды с адаптером под несколько провайдеров (Anthropic нативный на старте, Tavily и Perplexity как опции), seed-запись в `team_tools`, методичка в Storage, интеграция в Awareness и в `llmClient`.
 
@@ -3728,6 +3728,15 @@
 - Web Search в Awareness агента, которому привязан.
 - Шестой источник чек-листа self-review (методички инструментов) работает.
 - Никаких регрессий.
+
+**Отклонения:**
+- **Storage-путь методички — `tools/web-search.md` (Latin)**, не `Инструменты/Web Search.md` как в ТЗ. Та же причина, что у Сессий 4/9/20/25/26 — Supabase Storage отбивает кириллицу с `Invalid key`. UI-метка в Инструкциях остаётся «Web Search».
+- **Интеграция Web Search в taskHandlers через `callForTask(task, overrides)`** (новая обёртка в llmClient), а не через `callWithWebSearch(messages, agentId)` из ТЗ. Логика та же: проверяем `agentHasWebSearch(agentId)` + конфиг провайдера, для anthropic пробрасываем нативный tool, для tavily/perplexity делаем предварительный поиск и инжектим результаты в начало userPrompt. Преимущество `callForTask`: один helper для всех 5 handlers, минимум diff.
+- **Anthropic Web Search через `web_search_20250305`** — тип передан в `requestBody.tools` напрямую, как в Anthropic SDK для tool-use. Если в будущем версия типа изменится (например, `web_search_20260101`), нужно поправить здесь.
+- **Прямой `webSearchService.search()` для Anthropic-провайдера выбрасывает понятную ошибку** — Anthropic Web Search работает только в режиме tool-use внутри LLM-вызова. Если кто-то соберётся вызвать search() напрямую с anthropic-конфигом — увидит сообщение «переключите провайдера на Tavily или Perplexity».
+- **Tavily / Perplexity не имеют биллинга в `team_api_calls`** — расход идёт на сторону провайдера; в нашем журнале фиксируем только основной LLM-вызов. Внутренний учёт Web Search-вызовов отложен до Сессии 49 (биллинг).
+- **API-ключ Tavily/Perplexity в `connection_config.api_key`**, не в `team_api_keys`. Это нарочно — keysService жёстко связан с тремя LLM-провайдерами. Web Search ключи живут на инструменте, потому что Web Search — это инструмент, а не провайдер LLM.
+- **`Сделай инструмент-вызов невидимым`-режим (когда callForTask внутри handler автоматически использует Web Search)** — выбран как дефолт для всех 5 task-handlers. Если у агента нет инструмента, callForTask моментально проваливается в обычный call(). Это даёт «бесплатный» Web Search для любой задачи привязанного агента, не требуя правок шаблонов.
 
 ---
 
