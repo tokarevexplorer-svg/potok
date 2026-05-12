@@ -6,6 +6,7 @@
 
 import cron from "node-cron";
 import { flushQueue, getSystemBotToken } from "../services/team/telegramService.js";
+import { tickDailyReports } from "../jobs/dailyReportsJob.js";
 
 const TZ = "Etc/UTC";
 
@@ -20,6 +21,7 @@ export function startTelegramCron() {
   }
   started = true;
 
+  // Каждые 5 минут — сброс отложенных сообщений (тихий час → flush).
   cron.schedule(
     "*/5 * * * *",
     async () => {
@@ -37,5 +39,28 @@ export function startTelegramCron() {
     { timezone: TZ },
   );
 
-  console.log("[telegram-cron] started: flush queue every 5 min");
+  // Сессия 40: каждую минуту проверяем, не пора ли отправить ежедневный
+  // отчёт. tickDailyReports внутри проверяет совпадение со временем
+  // отчёта в нужной timezone и last_report_date.
+  cron.schedule(
+    "* * * * *",
+    async () => {
+      try {
+        const result = await tickDailyReports();
+        if (result?.results) {
+          const sent = result.results.filter((r) => r.ok).length;
+          if (sent > 0) {
+            console.log(
+              `[telegram-cron] daily-reports: sent ${sent}/${result.results.length} agents, date ${result.date}`,
+            );
+          }
+        }
+      } catch (err) {
+        console.error("[telegram-cron] daily reports failed:", err);
+      }
+    },
+    { timezone: TZ },
+  );
+
+  console.log("[telegram-cron] started: flush 5min + daily reports 1min");
 }

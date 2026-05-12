@@ -719,6 +719,20 @@ export async function runTaskInBackground(taskId) {
 
     await appendUpdate(taskId, update);
 
+    // Сессия 40: push в Telegram от бота агента-исполнителя. Не падаем
+    // на ошибках Telegram — основной поток уже зафиксировал done.
+    try {
+      const { pushTaskDoneNotification } = await import("../../jobs/dailyReportsJob.js");
+      const freshTask = await getTaskById(taskId);
+      if (freshTask) {
+        await pushTaskDoneNotification(freshTask);
+      }
+    } catch (err) {
+      console.warn(
+        `[taskRunner] pushTaskDoneNotification failed for ${taskId}: ${err?.message ?? err}`,
+      );
+    }
+
     // Сессия 18: нотификации Inbox внимания. Создаём после успешного
     // обновления статуса — иначе можно получить notification на «done»,
     // который потом откатится по rate limit (теоретически).
