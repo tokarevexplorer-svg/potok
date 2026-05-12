@@ -11,10 +11,12 @@ import {
   fetchTaskTemplateDefaults,
   previewPrompt,
   runTask,
+  uploadFile as uploadAttachmentFile,
   type PreviewPromptResult,
   type PromptLayersSummary,
   type TeamProject,
 } from "@/lib/team/teamBackendClient";
+import { Paperclip } from "lucide-react";
 import { listAgents, type TeamAgent } from "@/lib/team/teamAgentsService";
 import type { SuggestedNextStep, TeamTaskModelChoice } from "@/lib/team/types";
 
@@ -497,6 +499,18 @@ export default function TaskRunnerModal({
               </span>
             </span>
           </label>
+
+          {/* Сессия 36: кнопка прикрепления файла. После успешной загрузки
+              путь в Storage дописывается в user_input как блок «[Файл: …]» —
+              агент увидит путь и сможет работать с ним через инструменты
+              чтения файлов. */}
+          <FileAttachmentField
+            onAttached={(uploadedPath, originalName) => {
+              const prev = String(params.user_input ?? "").trim();
+              const block = `\n\n[Файл: ${originalName} → \`${uploadedPath}\`]`;
+              setParam("user_input", prev + block);
+            }}
+          />
 
           {/* Сессия 19: UI-плейсхолдер «Сделать регулярной».
               Реальная функциональность — в пункте 15 (этап 3). */}
@@ -1061,4 +1075,73 @@ function sanitizeParamsForBackend(params: TaskParams): Record<string, unknown> {
     }
   }
   return out;
+}
+
+// Сессия 36: компонент прикрепления файла к задаче. Загружает в
+// team-database/uploads/<filename-timestamp>.<ext>, после успеха зовёт
+// onAttached(path, originalName) — caller добавляет блок «[Файл: …]»
+// в user_input. Лимит размера/типов — на бэкенде (multer).
+function FileAttachmentField({
+  onAttached,
+}: {
+  onAttached: (uploadedPath: string, originalName: string) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [attached, setAttached] = useState<{ path: string; name: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleFile(file: File) {
+    setUploading(true);
+    setError(null);
+    try {
+      const result = await uploadAttachmentFile(file, "uploads/");
+      const path = result.path;
+      const name = (result as unknown as { originalName?: string; name?: string }).originalName
+        ?? (result as unknown as { name?: string }).name
+        ?? file.name;
+      setAttached({ path, name });
+      onAttached(path, name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      <label
+        className={
+          "focus-ring inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-canvas px-3 text-xs font-medium text-ink-muted transition hover:border-line-strong hover:text-ink " +
+          (uploading ? "pointer-events-none opacity-50" : "")
+        }
+      >
+        {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
+        Прикрепить файл
+        <input
+          type="file"
+          className="hidden"
+          accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleFile(f);
+            e.target.value = "";
+          }}
+          disabled={uploading}
+        />
+      </label>
+      {attached && (
+        <span
+          className="inline-flex items-center gap-1 truncate rounded-md bg-elevated px-2 py-1 text-xs text-ink-muted"
+          title={attached.path}
+        >
+          <Paperclip size={10} />
+          <span className="truncate">{attached.name}</span>
+        </span>
+      )}
+      {error && (
+        <span className="rounded-md bg-rose-50 px-2 py-1 text-xs text-rose-800">{error}</span>
+      )}
+    </div>
+  );
 }

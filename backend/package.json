@@ -17,7 +17,8 @@
     "extract:skills": "node scripts/extract-skills.js",
     "apply:self-review-defaults": "node scripts/add-self-review-defaults.js",
     "seed:web-search": "node scripts/seed-web-search.js",
-    "seed:scout-templates": "node scripts/seed-scout-templates.js"
+    "seed:scout-templates": "node scripts/seed-scout-templates.js",
+    "test:p17": "node scripts/test-p17-integration.js"
   },
   "engines": {
     "node": ">=20"
