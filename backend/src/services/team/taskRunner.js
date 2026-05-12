@@ -24,6 +24,7 @@ import { randomBytes } from "node:crypto";
 import {
   appendTaskSnapshot,
   getTaskById,
+  getServiceRoleClient,
 } from "./teamSupabase.js";
 import { downloadFile, uploadFile, listFiles } from "./teamStorage.js";
 import { call as llmCall } from "./llmClient.js";
@@ -339,6 +340,7 @@ export async function createTask({
   selfReviewEnabled = null,
   selfReviewExtraChecks = null,
   clarificationEnabled = false,
+  comparisonGroupId = null,
 }) {
   if (!TASK_HANDLERS[taskType]) {
     throw new Error(`Тип задачи не поддерживается: ${taskType}`);
@@ -433,7 +435,7 @@ export async function createTask({
     clarificationQuestions: null,
     clarificationAnswers: null,
     stepState: null,
-    comparisonGroupId: null,
+    comparisonGroupId: comparisonGroupId || null,
   };
 
   await appendTaskSnapshot(snapshot);
@@ -812,6 +814,73 @@ export async function renameTask(taskId, title) {
 
 export async function markTaskDone(taskId) {
   return await appendUpdate(taskId, { status: "marked_done" });
+}
+
+// =========================================================================
+// Сессия 34: клонирование задачи под другую модель (Multi-LLM сравнение).
+// =========================================================================
+//
+// Берём исходную задачу, копируем все её «входные» поля (params, agent_id,
+// projectId, clarification настройки) и запускаем новую задачу с другой
+// modelChoice. Обе задачи получают один comparison_group_id — если у
+// исходной задачи его нет, генерируем новый (uuid) и проставляем обеим.
+//
+// Возвращает: { cloned_task_id, comparison_group_id }.
+export async function cloneTask(sourceTaskId, { modelChoice }) {
+  const source = await getTaskById(sourceTaskId);
+  if (!source) throw new Error(`Исходная задача не найдена: ${sourceTaskId}`);
+
+  // Гарантируем comparison_group_id у исходной задачи.
+  let groupId = source.comparison_group_id ?? null;
+  if (!groupId) {
+    groupId = randomBytes(8).toString("hex");
+    await appendUpdate(sourceTaskId, { comparisonGroupId: groupId });
+  }
+
+  const newTaskId = await createTask({
+    taskType: source.type,
+    params: { ...(source.params || {}) },
+    modelChoice: modelChoice || source.model_choice || null,
+    promptOverride: null,
+    title:
+      typeof source.title === "string" && source.title.trim()
+        ? `${source.title} · клон`
+        : null,
+    agentId: source.agent_id ?? null,
+    parentTaskId: null,
+    projectId: source.project_id ?? null,
+    selfReviewEnabled: source.self_review_enabled,
+    selfReviewExtraChecks: source.self_review_extra_checks,
+    clarificationEnabled: source.clarification_enabled === true,
+    comparisonGroupId: groupId,
+  });
+
+  return { cloned_task_id: newTaskId, comparison_group_id: groupId };
+}
+
+// =========================================================================
+// Сессия 34: возвращает все задачи группы сравнения. Сортирует по
+// created_at — самая ранняя (обычно «оригинал») первой.
+// =========================================================================
+export async function getComparisonGroup(groupId) {
+  const client = getServiceRoleClient();
+  const { data, error } = await client
+    .from("team_tasks")
+    .select("*")
+    .eq("comparison_group_id", groupId)
+    .order("created_at", { ascending: true });
+  if (error) {
+    throw new Error(`Не удалось получить группу сравнения: ${error.message}`);
+  }
+  // Группируем по id — берём последний снапшот.
+  const latest = new Map();
+  for (const row of data ?? []) {
+    const prev = latest.get(row.id);
+    if (!prev || row.created_at > prev.created_at) latest.set(row.id, row);
+  }
+  return Array.from(latest.values()).sort((a, b) =>
+    String(a.created_at).localeCompare(String(b.created_at)),
+  );
 }
 
 // Пересчитывает cost_usd задачи как сумму всех её записей в team_api_calls.

@@ -111,6 +111,8 @@ export interface TeamTask {
   clarificationQuestions?: TaskClarificationQuestion[] | null;
   clarificationAnswers?: TaskClarificationAnswer[] | null;
   stepState?: TaskStepState | null;
+  // Сессия 34: id группы для мульти-LLM сравнения (общий у клонов).
+  comparisonGroupId?: string | null;
 }
 
 // Сессия 31: типы для уточнений и многошаговой задачи.

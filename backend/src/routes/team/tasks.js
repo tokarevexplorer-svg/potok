@@ -23,6 +23,8 @@ import {
   saveDirectEdit,
   appendQuestionToResearch,
   applyClarificationAnswers,
+  cloneTask,
+  getComparisonGroup,
 } from "../../services/team/taskRunner.js";
 import { getTaskById, getChildTasks } from "../../services/team/teamSupabase.js";
 import { getAgent } from "../../services/team/agentService.js";
@@ -655,6 +657,26 @@ router.get("/:taskId/chain", async (req, res) => {
 // handoff из строки лога — там есть только id). Read-only.
 // =========================================================================
 
+// =========================================================================
+// GET /api/team/tasks/compare/:groupId
+// Сессия 34: возвращает все задачи группы сравнения (один comparison_group_id).
+// Должен идти ДО `/:taskId`, иначе Express матчит `compare` как taskId
+// и отбивается на TASK_ID_REGEX.
+// =========================================================================
+router.get("/compare/:groupId", async (req, res) => {
+  const { groupId } = req.params;
+  if (typeof groupId !== "string" || !groupId.trim()) {
+    return res.status(400).json({ error: "groupId обязателен" });
+  }
+  try {
+    const tasks = await getComparisonGroup(groupId);
+    return res.json({ group_id: groupId, tasks });
+  } catch (err) {
+    console.error(`[team] compare ${groupId} failed:`, err);
+    return res.status(500).json({ error: err.message ?? "Не удалось получить группу" });
+  }
+});
+
 router.get("/:taskId", async (req, res) => {
   const taskId = ensureTaskId(req, res);
   if (!taskId) return;
@@ -665,6 +687,25 @@ router.get("/:taskId", async (req, res) => {
   } catch (err) {
     console.error(`[team] get ${taskId} failed:`, err);
     return res.status(500).json({ error: err.message ?? "Не удалось получить задачу" });
+  }
+});
+
+// =========================================================================
+// POST /api/team/tasks/:taskId/clone
+// Сессия 34: клонирует задачу с другим выбором модели для мульти-LLM
+// сравнения. Body: { modelChoice }.
+// =========================================================================
+router.post("/:taskId/clone", async (req, res) => {
+  const taskId = ensureTaskId(req, res);
+  if (!taskId) return;
+  const body = req.body ?? {};
+  const modelChoice = body.modelChoice ?? null;
+  try {
+    const result = await cloneTask(taskId, { modelChoice });
+    return res.status(202).json(result);
+  } catch (err) {
+    console.error(`[team] clone ${taskId} failed:`, err);
+    return res.status(400).json({ error: err.message ?? "Не удалось склонировать" });
   }
 });
 

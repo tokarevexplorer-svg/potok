@@ -1399,3 +1399,71 @@ export async function fetchCompetitorPosts(
   );
   return data as { posts: CompetitorPost[]; total: number };
 }
+
+// =========================================================================
+// Сессия 34: мерджинг артефактов + клонирование задачи
+// =========================================================================
+
+export interface MergeResult {
+  artifact_path: string;
+  content: string;
+  sources: string[];
+  provider: string;
+  model: string;
+  cost_usd: number;
+  tokens: { input: number; output: number; cached: number };
+}
+
+export async function mergeArtifacts(
+  artifactPaths: string[],
+  instruction: string,
+  targetTaskId: string | null = null,
+): Promise<MergeResult> {
+  const body: Record<string, unknown> = {
+    artifact_paths: artifactPaths,
+    instruction,
+  };
+  if (targetTaskId) body.target_task_id = targetTaskId;
+  const data = await backendFetch("/api/team/artifacts/merge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    timeoutMs: 120_000,
+  });
+  return data as MergeResult;
+}
+
+export interface CloneTaskResult {
+  cloned_task_id: string;
+  comparison_group_id: string;
+}
+
+export async function cloneTask(
+  taskId: string,
+  modelChoice: TeamTaskModelChoice | null,
+): Promise<CloneTaskResult> {
+  const data = await backendFetch(
+    `/api/team/tasks/${encodeURIComponent(taskId)}/clone`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modelChoice }),
+    },
+  );
+  return data as CloneTaskResult;
+}
+
+export interface ComparisonGroupResult {
+  group_id: string;
+  tasks: unknown[];
+}
+
+export async function fetchComparisonGroup(
+  groupId: string,
+): Promise<ComparisonGroupResult> {
+  const data = await backendFetch(
+    `/api/team/tasks/compare/${encodeURIComponent(groupId)}`,
+    { method: "GET" },
+  );
+  return data as ComparisonGroupResult;
+}

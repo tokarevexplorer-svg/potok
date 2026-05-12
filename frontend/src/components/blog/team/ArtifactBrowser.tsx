@@ -7,10 +7,12 @@ import {
   Folder,
   FolderPlus,
   Home,
+  Layers,
   Loader2,
   RefreshCw,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import {
   type ArtifactEntry,
@@ -21,6 +23,7 @@ import {
   createArtifactFolder,
   deleteArtifact,
   deleteArtifactFolder,
+  mergeArtifacts,
   uploadFile,
 } from "@/lib/team/teamBackendClient";
 import ConfirmDialog from "@/components/blog/analyst/ConfirmDialog";
@@ -65,6 +68,23 @@ export default function ArtifactBrowser({
 
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Сессия 34: мультиселект и мерджинг.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [mergeOpen, setMergeOpen] = useState(false);
+
+  function toggleSelected(filePath: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(filePath)) next.delete(filePath);
+      else next.add(filePath);
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -301,6 +321,17 @@ export default function ArtifactBrowser({
               key={entry.path}
               className="group flex items-center gap-3 border-b border-line px-4 py-3 last:border-b-0 hover:bg-elevated/60"
             >
+              {/* Сессия 34: чекбокс для мерджинга — только на файлах. */}
+              {!entry.isFolder && (
+                <input
+                  type="checkbox"
+                  checked={selected.has(entry.path)}
+                  onChange={() => toggleSelected(entry.path)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="h-4 w-4 flex-shrink-0 accent-accent"
+                  title="Выбрать для объединения"
+                />
+              )}
               <button
                 type="button"
                 onClick={() => void handleEntryClick(entry)}
@@ -368,6 +399,134 @@ export default function ArtifactBrowser({
           onCancel={() => setPendingDelete(null)}
         />
       )}
+
+      {/* Сессия 34: floating bar для мерджинга. */}
+      {selected.size >= 2 && (
+        <div className="sticky bottom-4 z-30 mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-2xl border border-line bg-surface px-4 py-3 shadow-2xl">
+          <span className="text-sm font-medium text-ink">
+            Выбрано {selected.size}{" "}
+            {selected.size === 1 ? "артефакт" : selected.size < 5 ? "артефакта" : "артефактов"}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="focus-ring inline-flex h-9 items-center gap-1 rounded-lg border border-line bg-canvas px-3 text-sm text-ink-muted transition hover:border-line-strong hover:text-ink"
+            >
+              Сбросить
+            </button>
+            <button
+              type="button"
+              onClick={() => setMergeOpen(true)}
+              className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-semibold text-surface transition hover:bg-accent-hover"
+            >
+              <Layers size={14} /> Объединить
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mergeOpen && (
+        <MergeModal
+          paths={Array.from(selected)}
+          onClose={() => setMergeOpen(false)}
+          onMerged={() => {
+            setMergeOpen(false);
+            clearSelection();
+            void reload();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function MergeModal({
+  paths,
+  onClose,
+  onMerged,
+}: {
+  paths: string[];
+  onClose: () => void;
+  onMerged: (artifactPath: string) => void;
+}) {
+  const [instruction, setInstruction] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleMerge() {
+    if (!instruction.trim()) {
+      setError("Опиши, как объединить.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await mergeArtifacts(paths, instruction.trim(), null);
+      onMerged(result.artifact_path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
+      <div role="dialog" className="w-full max-w-xl rounded-2xl border border-line bg-surface p-5 shadow-2xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-display text-lg font-semibold text-ink">
+            Объединить артефакты ({paths.length})
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="focus-ring inline-flex h-8 w-8 items-center justify-center rounded-lg text-ink-muted hover:bg-elevated"
+            aria-label="Закрыть"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <ul className="mb-3 max-h-32 overflow-y-auto rounded-lg border border-line bg-canvas px-3 py-2 text-xs text-ink-muted">
+          {paths.map((p) => (
+            <li key={p} className="truncate font-mono">{p}</li>
+          ))}
+        </ul>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-ink-muted">Инструкция</span>
+          <textarea
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            rows={4}
+            placeholder="Например: «Объедини в один документ по порядку» или «Убери дубли, оставь только выводы»"
+            className="focus-ring rounded-xl border border-line bg-canvas px-3 py-2 text-sm text-ink placeholder:text-ink-faint"
+            autoFocus
+            disabled={busy}
+          />
+        </label>
+        {error && (
+          <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-800">{error}</p>
+        )}
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="focus-ring inline-flex h-9 items-center gap-1 rounded-lg border border-line bg-canvas px-3 text-sm text-ink-muted transition hover:border-line-strong hover:text-ink disabled:opacity-50"
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleMerge()}
+            disabled={busy}
+            className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-4 text-sm font-semibold text-surface transition hover:bg-accent-hover disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
+            Объединить
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

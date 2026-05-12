@@ -33,11 +33,16 @@ import AppendQuestionModal from "./AppendQuestionModal";
 import TaskRunnerModal, { type HandoffContext } from "./TaskRunnerModal";
 import SelfReviewResult from "./SelfReviewResult";
 import ClarificationsPanel from "./ClarificationsPanel";
+import ModelSelector from "./ModelSelector";
+import Link from "next/link";
+import { GitBranchPlus } from "lucide-react";
 import {
+  cloneTask,
   fetchTaskCostBreakdown,
   type TaskCostBreakdown,
   type TaskCostItem,
 } from "@/lib/team/teamBackendClient";
+import type { TeamTaskModelChoice } from "@/lib/team/types";
 
 interface TaskViewerModalProps {
   task: TeamTask;
@@ -651,6 +656,10 @@ export default function TaskViewerModal({
                 Передать дальше
               </button>
             )}
+            {/* Сессия 34: клонирование задачи под другую модель. */}
+            {(task.status === "done" || task.status === "marked_done") && (
+              <CloneTaskButton task={task} disabled={busy !== null} />
+            )}
             <button
               type="button"
               onClick={handleMarkDone}
@@ -827,4 +836,110 @@ function costPurposeLabel(purpose: string): string {
     default:
       return purpose;
   }
+}
+
+// Сессия 34: кнопка «Сравнить с другой моделью» + модалка выбора модели.
+function CloneTaskButton({
+  task,
+  disabled,
+}: {
+  task: TeamTask;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [modelChoice, setModelChoice] = useState<TeamTaskModelChoice>(
+    (task.modelChoice as TeamTaskModelChoice) ?? { kind: "preset", preset: "balanced" },
+  );
+
+  async function handleClone() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await cloneTask(task.id, modelChoice);
+      // Перебрасываем на страницу сравнения.
+      window.location.href = `/blog/team/tasks/compare/${encodeURIComponent(
+        result.comparison_group_id,
+      )}`;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        disabled={disabled}
+        className="focus-ring inline-flex h-10 items-center gap-1.5 rounded-xl border border-line bg-surface px-4 text-sm font-medium text-ink-muted transition hover:border-line-strong hover:text-ink disabled:opacity-50"
+        title="Запустить клон задачи с другой моделью для сравнения"
+      >
+        <GitBranchPlus size={14} />
+        Сравнить с другой моделью
+      </button>
+      {task.comparisonGroupId && (
+        <Link
+          href={`/blog/team/tasks/compare/${encodeURIComponent(task.comparisonGroupId)}`}
+          className="focus-ring inline-flex h-10 items-center gap-1 rounded-xl border border-line bg-canvas px-3 text-xs font-medium text-ink-muted transition hover:border-line-strong hover:text-ink"
+          title="Открыть страницу сравнения"
+        >
+          Сравнение →
+        </Link>
+      )}
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4">
+          <div role="dialog" className="w-full max-w-md rounded-2xl border border-line bg-surface p-5 shadow-2xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="font-display text-lg font-semibold text-ink">
+                Сравнить с другой моделью
+              </h3>
+              <button
+                type="button"
+                onClick={() => !busy && setOpen(false)}
+                disabled={busy}
+                className="focus-ring inline-flex h-8 w-8 items-center justify-center rounded-lg text-ink-muted hover:bg-elevated disabled:opacity-50"
+                aria-label="Закрыть"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p className="mb-3 text-xs text-ink-muted">
+              Создадим клон этой задачи с теми же бриф/агент/проектом, но запустим
+              его на выбранной модели. Обе задачи получат общий id группы сравнения.
+            </p>
+            <ModelSelector
+              value={modelChoice}
+              onChange={(next) => setModelChoice(next)}
+              taskType={task.type}
+            />
+            {error && (
+              <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-800">{error}</p>
+            )}
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                disabled={busy}
+                className="focus-ring inline-flex h-9 items-center rounded-lg border border-line bg-canvas px-3 text-sm text-ink-muted transition hover:border-line-strong hover:text-ink disabled:opacity-50"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleClone()}
+                disabled={busy}
+                className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg bg-accent px-4 text-sm font-semibold text-surface transition hover:bg-accent-hover disabled:opacity-50"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <GitBranchPlus size={14} />}
+                Запустить клон
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
 }
