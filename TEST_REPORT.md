@@ -1134,3 +1134,36 @@ URL: https://potok-omega.vercel.app/blog/team/dashboard
 - При запуске задачи агент видит путь к файлу в брифе и может работать
   с ним через свои инструменты (если есть инструмент чтения файлов).
 
+
+---
+
+## Сессия 37 — Шаблоны задач предпродакшна + черновики Role (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для taskHandlers, promptBuilder, seed-preproduction-templates — OK.
+- `npx tsc --noEmit` — без ошибок.
+- `npm run seed:preproduction-templates` — 13/13 файлов загружены.
+- `git log --oneline -1` → `0032be4 Сессия 37 — шаблоны задач предпродакшна + черновики Role`.
+
+### E2E через Playwright
+1. `GET /api/team-proxy/tasks/templates` → 21 тип (5 базовых + 3 scout + 13 preprod). Все 13 новых типов видны:
+   - deep_research_notebooklm, web_research, free_research_with_files, find_cross_references
+   - video_plan_from_research, creative_takes, script_draft
+   - factcheck_artifact, compare_two_versions, cold_factcheck
+   - generate_ideas, review_artifact, daily_plan_breakdown
+2. `GET /api/team-proxy/tasks/template-defaults/<type>` для 5 проверенных типов — корректный JSON. `deep_research_notebooklm` несёт `multistep: true`.
+
+### Что осталось руками проверить
+#### Сессия 37 — создание 4 агентов предпродакшна
+URL: https://potok-omega.vercel.app/blog/team/staff/create
+
+Что сделать (по очереди для каждого агента):
+1. **Исследователь** — Role из `backend/scripts/templates/role-researcher.md`. Привязать инструменты: NotebookLM (когда воркер появится) + Web Search. Шаблоны: 4 исследовательских + free_research.
+2. **Сценарист** — Role из `role-scriptwriter.md`. Инструменты: Web Search. Шаблоны: video_plan_from_research, creative_takes, script_draft.
+3. **Фактчекер** — Role из `role-factchecker.md`. Инструменты: Web Search. Шаблоны: 3 фактчекерских.
+4. **Шеф-редактор** — Role из `role-chief-editor.md`. Модель — Opus (самая дорогая). Шаблоны: 3 шефских. autonomy_level=1.
+
+Что должно произойти:
+- В разделе Сотрудники появятся 4 новых карточки.
+- В preview-prompt каждой задачи виден Role-файл агента + Awareness (карта команды из 4 человек).
+
