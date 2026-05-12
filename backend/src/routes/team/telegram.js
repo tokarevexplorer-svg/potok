@@ -34,8 +34,11 @@ router.post("/webhook/:tokenHash", async (req, res) => {
       return res.status(401).json({ error: "invalid secret" });
     }
   }
+  // Сессия 41: передаём tokenHash в processIncomingUpdate — нужен для
+  // резолва бота при answerCallbackQuery и getFile (без него пришлось бы
+  // искать по bot id из сообщения).
   try {
-    const result = await processIncomingUpdate(req.body ?? {});
+    const result = await processIncomingUpdate(req.body ?? {}, req.params.tokenHash);
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error("[team/telegram] webhook failed:", err);

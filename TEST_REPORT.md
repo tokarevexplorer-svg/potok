@@ -1286,3 +1286,136 @@ URL: https://potok-omega.vercel.app/blog/team/dashboard
 - Если сейчас тихий час — сообщение в `team_telegram_queue` со status='queued'.
 - Если у задачи нет agent_id или у агента нет бота — push не отправляется, ошибки нет.
 
+---
+
+## Ревью Сессий 39-40 после заполнения боевых данных (2026-05-12) ✅
+
+Контекст: Влад положил telegram.txt в корень с реальными chat_id и 5 боевыми токенами (системный + 4 агентских). Ниже — что Claude Code автоматизировал, что подтвердилось проверками, что осталось Владу.
+
+### Сделано автоматически
+- **`.gitignore`** — добавил `telegram.txt` и `TELEGRAM.txt` в раздел секретов. Проверено `git check-ignore -v`: файл игнорируется.
+- **`backend/.env`** — добавлен `TELEGRAM_WEBHOOK_SECRET` (32-байтный hex). `TELEGRAM_SYSTEM_BOT_TOKEN` уже был.
+- **`backend/scripts/probe-telegram-bots.js`** — пробинг всех 5 токенов через `getMe` и `getWebhookInfo`. Все 5 ботов валидны:
+  - системный `@potok_system_bot` (id 8751224892)
+  - `@analyst_scout_bot` (id 8477393497) → Аналитик-разведчик
+  - `@Chief_Editor_potok_bot` (id 8601241060) → Шеф-редактор
+  - `@researcher_potok_bot` (id 8621250848) → Исследователь
+  - `@scriptwriter_potok_bot` (id 8622964602) → Сценарист
+- **`backend/scripts/setup-telegram.js`** — идемпотентный скрипт, который:
+  - почистил trailing space в `team_settings.telegram_chat_id` → `"-5239522702"`,
+  - убедился, что `telegram_enabled = true`,
+  - создал минимальные карточки трёх недостающих агентов: `chief-editor`, `researcher`, `scriptwriter` (с `purpose` и `success_criteria` — обязательные поля по Сессии 10),
+  - привязал 4 бота к 4 агентам через `bindAgentBot` (внутри `getMe` → `bot_username + telegram_bot_id`).
+- **`backend/scripts/smoke-test-telegram.js`** — отправил тестовое сообщение от системного бота и от каждого агентского. Все 5 → `{ok:true, message_id:…}`. Видны в групповом чате.
+- **`backend/scripts/test-telegram-session-40.js`** — реальный прогон Сессии 40:
+  - `pushTaskDoneNotification` для фейковой done-задачи → ✅ Готово: … от `@analyst_scout_bot`, `message_id=4`.
+  - `tickDailyReports` с подменой `telegram_daily_report_time` под текущую минуту:
+    - igor — `ok=true, sent=true` (LLM-сгенерированный отчёт ушёл в чат),
+    - chief-editor / researcher / scriptwriter — `no tasks today` (ожидаемо: у них нет задач за сегодня),
+    - `telegram_last_report_date` обновился до `2026-05-12`,
+    - cleanup откатил `dailyReportTime` обратно в `19:00` и удалил фейковую задачу.
+- **`backend/scripts/inspect-telegram-state.js`** — финальный аудит:
+  - 4 строки в `team_telegram_bots` со всеми bot_id/username
+  - 5 активных агентов
+  - `telegram_enabled=true`, `chat_id="-5239522702"`
+  - ENV: `TELEGRAM_SYSTEM_BOT_TOKEN ✓`, `TELEGRAM_WEBHOOK_SECRET ✓`
+
+### Чего НЕ сделал автоматически
+1. **Webhook'и через Telegram API НЕ зарегистрированы** — нужен публичный URL бэкенда на Railway, у Claude Code его нет. Без webhook'ов бэкенд не получает входящие сообщения от Telegram (Сессия 41 потребует это обязательно — голосовые, callback-кнопки).
+2. **`TELEGRAM_WEBHOOK_SECRET` НЕ записан в Railway ENV** — добавил локально в `backend/.env`, но Railway dashboard надо открыть руками.
+3. **`TELEGRAM_SYSTEM_BOT_TOKEN` уже стоит в `backend/.env`**, проверь, что на Railway тоже есть — иначе в проде cron Сессии 40 не запустится.
+
+### Что нужно сделать Владу руками (точные шаги)
+**1. Узнать Railway URL бэкенда** (этот же URL фронт использует как `BACKEND_URL`):
+   - Заходишь на https://railway.app/dashboard
+   - Открываешь проект `potok` (или как назван)
+   - Кликаешь на сервис бэкенда (не на постгрес и не на фронт)
+   - Settings → Networking → блок «Public Networking» → копируешь URL (формат `https://что-то-production.up.railway.app`)
+
+**2. Добавить два ENV-переменных на Railway** (Variables → New Variable):
+   - `TELEGRAM_WEBHOOK_SECRET` = `1eb202a7f1147a0359d79353d4c671d6fb739f7936a06ab61d0d3aee040e9473`
+   - Убедиться, что `TELEGRAM_SYSTEM_BOT_TOKEN` = `8751224892:AAH_G7KdsmMvQz2g79FaZsK_rf_sHOwkyS8` уже добавлен (если нет — добавить с тем же значением, что в `backend/.env`)
+   - После сохранения Railway автоматически передеплоит сервис.
+
+**3. Зарегистрировать webhook'и** (после деплоя из шага 2):
+   - Открой https://potok-omega.vercel.app/blog/team/admin
+   - Найди блок «Telegram» → в поле «Base URL бэкенда» вставь URL из шага 1
+   - Нажми «Зарегистрировать вебхуки»
+   - Должно показать: «Зарегистрировано 5 ботов» (системный + 4 агентских)
+   - Если показывает ошибку — проверь, что URL начинается с `https://` и в конце нет слэша.
+
+**4. Финальная визуальная проверка**:
+   - Открой Telegram-чат — там уже должны быть 7-8 сообщений от smoke-тестов (5 smoke-сообщений «Я — бот …», 1 push «Готово: Тестовая задача», 1 отчёт от @analyst_scout_bot).
+   - В Админке → Telegram → нажми «Тестовое сообщение» → в чате появится сообщение от системного бота.
+
+---
+
+## Сессия 41 — Дублирование Inbox в Telegram + голосовая обратная связь (2026-05-12) ✅
+
+### Что сделано
+- **Миграции нет** — `telegram_bot_id` уже добавлена в `0032` (Сессия 39 превентивно).
+- **`backend/src/services/team/telegramService.js`** — расширен:
+  - `getAgentBotByBotId(telegramBotId)` — резолв агента по `telegram_bot_id` для маршрутизации reply.
+  - `resolveBotByTokenHash(hash)` — резолв токена бота по djb2-hash из URL вебхука (для answerCallbackQuery).
+  - `answerCallbackQuery(botToken, callbackId, text)`, `editMessageReplyMarkup(botToken, chatId, messageId, replyMarkup)`, `downloadTelegramFile(botToken, fileId)` — Bot API helpers.
+  - `processIncomingUpdate(update, tokenHash)` — теперь полноценный роутер: callback_query → `processIncomingCallback`, message с voice/audio → `processIncomingVoice`.
+  - `processIncomingCallback(callbackQuery, urlTokenHash)` — парсит `callback_data` вида `accept_rule:<id>` / `reject_rule:<id>` → `memoryService.updateMemory(id, { status: 'active' | 'rejected' })` → `markNotificationByEntity` → `answerCallbackQuery` + `editMessageReplyMarkup({inline_keyboard: []})` + reply «✅ Правило принято».
+  - `processIncomingVoice(message, urlTokenHash)` — проверяет `reply_to_message.from.id` → `getAgentBotByBotId` → `downloadTelegramFile` → `transcribeFromBuffer` (Whisper-1) → `feedbackParserService.parseAndSave({ agentId, channel: 'telegram', score: null, rawInput: transcript })`. Системный бот пишет в чат подтверждение «🎤 Получил обратную связь для @bot. Обрабатываю…», после Whisper — «✅ Сохранил эпизод» с preview транскрипта.
+  - `dispatchNotificationToTelegram(notification)` — switch по `notification.type` → форматирование HTML-сообщения + inline-keyboard (только для `rule_candidate`) → `sendOrEnqueue` от бота агента (или системного для `rule_revision`).
+- **`backend/src/services/team/notificationsService.js`** — `createNotification` теперь fire-and-forget вызывает `dispatchNotificationToTelegram(data)` через `setImmediate`. Динамический импорт `telegramService` — чтобы разорвать потенциальный цикл (telegramService → memoryService → notificationsService).
+- **`backend/src/routes/team/telegram.js`** — webhook-роут передаёт `req.params.tokenHash` в `processIncomingUpdate`.
+- **Уведомления автоматически дублируются для всех 4 источников** (taskRunner: `task_awaiting_review` + `handoff_suggestion`; skillExtractor: `skill_candidate`; triggerService: `proposal`; compress-episodes: `rule_candidate`) — без правки callsites.
+
+### Автопроверки
+- `node --check` всех изменённых файлов — OK.
+- `node scripts/test-session-41.js` — 4 шага: task_awaiting_review дублируется, rule_candidate с inline-кнопками отправлен, processIncomingCallback(accept_rule) меняет rule.status на active и помечает notification.is_read=true, urgent proposal обходит quiet-hours.
+- `node scripts/test-session-41-e2e.js` — реальный круг: addRule(candidate) → createNotification(rule_candidate) → реальное Telegram-сообщение с кнопками → эмуляция callback на реальный message_id → проверка side-effects. **PASS**.
+- Тестовые artefacты вычищены (notifications/memory rows удалены в конце скрипта).
+
+### Smoke-результат в Telegram-чате (видим визуально)
+- ⭐ «Оцените задачу» от @analyst_scout_bot (test 1)
+- 📝 «Кандидат в правило от Игоря» с inline-кнопками ✅/❌ от @analyst_scout_bot (test 2)
+- 📝 «E2E Тест Сессии 41 — кандидат в правило» с кнопками, потом кнопки СНЯТЫ после accept (test E2E)
+- 🎯 «Игорь предлагает срочную задачу» с ⚡ (test 4, urgent)
+- 🔁 — не было (rule_revision никем пока не создаётся)
+- 🎓 — не было (skill_candidate проверяется в Сессии 27)
+
+### Что осталось руками проверить
+#### Сессия 41 — голосовая обратная связь (E2E)
+URL: Telegram-чат группы
+
+Что сделать:
+1. На Railway убедиться, что `TELEGRAM_WEBHOOK_SECRET` добавлен (см. шаг 2 из ревью Сессий 39-40).
+2. Зарегистрировать webhook'и через Админку → блок Telegram → «Зарегистрировать вебхуки» (поле base_url = URL Railway).
+3. В Telegram-чате выбрать любое сообщение от агентского бота (например, от @analyst_scout_bot после теста).
+4. Нажать «Reply» (свайп влево или меню) → записать голосовое сообщение «вступление слишком длинное, переделай».
+5. Отправить.
+
+Что должно произойти:
+- В чат приходит от системного бота «🎤 Получил обратную связь для @analyst_scout_bot. Обрабатываю...»
+- Через ~3-10 секунд — «✅ Сохранил эпизод для @analyst_scout_bot: <курсивом транскрипт>»
+- В Supabase Dashboard → `team_feedback_episodes` → новая строка с `agent_id='igor'`, `channel='telegram'`, `score=null`, `parsed_text` от LLM-парсера.
+
+#### Сессия 41 — Accept/Reject через inline-кнопки (E2E)
+URL: Telegram-чат группы
+
+Что сделать:
+1. Webhook'и зарегистрированы (шаги 1-2 выше).
+2. Создать тестового кандидата в правило: `cd backend && node -e "import('./src/services/team/memoryService.js').then(m => m.addRule({agentId:'igor', content:'Тестовое правило для проверки кнопок Telegram', source:'feedback'}).then(r => m.updateMemory(r.id, {status:'candidate'})).then(() => import('./src/services/team/notificationsService.js')).then(m => m.createNotification({type:'rule_candidate', title:'Тест inline-кнопок Telegram', description:'нажмите кнопку — проверяю', agent_id:'igor', related_entity_id:'<id_кандидата>', related_entity_type:'memory'})))"`
+   (или проще: в скрипте `scripts/test-session-41-e2e.js` оставь без cleanup — он создаст и оставит кандидата для ручной проверки)
+3. В Telegram-чате найти сообщение «📝 Кандидат в правило» с двумя кнопками.
+4. Нажать «✅ Принять».
+
+Что должно произойти:
+- Поп-ап «Правило принято» в Telegram.
+- Кнопки исчезают из сообщения.
+- В чат приходит ответом «✅ Правило принято».
+- В Supabase Dashboard → `team_agent_memory` → у кандидата `status='active'`, `reviewed_at` = текущее время.
+- В `team_notifications` соответствующая строка → `is_read=true`.
+
+#### Сессия 41 — webhook auth и tokenHash
+Чтобы убедиться, что секрет действительно проверяется:
+- `curl -X POST https://<railway>/api/team/telegram/webhook/<любой-hash> -H 'Content-Type: application/json' -d '{}'` → 401 «invalid secret» (без header `X-Telegram-Bot-Api-Secret-Token`).
+- С правильным header — должен вернуть 200 (handled: false, unsupported update type).
+
+

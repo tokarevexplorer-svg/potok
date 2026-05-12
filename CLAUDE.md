@@ -4716,7 +4716,7 @@
 
 ---
 
-### Сессия 41 — Дублирование Inbox в Telegram и голосовая обратная связь (этап 6, пункт 20)
+### Сессия 41 — Дублирование Inbox в Telegram и голосовая обратная связь (этап 6, пункт 20) ✅ 2026-05-12
 
 **Цель:** Реализовать дублирование Inbox-событий в Telegram (от соответствующих ботов, с inline-кнопками Accept/Reject), обработку голосовых ответов Влада (Whisper → парсер обратной связи), маршрутизацию reply к конкретному боту → `agent_id`.
 
@@ -4819,6 +4819,19 @@
 - Обычные нотификации в тихий час → очередь → дайджест утром.
 - `telegram_bot_id` заполнен для всех привязанных ботов.
 - Никаких регрессий.
+
+**Отклонения:**
+- **Миграция `0027_telegram_bot_id.sql` (она же `0033` по сквозной нумерации) НЕ создавалась** — колонка `telegram_bot_id` уже была добавлена в `0032_team_telegram.sql` (Сессия 39, добавлено превентивно). `bindAgentBot` уже заполняет её через `getMe` начиная с Сессии 39. Лишняя миграция отменена.
+- **Дублирование в Telegram реализовано в `notificationsService.createNotification`**, а не в каждом вызывающем месте (как намекает ТЗ). Это даёт автоматический Telegram-дубль для всех 4 существующих и любых будущих вызовов `createNotification` без правки каждого callsite. Реализация — `dispatchNotificationToTelegram(data)` через `setImmediate`, fire-and-forget: ошибки Telegram логируются, не валят основной поток.
+- **Динамический импорт `telegramService` внутри `notificationsService`** — нужен, чтобы избежать циклической зависимости (telegramService → memoryService → notificationsService → telegramService). Через `await import()` цикл разрывается на уровне модулей.
+- **Маршрутизация callback_query** — резолв токена бота для `answerCallbackQuery` идёт по `tokenHash` из URL вебхука (роут передаёт его в `processIncomingUpdate`), а если hash не передан — fallback на `getAgentBotByBotId(callback_query.message.from.id)`. Это устойчиво к ситуации «callback пришёл напрямую без URL» (внутренний тест).
+- **`editMessageReplyMarkup` с null** — Telegram Bot API не принимает `reply_markup: null` (требует object). Чтобы убрать кнопки после Accept/Reject, передаём `{ inline_keyboard: [] }`. Ошибки «message to edit not found» / «message is not modified» — глотаем тихо (повторное нажатие, удалённое сообщение).
+- **Голосовое БЕЗ reply на бота** — системный бот пишет в чат подсказку «Чтобы передать обратную связь — нажми reply на сообщение нужного агента». Это полезнее, чем тихое игнорирование.
+- **Голосовое В reply на бота** → скачиваем через `getFile` + GET file_path, прогоняем через существующий `transcribeFromBuffer` (Whisper-1, тот же что для голосовых форм Потока), передаём в `feedbackParserService.parseAndSave({ channel: 'telegram', score: null, ... })`. `score: null` — голосом Влад оставляет открытую реакцию без числовой оценки; парсер сохранит её с `score=null` и `channel='telegram'` (значение валидно с Сессии 14).
+- **`task_awaiting_review` без inline-кнопок** — оставляем чистое «⭐ Оцените задачу + ссылка». Оценка через кнопки 0-5 в Telegram добавила бы 6 inline-buttons на каждое done; лучше Влад открывает задачу по ссылке. Если решит иначе — можно добавить позже.
+- **`urgent` proposal** определяется через regex `/urgent|срочн/i` по `description` нотификации (триггерService записывает «urgent» в payload). Срочные идут с `priority: 'urgent'` и обходят тихий час через `sendOrEnqueue`.
+- **`rule_revision` (Curator)** — отправляется от системного бота, потому что Curator — служба, не конкретный агент. Тип уже валиден в CHECK Сессии 18; код-источник появится позже.
+- **Webhook'и на проде НЕ зарегистрированы** автоматически — нужен публичный URL Railway, которого у Claude Code нет. Влад регистрирует через UI Админки → блок Telegram → «Зарегистрировать вебхуки» с URL Railway. Без этого callback'и и голосовые из Telegram до бэкенда не дойдут (исходящие сообщения работают и без вебхуков).
 
 ---
 

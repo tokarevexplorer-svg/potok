@@ -36,6 +36,11 @@ function assertType(type) {
 // Создание нотификации. Все поля кроме type и title — опциональные.
 // agent_id опционален, для системных событий (например, rule_revision от
 // Curator'а) можно оставить null.
+//
+// Сессия 41: после успешного INSERT — fire-and-forget дублирование в
+// Telegram через dispatchNotificationToTelegram. Ошибки Telegram не
+// валят основной поток: нотификация уже создана и видна в Inbox, Telegram
+// — побочный канал.
 export async function createNotification({
   type,
   title,
@@ -66,6 +71,21 @@ export async function createNotification({
   if (error) {
     throw new Error(`Не удалось создать нотификацию: ${error.message}`);
   }
+
+  // Telegram-дубль. Динамический импорт нужен, чтобы избежать циклической
+  // зависимости notificationsService ↔ telegramService (telegram dispatch
+  // не зовёт createNotification, но cycle всё равно ловится при загрузке).
+  if (data) {
+    setImmediate(async () => {
+      try {
+        const { dispatchNotificationToTelegram } = await import("./telegramService.js");
+        await dispatchNotificationToTelegram(data);
+      } catch (err) {
+        console.warn(`[notifications] dispatchToTelegram failed: ${err?.message ?? err}`);
+      }
+    });
+  }
+
   return data;
 }
 
