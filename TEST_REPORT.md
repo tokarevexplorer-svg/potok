@@ -1053,3 +1053,47 @@ URL: https://potok-omega.vercel.app/blog/team/dashboard
 - Две колонки: оригинал и клон. Когда клон отработает, его результат появится в правой колонке.
 - В обеих задачах `team_tasks.comparison_group_id` одинаковый.
 
+
+---
+
+## Сессия 35 — Шаблоны задач разведчика + триггеры (2026-05-12) ✅
+
+### Автопроверки
+- `node --check` для taskHandlers, triggerService, promptBuilder, seed-scout-templates — OK.
+- `npx tsc --noEmit` — без ошибок.
+- `npm run seed:scout-templates` — загружены 3 файла в `team-prompts/task-templates/`.
+- `git log --oneline -1` → `1f35087 Сессия 35 — шаблоны задач разведчика + триггеры + Role-черновик`.
+
+### E2E через Playwright
+1. `GET /api/team-proxy/tasks/templates` → массив содержит analyze_competitor, search_trends, free_research с русскими title'ами.
+2. `GET /api/team-proxy/tasks/template-defaults/<type>` для всех трёх — корректные `self_review_default` и `clarification_default` из frontmatter.
+3. `/blog/team/dashboard` → «Поставить задачу» → выбрать агента → шаг 2: все три новые карточки видны («Анализ конкурента», «Поиск трендов», «Свободный ресёрч»).
+
+### Что осталось руками проверить
+#### Сессия 35 — реальная задача разведчика
+URL: https://potok-omega.vercel.app/blog/team/staff/<agentId>
+
+Что сделать:
+1. Создать агента «Разведчик» через мастер. Role-файл — взять из `backend/scripts/templates/role-scout.md`.
+2. В карточке агента → секция «Доступы»:
+   - Web Search привязать (из Сессии 32 он уже active).
+   - В «Шаблоны задач» добавить analyze_competitor, search_trends, free_research (либо оставить пустой allowlist → разрешены все).
+3. С дашборда «Поставить задачу» → «Разведчик» → «Поиск трендов» → fill brief.
+
+Что должно произойти:
+- Артефакт сохраняется в `research/scout/<timestamp>_trends_<slug>.md`.
+- В ответе агента — ссылки на источники (Anthropic Web Search citation-блоки).
+- В preview-prompt видны 3 секции Awareness: команда + базы + инструменты (Web Search с методичкой).
+
+#### Сессия 35 — триггеры разведчика
+Что сделать:
+1. У разведчика в `team_agents` поставить `autonomy_level=1`.
+2. В Админке → «Проактивность команды» — глобальный тумблер вкл.
+3. Добавить нового конкурента в `/blog/databases/competitors` (требует APIFY_TOKEN).
+4. Запустить cron руками: `npm run triggers:run` (если такой скрипт есть, иначе ждать 6 часов).
+
+Что должно произойти:
+- `team_trigger_state` для агента/триггера обновился.
+- `team_proposals` появилась запись с triggered_by='new_competitor_entry' (если cooldown 7 дней не блокирует).
+- Inbox внимания в дашборде: «🎯 1 предложение».
+
