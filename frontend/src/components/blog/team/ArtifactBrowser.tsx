@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ChevronRight,
+  Database,
   ExternalLink,
   Folder,
   FolderPlus,
@@ -24,10 +25,15 @@ import {
   deleteArtifact,
   deleteArtifactFolder,
   mergeArtifacts,
+  promoteArtifactToBase,
   uploadFile,
+  type CustomColumnSpec,
 } from "@/lib/team/teamBackendClient";
 import ConfirmDialog from "@/components/blog/analyst/ConfirmDialog";
 import ArtifactViewerModal from "./ArtifactViewerModal";
+import CreateDatabaseButton, {
+  type CreateDatabaseInitial,
+} from "@/components/blog/databases/CreateDatabaseButton";
 
 interface ArtifactBrowserProps {
   // Корневой префикс bucket'а («research», «texts», «ideas», «sources»).
@@ -72,6 +78,40 @@ export default function ArtifactBrowser({
   // Сессия 34: мультиселект и мерджинг.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mergeOpen, setMergeOpen] = useState(false);
+  // Сессия 46: промоут артефакта в базу.
+  //   - promoteBusy.path — пока идёт LLM-анализ (показываем спиннер на строке)
+  //   - promoteInitial — результат анализа, прокидывается в мастер «Создать базу»
+  //   - promoteOpen — мастер открыт (controlled-режим CreateDatabaseButton)
+  const [promoteBusyPath, setPromoteBusyPath] = useState<string | null>(null);
+  const [promoteError, setPromoteError] = useState<string | null>(null);
+  const [promoteOpen, setPromoteOpen] = useState(false);
+  const [promoteInitial, setPromoteInitial] = useState<CreateDatabaseInitial | null>(null);
+
+  async function handlePromote(path: string) {
+    if (promoteBusyPath) return;
+    setPromoteBusyPath(path);
+    setPromoteError(null);
+    try {
+      const result = await promoteArtifactToBase(path);
+      const suggestion = result.suggestion;
+      const columns: CustomColumnSpec[] = (suggestion?.columns ?? []).map((c) => ({
+        name: c.name,
+        label: c.label ?? c.name,
+        type: c.type,
+        ...(c.options ? { options: c.options } : {}),
+      }));
+      setPromoteInitial({
+        name: suggestion?.name ?? "",
+        description: suggestion?.description ?? null,
+        columns: columns.length > 0 ? columns : undefined,
+      });
+      setPromoteOpen(true);
+    } catch (err) {
+      setPromoteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPromoteBusyPath(null);
+    }
+  }
 
   function toggleSelected(filePath: string) {
     setSelected((prev) => {
@@ -359,6 +399,24 @@ export default function ArtifactBrowser({
                   />
                 )}
               </button>
+              {/* Сессия 46: «Сделать базой» — только для файлов. LLM
+                  предложит структуру, мастер откроется с готовыми колонками. */}
+              {!entry.isFolder && (
+                <button
+                  type="button"
+                  onClick={() => void handlePromote(entry.path)}
+                  disabled={promoteBusyPath === entry.path}
+                  className="focus-ring inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-ink-faint opacity-0 transition hover:bg-accent-soft hover:text-accent group-hover:opacity-100 disabled:opacity-100"
+                  title="Сделать базой"
+                  aria-label="Сделать базой"
+                >
+                  {promoteBusyPath === entry.path ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Database size={14} />
+                  )}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setPendingDelete(entry)}
@@ -372,6 +430,23 @@ export default function ArtifactBrowser({
           ))}
         </ul>
       )}
+
+      {promoteError && (
+        <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+          Не удалось проанализировать артефакт: {promoteError}
+        </p>
+      )}
+
+      {/* Сессия 46: controlled-режим мастера для промоута. */}
+      <CreateDatabaseButton
+        mode="controlled"
+        open={promoteOpen}
+        onClose={() => {
+          setPromoteOpen(false);
+          setPromoteInitial(null);
+        }}
+        initial={promoteInitial}
+      />
 
       {viewer && (
         <ArtifactViewerModal

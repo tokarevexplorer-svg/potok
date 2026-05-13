@@ -8,7 +8,7 @@
 // После успешного создания делает router.refresh() — серверная страница
 // /blog/databases перерисовывается с новой карточкой.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Plus, Trash2, X } from "lucide-react";
 import {
@@ -16,6 +16,30 @@ import {
   type CustomColumnSpec,
   type CustomColumnType,
 } from "@/lib/team/teamBackendClient";
+
+// Сессия 46: внешний caller (например, PromoteArtifactButton) может попросить
+// открыть мастер с уже заполненными полями. Передаёт initial + onClose, и
+// сама управляет видимостью через mode === 'controlled'.
+export interface CreateDatabaseInitial {
+  name?: string;
+  description?: string | null;
+  columns?: CustomColumnSpec[];
+}
+
+interface ButtonProps {
+  mode?: "uncontrolled"; // дефолт — кнопка сама управляет своим open
+  // Можно поднять текст кнопки наружу при необходимости.
+  label?: string;
+}
+
+interface ControlledProps {
+  mode: "controlled";
+  open: boolean;
+  onClose: () => void;
+  initial?: CreateDatabaseInitial | null;
+}
+
+type Props = ButtonProps | ControlledProps;
 
 const TYPE_LABELS: { value: CustomColumnType; label: string; hint: string }[] = [
   { value: "text", label: "Короткий текст", hint: "одна строка" },
@@ -36,15 +60,46 @@ function blankColumn(): DraftColumn {
   return { name: "", label: "", type: "text" };
 }
 
-export default function CreateDatabaseButton() {
+export default function CreateDatabaseButton(props: Props = {}) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const controlled = props.mode === "controlled";
+  const initial = controlled ? props.initial ?? null : null;
+
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlled ? props.open : internalOpen;
+
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [columns, setColumns] = useState<DraftColumn[]>([blankColumn()]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Сессия 46: при появлении initial (controlled-режим, открытие из
+  // промоута артефакта) — заполняем форму. Дальше Влад правит как обычно.
+  useEffect(() => {
+    if (!open) return;
+    if (!initial) return;
+    setStep(1);
+    setName(initial.name ?? "");
+    setDescription(initial.description ?? "");
+    const cols = Array.isArray(initial.columns) && initial.columns.length > 0
+      ? initial.columns.map((c) => ({
+          name: c.name,
+          label: c.label ?? c.name,
+          type: c.type,
+          // options в DraftColumn хранится как строка через запятую/перенос.
+          optionsRaw:
+            (c.type === "select" || c.type === "multi_select") &&
+            Array.isArray(c.options)
+              ? c.options.join(", ")
+              : undefined,
+        }))
+      : [blankColumn()];
+    setColumns(cols);
+    setError(null);
+    setSubmitting(false);
+  }, [open, initial]);
 
   function reset() {
     setStep(1);
@@ -56,7 +111,11 @@ export default function CreateDatabaseButton() {
   }
 
   function closeAll() {
-    setOpen(false);
+    if (controlled) {
+      props.onClose();
+    } else {
+      setInternalOpen(false);
+    }
     reset();
   }
 
@@ -119,13 +178,16 @@ export default function CreateDatabaseButton() {
   }
 
   if (!open) {
+    // В controlled-режиме сам компонент не рисует кнопку — открытие
+    // делает родитель (например, PromoteArtifactButton).
+    if (controlled) return null;
     return (
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={() => setInternalOpen(true)}
         className="focus-ring inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-surface shadow-card transition hover:bg-accent-hover"
       >
-        <Plus size={16} /> Создать базу
+        <Plus size={16} /> {("label" in props && props.label) || "Создать базу"}
       </button>
     );
   }

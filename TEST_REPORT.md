@@ -1671,3 +1671,68 @@ URL: `https://potok-omega.vercel.app/blog/databases`
 - **Inline edit-кнопки в строке таблицы**: для упрощения интеграции с server-rendered таблицей кнопки ✏️/🗑 живут под основной таблицей в виде чипов. Удобство — компромисс ради меньшего объёма правок. Можно поднять в строку при необходимости (требует client-side таблицы).
 - **Удаление БАЗЫ целиком** через UI — не реализовано: пока только через Supabase Dashboard (DROP TABLE + DELETE из team_custom_databases). Это редкая операция, кнопка «Удалить базу» в UI добавит риск случайного клика.
 
+
+---
+
+# Сессия 46 — Промоут артефакта в базу + дизайн-токены Хокусая
+
+## ✅ Выполнено (автоматически)
+
+- **Backend**: `node --check` прошёл для `services/team/promoteArtifactService.js` и `routes/team/artifacts.js`.
+- **Frontend**: `next build` — Compiled successfully + Linting и типы прошли. Page-data collection — pre-existing missing-supabase-env (без регрессий).
+- **`promoteArtifactService.js`**: 
+  - `promoteArtifact(path)` скачивает артефакт (truncate до 8000 символов чтобы не передавать гигантские тексты в LLM), выбирает дешёвую модель (`pickProvider` — anthropic-haiku → openai-mini → gemini-flash), строит системный промпт с JSON-схемой ответа.
+  - `extractJsonObject`/`normalizeSuggestion` — устойчивый парсинг ответа (снимает ```json``` обвязку, валидирует имена колонок regex'ом, фильтрует неизвестные типы, отбивает зарезервированные `id`/`created_at`).
+  - Расход → `recordCall({ purpose: 'promote_artifact' })`.
+- **`routes/team/artifacts.js`**: новый эндпоинт `POST /api/team/artifacts/promote-to-base`. Body `{ artifact_path }`. `sanitizePath` защищает от path traversal.
+- **`teamBackendClient.ts`**: тип `PromoteSuggestion` / `PromoteResult` + функция `promoteArtifactToBase(path)`.
+- **`CreateDatabaseButton.tsx`**: новые props `mode: 'controlled' | 'uncontrolled'`. В controlled-режиме принимает `open`, `onClose`, `initial: { name?, description?, columns? }` и заполняет форму при появлении (`useEffect(() => {...}, [open, initial])`).
+- **`ArtifactBrowser.tsx`**: 
+  - Кнопка `Database` (lucide) в row-actions для каждого файла. Spinner на время LLM-вызова.
+  - State: `promoteBusyPath` / `promoteError` / `promoteOpen` / `promoteInitial`.
+  - При успешном промоут — controlled-`CreateDatabaseButton` открывается внизу страницы с suggestion'ом.
+  - Ошибка показывается баннером под списком файлов.
+- **`hokusai-tokens.css`**: создан в `frontend/src/styles/`, импортирован в `globals.css`. 16 CSS-переменных: 5 базовых (canvas/surface/hover, text-primary/secondary), 4 акцента (primary/secondary/soft/warm), border-subtle, 6 статусов задач.
+
+## ⚠️ Требует ручной проверки
+
+### Сессия 46 — промоут артефакта (E2E на проде)
+
+URL: `https://potok-omega.vercel.app/blog/team/artifacts`
+
+Что сделать (после деплоя Vercel):
+1. Открой раздел Артефакты (через дашборд → Артефакты или прямой URL).
+2. Зайди в любую папку с файлами (`research/`, `texts/`, `ideas/`, и т.п.).
+3. Наведи курсор на любой файл — справа в группе action-кнопок должна появиться иконка «база данных» (Database из lucide) рядом с иконкой удаления.
+4. Нажми её → должен начать крутиться спиннер. Через 5–15 секунд (LLM-вызов) → откроется мастер «Создать базу» с заполненными:
+   - Имя (имя файла или то, что предложила LLM)
+   - Описание (от LLM)
+   - Колонки — список из 1–8 строк с правильными типами
+5. Поправь поля при необходимости → «Далее → Далее → Создать базу».
+6. После создания должен открыться `/blog/databases/<имя>`.
+7. В Supabase Dashboard → `team_api_calls` → новая запись с `purpose='promote_artifact'`.
+
+Что должно произойти:
+- LLM возвращает JSON; парсинг устойчив к code-fence-обёртке.
+- Если LLM не вернул валидный JSON → suggestion пустой, в мастере одна пустая колонка. Не падает.
+- Если артефакт пустой → 500 «Артефакт пустой — нечего анализировать».
+
+### Сессия 46 — дизайн-токены
+
+URL: любая страница раздела Команды (визуальная проверка).
+
+Что должно произойти:
+- Никаких визуальных изменений: текущая тёплая Tailwind-палитра остаётся.
+- В DevTools → Computed styles на `:root` должны быть видны переменные `--bg-canvas`, `--accent-primary`, и т.д. (значения из `hokusai-tokens.css`).
+- Это инфраструктурная подготовка к будущему редизайну. Полная миграция Tailwind config → CSS-переменные отложена до самостоятельной UI-сессии (см. отклонения).
+
+## 🐛 Найденные баги (не починил)
+
+Нет.
+
+## Что я НЕ делал и почему
+
+- **Полная миграция компонентов раздела Команда на токены Хокусая**: ТЗ просит «замени hardcoded цвета фонов на var(--bg-canvas)...». Но проверка показала: в компонентах нет hardcoded hex-цветов — они используют Tailwind-классы (`bg-canvas`, `text-ink-muted`), которые резолвятся через `tailwind.config.ts` с тёплой палитрой. Переключение на синюю палитру Хокусая требует переписать tailwind.config.ts под CSS-переменные (плюс RGB-формат для opacity-модификаторов), что меняет всю гамму проекта. Без визуального превью и без явной просьбы Влада «перекрась всё в синий» — рискованный шаг. Файл токенов добавлен как документация целевой палитры; миграция отложена до отдельной UI-сессии.
+- **Status-* CSS-переменные не подключены**: статусные бейджи задач сейчас рендерятся через `statusBadge(task.status)` в `taskTypeMeta.ts` с Tailwind utility-классами (`bg-emerald-100 text-emerald-800` и т.п.). Их перевод на `var(--status-done)` аналогичен миграции выше и отложен туда же.
+- **Playwright E2E**: не прогонял на этой итерации — Vercel ещё деплоит Сессии 44–45 (push был ~2 мин назад). Влад прогонит вручную после деплоя. Следующая итерация цикла начнёт Сессию 47 (финализация этапа 6 + интеграционные тесты), которая неявно подтвердит работоспособность Сессии 46.
+

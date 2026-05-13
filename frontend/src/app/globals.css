@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Сессия 46: дизайн-токены Хокусая. См. файл для пояснения сделки между
+   текущей Tailwind-палитрой и будущей миграцией. */
+@import "../styles/hokusai-tokens.css";
+
 @layer base {
   html,
   body {

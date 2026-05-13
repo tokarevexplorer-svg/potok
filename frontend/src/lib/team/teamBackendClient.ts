@@ -793,6 +793,34 @@ export async function deleteDatabaseRecord(
 }
 
 // =========================================================================
+// Сессия 46: промоут артефакта в базу.
+// =========================================================================
+
+export interface PromoteSuggestion {
+  name: string;
+  description: string | null;
+  columns: CustomColumnSpec[];
+}
+
+export interface PromoteResult {
+  suggestion: PromoteSuggestion;
+  raw: string;
+  tokens: { input: number; output: number; cached: number };
+  cost_usd: number;
+}
+
+export async function promoteArtifactToBase(
+  artifactPath: string,
+): Promise<PromoteResult> {
+  const data = await backendFetch("/api/team/artifacts/promote-to-base", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ artifact_path: artifactPath }),
+  });
+  return (data ?? {}) as PromoteResult;
+}
+
+// =========================================================================
 // Сессия 44: тумблер Anthropic Batch API
 // =========================================================================
 
