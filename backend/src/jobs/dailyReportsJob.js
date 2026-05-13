@@ -19,9 +19,7 @@ import {
   getAgentBots,
 } from "../services/team/telegramService.js";
 import { getServiceRoleClient } from "../services/team/teamSupabase.js";
-import { call as llmCall } from "../services/team/llmClient.js";
-import { recordCall } from "../services/team/costTracker.js";
-import { getApiKey } from "../services/team/keysService.js";
+import { sendSystemRequest } from "../services/team/systemLLMService.js";
 import { getAgent } from "../services/team/agentService.js";
 
 // Адрес фронта — нужно для ссылок в Telegram-отчётах. Берём из ENV, чтобы
@@ -184,16 +182,11 @@ export async function sendAgentReport(agentId, now, tz) {
     return { ok: false, reason: `agent status ${agent.status}` };
   }
 
-  // Generate отчёт через дешёвую LLM.
-  const provider = await pickCheapProvider();
-  if (!provider) {
-    return { ok: false, error: "no LLM provider" };
-  }
-
+  // Сессия 49: переход на Системную LLM. Локальный pickCheapProvider больше
+  // не нужен — provider/model выбирается в Админке.
   const reportText = await composeReport({
     agent,
     tasks: latest,
-    provider,
   });
 
   // Отправляем через бот агента.
@@ -210,24 +203,7 @@ function startOfDayInTz(at, tz) {
   return new Date(`${d}T00:00:00`);
 }
 
-async function pickCheapProvider() {
-  const options = [
-    { name: "anthropic", model: "claude-haiku-4-5" },
-    { name: "openai", model: "gpt-4o-mini" },
-    { name: "google", model: "gemini-2.5-flash" },
-  ];
-  for (const o of options) {
-    try {
-      const key = await getApiKey(o.name);
-      if (key) return o;
-    } catch {
-      // continue
-    }
-  }
-  return null;
-}
-
-async function composeReport({ agent, tasks, provider }) {
+async function composeReport({ agent, tasks }) {
   // Сводка задач: id, type, status, краткий результат.
   const tasksLines = tasks
     .map((t, idx) => {
@@ -269,32 +245,16 @@ async function composeReport({ agent, tasks, provider }) {
 
   let response;
   try {
-    response = await llmCall({
-      provider: provider.name,
-      model: provider.model,
+    response = await sendSystemRequest({
+      systemFunction: "telegram_report",
       systemPrompt,
       userPrompt,
       maxTokens: 1500,
+      agentId: agent.id ?? null,
     });
   } catch (err) {
     console.warn(`[dailyReports] LLM failed: ${err?.message ?? err}`);
     return fallbackReport(agent, tasks);
-  }
-
-  try {
-    await recordCall({
-      provider: provider.name,
-      model: provider.model,
-      inputTokens: Number(response?.inputTokens ?? 0),
-      outputTokens: Number(response?.outputTokens ?? 0),
-      cachedTokens: Number(response?.cachedTokens ?? 0),
-      taskId: null,
-      success: true,
-      agentId: agent.id ?? null,
-      purpose: "telegram_report",
-    });
-  } catch (err) {
-    console.warn(`[dailyReports] recordCall failed: ${err?.message ?? err}`);
   }
 
   return response?.text ?? fallbackReport(agent, tasks);

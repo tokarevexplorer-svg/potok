@@ -14,6 +14,11 @@ import {
 } from "../../services/team/keysService.js";
 import { listPresets, PROVIDER_PRESETS } from "../../config/providerPresets.js";
 import {
+  getSystemLLMConfig,
+  updateSystemLLMConfig,
+  getSystemSpentThisMonth,
+} from "../../services/team/systemLLMService.js";
+import {
   getTotalSpending,
   getAlertThreshold,
   getDailySpentUsd,
@@ -648,5 +653,143 @@ router.post("/batch-mode", async (req, res) => {
       .json({ error: err.message ?? "Не удалось сохранить настройку batch-режима" });
   }
 });
+
+// =========================================================================
+// GET /api/team/admin/system-llm
+// Сессия 49: возвращает текущую конфигурацию Системной LLM +
+// расход за месяц.
+// =========================================================================
+router.get("/system-llm", async (_req, res) => {
+  try {
+    const config = await getSystemLLMConfig();
+    const spent_month_usd = await getSystemSpentThisMonth();
+    return res.json({ ...config, spent_month_usd });
+  } catch (err) {
+    console.error("[team] admin system-llm GET failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось получить настройки Системной LLM" });
+  }
+});
+
+// =========================================================================
+// PUT /api/team/admin/system-llm
+// Body: { provider?, model?, budgetUsd? }
+// =========================================================================
+router.put("/system-llm", async (req, res) => {
+  const body = req.body ?? {};
+  try {
+    const config = await updateSystemLLMConfig({
+      provider: body.provider,
+      model: body.model,
+      budgetUsd: body.budgetUsd,
+    });
+    return res.json(config);
+  } catch (err) {
+    console.error("[team] admin system-llm PUT failed:", err);
+    return res
+      .status(400)
+      .json({ error: err.message ?? "Не удалось обновить настройки Системной LLM" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/admin/billing/summary?from=ISO&to=ISO
+// Сессия 49: расширенный биллинг с группировками. Возвращает:
+//   { total_usd, by_agent: [...], by_model: [...], by_function: [...], by_day: [...] }
+// =========================================================================
+router.get("/billing/summary", async (req, res) => {
+  const from = parseIsoDate(req.query.from);
+  const to = parseIsoDate(req.query.to);
+  try {
+    const client = (
+      await import("../../services/team/teamSupabase.js")
+    ).getServiceRoleClient();
+    let query = client
+      .from("team_api_calls")
+      .select("cost_usd, agent_id, model, purpose, timestamp");
+    if (from) query = query.gte("timestamp", from.toISOString());
+    if (to) query = query.lte("timestamp", to.toISOString());
+    const { data, error } = await query;
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+    const summary = buildBillingSummary(data ?? []);
+    return res.json(summary);
+  } catch (err) {
+    console.error("[team] admin billing/summary failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось получить биллинг" });
+  }
+});
+
+function parseIsoDate(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const d = new Date(value);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+function buildBillingSummary(rows) {
+  let total = 0;
+  const byAgent = new Map();
+  const byModel = new Map();
+  const byFunction = new Map();
+  const byDay = new Map();
+
+  for (const row of rows) {
+    const cost = Number(row?.cost_usd ?? 0);
+    if (!Number.isFinite(cost)) continue;
+    total += cost;
+
+    // by_agent — agent_id может быть null (системные функции).
+    const agentKey = row.agent_id ?? "__system__";
+    const ab = byAgent.get(agentKey) ?? { agent_id: row.agent_id ?? null, cost_usd: 0, calls: 0 };
+    ab.cost_usd += cost;
+    ab.calls += 1;
+    byAgent.set(agentKey, ab);
+
+    // by_model
+    const modelKey = row.model ?? "__unknown__";
+    const mb = byModel.get(modelKey) ?? { model: row.model ?? null, cost_usd: 0, calls: 0 };
+    mb.cost_usd += cost;
+    mb.calls += 1;
+    byModel.set(modelKey, mb);
+
+    // by_function — только не-task
+    if (row.purpose && row.purpose !== "task") {
+      const fb = byFunction.get(row.purpose) ?? { purpose: row.purpose, cost_usd: 0, calls: 0 };
+      fb.cost_usd += cost;
+      fb.calls += 1;
+      byFunction.set(row.purpose, fb);
+    }
+
+    // by_day — yyyy-mm-dd (UTC)
+    if (row.timestamp) {
+      const day = String(row.timestamp).slice(0, 10);
+      const db = byDay.get(day) ?? { date: day, cost_usd: 0, calls: 0 };
+      db.cost_usd += cost;
+      db.calls += 1;
+      byDay.set(day, db);
+    }
+  }
+
+  const round = (v) => Math.round(v * 1_000_000) / 1_000_000;
+  return {
+    total_usd: round(total),
+    by_agent: [...byAgent.values()]
+      .map((b) => ({ ...b, cost_usd: round(b.cost_usd) }))
+      .sort((a, b) => b.cost_usd - a.cost_usd),
+    by_model: [...byModel.values()]
+      .map((b) => ({ ...b, cost_usd: round(b.cost_usd) }))
+      .sort((a, b) => b.cost_usd - a.cost_usd),
+    by_function: [...byFunction.values()]
+      .map((b) => ({ ...b, cost_usd: round(b.cost_usd) }))
+      .sort((a, b) => b.cost_usd - a.cost_usd),
+    by_day: [...byDay.values()]
+      .map((b) => ({ ...b, cost_usd: round(b.cost_usd) }))
+      .sort((a, b) => (a.date < b.date ? -1 : 1)),
+  };
+}
 
 export default router;

@@ -890,6 +890,63 @@ export async function deleteProviderKey(provider: string): Promise<void> {
 }
 
 // =========================================================================
+// Сессия 49: Системная LLM.
+// =========================================================================
+
+export interface SystemLLMConfig {
+  provider: string;
+  model: string;
+  budgetUsd: number;
+  spent_month_usd?: number;
+}
+
+export async function fetchSystemLLM(): Promise<SystemLLMConfig> {
+  const data = await backendFetch("/api/team/admin/system-llm", { method: "GET" });
+  return (data ?? {}) as SystemLLMConfig;
+}
+
+export async function updateSystemLLM(patch: Partial<SystemLLMConfig>): Promise<SystemLLMConfig> {
+  const data = await backendFetch("/api/team/admin/system-llm", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return (data ?? {}) as SystemLLMConfig;
+}
+
+export interface BillingBucket {
+  agent_id?: string | null;
+  model?: string | null;
+  purpose?: string;
+  date?: string;
+  cost_usd: number;
+  calls: number;
+}
+
+export interface BillingSummary {
+  total_usd: number;
+  by_agent: BillingBucket[];
+  by_model: BillingBucket[];
+  by_function: BillingBucket[];
+  by_day: BillingBucket[];
+}
+
+export async function fetchBillingSummary(
+  fromIso?: string,
+  toIso?: string,
+): Promise<BillingSummary> {
+  const params = new URLSearchParams();
+  if (fromIso) params.set("from", fromIso);
+  if (toIso) params.set("to", toIso);
+  const qs = params.toString();
+  const data = await backendFetch(
+    `/api/team/admin/billing/summary${qs ? `?${qs}` : ""}`,
+    { method: "GET" },
+  );
+  return (data ?? {}) as BillingSummary;
+}
+
+// =========================================================================
 // Сессия 44: тумблер Anthropic Batch API
 // =========================================================================
 

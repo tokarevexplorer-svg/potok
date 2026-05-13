@@ -47,6 +47,7 @@ import {
 import { formatUsd } from "@/lib/team/format";
 import TelegramSection from "./TelegramSection";
 import ProvidersSection from "./ProvidersSection";
+import SystemLLMSection from "./SystemLLMSection";
 
 type Provider = "anthropic" | "openai" | "google";
 
@@ -166,6 +167,9 @@ export default function AdminWorkspace() {
       {/* Сессия 48: новый ProvidersSection поддерживает произвольных
           провайдеров (DeepSeek, Groq, custom). Заменил KeysSection. */}
       <ProvidersSection />
+
+      {/* Сессия 49: единая точка выбора модели для всех системных функций. */}
+      <SystemLLMSection />
 
       <SpendingSection spending={spending} error={spendingError} />
 

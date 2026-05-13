@@ -6,9 +6,7 @@
 // поправить колонки до окончательного CREATE TABLE.
 
 import { downloadFile } from "./teamStorage.js";
-import { call as llmCall } from "./llmClient.js";
-import { recordCall } from "./costTracker.js";
-import { getApiKey } from "./keysService.js";
+import { sendSystemRequest } from "./systemLLMService.js";
 
 const BUCKET = "team-database";
 const MAX_INPUT_CHARS = 8000;
@@ -24,23 +22,6 @@ const VALID_TYPES = new Set([
   "date",
   "boolean",
 ]);
-
-async function pickProvider() {
-  const options = [
-    { name: "anthropic", model: "claude-haiku-4-5" },
-    { name: "openai", model: "gpt-4o-mini" },
-    { name: "google", model: "gemini-2.5-flash" },
-  ];
-  for (const o of options) {
-    try {
-      const key = await getApiKey(o.name);
-      if (key) return o;
-    } catch {
-      // continue
-    }
-  }
-  return null;
-}
 
 // Безопасный парсинг JSON: модель может вернуть текст в ```json...``` блоке
 // или с лишним текстом «вот предложенная структура». Снимаем код-блоки
@@ -140,11 +121,6 @@ export async function promoteArtifact(artifactPath) {
       ? content.slice(0, MAX_INPUT_CHARS) + "\n\n[…обрезано…]"
       : content;
 
-  const provider = await pickProvider();
-  if (!provider) {
-    throw new Error("Нет доступного LLM-провайдера для анализа артефакта.");
-  }
-
   const systemPrompt = [
     "Ты предлагаешь структуру для пользовательской базы данных на основе текста артефакта.",
     "Не обсуждай выбор, не извиняйся — верни СТРОГО JSON в формате:",
@@ -174,34 +150,17 @@ export async function promoteArtifact(artifactPath) {
     "Верни JSON по описанному формату.",
   ].join("\n");
 
+  // Сессия 49: переход на Системную LLM. provider/model берётся в Админке.
   let response;
   try {
-    response = await llmCall({
-      provider: provider.name,
-      model: provider.model,
+    response = await sendSystemRequest({
+      systemFunction: "promote_artifact",
       systemPrompt,
       userPrompt,
       maxTokens: 2048,
     });
   } catch (err) {
     throw new Error(`LLM упал при анализе артефакта: ${err?.message ?? err}`);
-  }
-
-  let apiEntry = null;
-  try {
-    apiEntry = await recordCall({
-      provider: provider.name,
-      model: provider.model,
-      inputTokens: Number(response?.inputTokens ?? 0),
-      outputTokens: Number(response?.outputTokens ?? 0),
-      cachedTokens: Number(response?.cachedTokens ?? 0),
-      taskId: null,
-      success: true,
-      agentId: null,
-      purpose: "promote_artifact",
-    });
-  } catch (err) {
-    console.warn(`[promoteArtifact] recordCall failed: ${err?.message ?? err}`);
   }
 
   const parsed = extractJsonObject(response?.text ?? "");
@@ -215,6 +174,6 @@ export async function promoteArtifact(artifactPath) {
       output: Number(response?.outputTokens ?? 0),
       cached: Number(response?.cachedTokens ?? 0),
     },
-    cost_usd: Number(apiEntry?.cost_usd ?? 0),
+    cost_usd: Number(response?.costUsd ?? 0),
   };
 }

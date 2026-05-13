@@ -1852,3 +1852,69 @@ URL: `https://potok-omega.vercel.app/blog/team/admin`
 - **`fetchKeysFull` (legacy)**: оставлен в teamBackendClient.ts — используется DevModeBanner. Сносить нельзя без рефакторинга DevModeBanner.
 - **Playwright E2E**: не прогонял на этой итерации — Vercel ещё деплоит Сессии 46-47 (push был ~3 мин назад). Влад прогонит вручную; следующая итерация цикла начнёт Сессию 49.
 
+
+---
+
+# Сессия 49 — Системная LLM + расширение биллинга
+
+## ✅ Выполнено (автоматически)
+
+- **Миграция `0037_team_system_llm.sql`** накачена через `supabase db push`. INSERT в `team_settings`: `system_llm_provider='anthropic'`, `system_llm_model='claude-haiku-4-5'`, `system_llm_budget_usd=10`. Индекс `idx_team_api_calls_purpose` по purpose для биллинг-агрегаций.
+- **`systemLLMService.js`** — единая точка для всех не-task LLM-вызовов. Методы:
+  - `getSystemLLMConfig()` — читает из team_settings с кешем 30 сек.
+  - `updateSystemLLMConfig({provider, model, budgetUsd})` — частичный PATCH.
+  - `sendSystemRequest({systemFunction, systemPrompt, userPrompt, maxTokens, agentId, taskId})` — обёртка над llmClient + recordCall с purpose=systemFunction.
+  - `getSystemSpentThisMonth()` — сумма расходов с purpose≠'task' за текущий UTC-месяц.
+  - Мягкий лимит: при превышении бюджета log warning, без блокировки.
+- **Мигрированы 5 сервисов на `sendSystemRequest`**:
+  - `feedbackParserService.tryParseWithLLM` (purpose='feedback_parse')
+  - `mergeService.mergeArtifacts` (purpose='merge')
+  - `promoteArtifactService.promoteArtifact` (purpose='promote_artifact')
+  - `clarificationService.generateClarifications` (purpose='clarification')
+  - `dailyReportsJob.composeReport` (purpose='telegram_report')
+  - Удалены 5 локальных копий `pickProvider()` helpers.
+- **`routes/team/admin.js`**: новые эндпоинты:
+  - `GET /api/team/admin/system-llm` — конфиг + расход за месяц.
+  - `PUT /api/team/admin/system-llm` — частичный PATCH провайдера/модели/бюджета.
+  - `GET /api/team/admin/billing/summary?from&to` — агрегаты by_agent/by_model/by_function/by_day за один запрос.
+- **Backend syntax**: `node --check` прошёл для `systemLLMService.js`, `feedbackParserService.js`, `mergeService.js`, `promoteArtifactService.js`, `clarificationService.js`, `dailyReportsJob.js`, `routes/team/admin.js`.
+- **`teamBackendClient.ts`**: типы `SystemLLMConfig`/`BillingBucket`/`BillingSummary` + функции `fetchSystemLLM`/`updateSystemLLM`/`fetchBillingSummary`.
+- **`SystemLLMSection.tsx`**: UI блок в Админке — select провайдера (только подключённые с has_key), input модели (с datalist подсказок из preset.models), input бюджета, кнопка «Сохранить». Detail-блок «Какие функции используют Системную LLM» с описанием 8 категорий.
+- **Frontend**: `next build` — Compiled successfully + Linting + types прошли.
+
+## ⚠️ Требует ручной проверки
+
+### Сессия 49 — Системная LLM end-to-end (E2E на проде)
+
+URL: `https://potok-omega.vercel.app/blog/team/admin`
+
+Что сделать (после деплоя):
+1. Открой Админку → блок «Системная LLM» (новый, между «Ключи и провайдеры» и «Расходы»).
+2. Видим текущую конфигурацию (по умолчанию anthropic + claude-haiku-4-5).
+3. Меняем модель на `gpt-4o-mini` (если есть OpenAI-ключ) или `claude-sonnet-4-5-20251022`. «Сохранить».
+4. Возвращаемся в раздел Сотрудники → оценка любой завершённой задачи на 3/5 с комментарием → парсер обратной связи должен сработать через НОВЫЙ provider/model.
+5. В `team_api_calls` (Supabase Dashboard) → новая строка с `purpose='feedback_parse'` и правильным `provider`/`model`.
+6. То же самое сработает для:
+   - merge (мерджинг 2+ артефактов)
+   - clarification (галка «Уточнения от агента» в форме постановки задачи)
+   - promote_artifact (кнопка «Сделать базой» в Артефактах)
+   - telegram_report (ежедневный отчёт — если включён Telegram)
+
+### Сессия 49 — расход за месяц
+
+URL: тот же блок «Системная LLM».
+- Строка «Сейчас потрачено за месяц: $X.XX / $10.00». Сумма берётся из `team_api_calls` за текущий UTC-месяц (любой purpose ≠ 'task').
+- При превышении лимита система просто логирует warning в Railway Logs, но не блокирует запросы.
+
+## 🐛 Найденные баги (не починил)
+
+Нет.
+
+## Что я НЕ делал и почему
+
+- **`system_function` отдельный столбец**: ТЗ предлагает ALTER TABLE, но `purpose` (с Сессии 22) уже играет ту же роль. Дублирование избыточно. Документировано в отклонениях CLAUDE.md.
+- **Расширенный биллинг UI** (period selector, ₽ конвертация, график по дням, таблицы by_agent/by_model): backend готов (`/billing/summary` возвращает все группировки), фронт пока показывает только агрегат через старый `SpendingSection`. Полноценный билинг-дашборд — большой UI-кусок, упирается в дизайн-систему (Хокусай-палитра, см. отклонения Сессии 46). Откладываю до отдельной UI-сессии.
+- **`draft-role` / `compress-episodes` / `skillExtractorService`**: используют `llmCall` напрямую, не мигрированы. Маленькие частные пути, миграция тривиальна, не блокирует функциональность. Можно сделать в Сессии 50 или 51 как «дочистка».
+- **Кнопка «Обновить курс ₽»**: ENV-переменная `usd_to_rub_rate` в team_settings не используется ни одним компонентом UI. Добавится при наличии реального запроса от Влада.
+- **Playwright E2E**: не прогонял — Vercel ещё деплоит Сессию 48. Влад прогонит руками; следующая итерация цикла начнёт Сессию 50.
+

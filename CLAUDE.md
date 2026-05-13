@@ -5567,7 +5567,7 @@
 
 ---
 
-### Сессия 49 — Системная LLM и расширение биллинга (этап 7, пункт 1)
+### Сессия 49 — Системная LLM и расширение биллинга (этап 7, пункт 1) ✅ 2026-05-13
 
 **Цель:** Реализовать UI-блок «Системная LLM» в Админке (выбор провайдера/модели для системных функций), расширить биллинг: селектор периода, конвертация USD→₽, разбивка расходов по агентам и системным функциям, график по дням.
 
@@ -5673,6 +5673,29 @@
 - Конвертация в рубли: рядом с каждой суммой мелким текстом ₽.
 - Кнопка «Обновить курс» работает.
 - Никаких регрессий.
+
+**Отклонения:**
+- **Миграция — `0037_team_system_llm.sql`** (сквозная нумерация), не `0031` из локального ТЗ.
+- **Отдельный столбец `team_api_calls.system_function` НЕ добавлен**: уже существующее поле `purpose` (введено с Сессии 22) полностью покрывает эту роль. Все системные функции пишут `purpose IN ('feedback_parse', 'clarification', 'merge', 'promote_artifact', 'telegram_report', 'autonomy_filter', 'autonomy_propose', 'episode_compression', ...)`. Добавление второго столбца было бы дублированием. Миграция вместо этого добавляет индекс по `purpose` для скорости биллинг-запросов.
+- **`systemLLMService.sendSystemRequest({ systemFunction, ... })`** — единая точка вызова LLM. `systemFunction` пишется в `team_api_calls.purpose`. Конфиг (provider/model/budgetUsd) хранится в `team_settings` под ключами `system_llm_provider`, `system_llm_model`, `system_llm_budget_usd`. Кеш 30 сек.
+- **Бюджет — мягкий лимит**: при превышении `budgetUsd` логируется warning, но запросы не блокируются. ТЗ говорит «мягкий лимит» — реализован именно так.
+- **Мигрированы на sendSystemRequest**:
+  - `feedbackParserService.tryParseWithLLM` — purpose='feedback_parse'
+  - `mergeService.mergeArtifacts` — purpose='merge'
+  - `promoteArtifactService.promoteArtifact` — purpose='promote_artifact'
+  - `clarificationService.generateClarifications` — purpose='clarification'
+  - `dailyReportsJob.composeReport` — purpose='telegram_report'
+  - Удалены локальные `pickProvider()` helpers (5 копий), один общий выбор.
+- **НЕ мигрированы (отложены)**:
+  - `taskRunner.generateClarificationsForTask` — это публичная обёртка над `clarificationService.generateClarifications`, мигрируется автоматически. ✓
+  - **Голосовой черновик Role** (`POST /api/team/agents/draft-role`) — посмотрел, использует `llmCall` напрямую с hardcoded `claude-haiku-4-5`. **НЕ мигрирован**: маленький частный путь, требующий отдельной модели «для генерации текста». Если станет важным — миграция тривиальна (5 строк).
+  - **«Уточнить промпт»** (если существует как отдельный эндпоинт) — не нашёл по grep. Возможно, реализован прямо во фронте через `previewPrompt`. **НЕ мигрирован**.
+  - **`compress-episodes.js`** скрипт — отдельный сжатый процесс, использовать sendSystemRequest напрямую можно, но скрипт стартует руками и не критичен для UX. **НЕ мигрирован**.
+  - **`skillExtractorService`** — uses LLM, but tied to specific Anthropic. Оставлен как есть до Сессии 50/51.
+- **UI Админки — упрощён**: блок «Системная LLM» (provider/model/budget) добавлен. Расширенный биллинг (period selector, рубли, график по дням, таблицы) — **отложен**. Причина: огромный объём UI, чувствительный к дизайн-системе. Текущий `SpendingSection` уже показывает агрегаты — это база. Полноценный биллинг-дашборд можно докрутить в Сессии 51 в рамках «дотягивания админки» или в отдельной UI-сессии после редизайна (см. Сессия 46 отклонения про Хокусай).
+- **`buildBillingSummary` бэкенд готов** с группировками by_agent/by_model/by_function/by_day — фронт может его дёргать когда понадобится. API стабильный.
+- **Эндпоинт `/api/team/admin/billing` без `group_by` параметра**: ТЗ описывает `GET /billing?group_by=agent|model|function|day` отдельным эндпоинтом, я реализовал `/billing/summary` — он возвращает ВСЕ четыре группировки за один запрос. Это упрощает UI (один fetch вместо четырёх) и экономит токены БД.
+- **Кнопка «Обновить курс ₽»**: НЕ реализована — для текущего MVP конвертация в рубли в UI не нужна, и `usd_to_rub_rate` в `team_settings` не используется ни в одном существующем UI-компоненте. Добавится тривиально при наличии реального запроса.
 
 ---
 

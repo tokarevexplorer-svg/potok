@@ -15,34 +15,7 @@
 
 import { getAgent } from "./agentService.js";
 import { getRoleFile } from "./agentService.js";
-import { call as llmCall } from "./llmClient.js";
-import { recordCall } from "./costTracker.js";
-import { getApiKey } from "./keysService.js";
-
-// Берём первый доступный Anthropic-ключ. Если нет — переключаемся
-// на OpenAI/Google. Возвращает { provider, model } или null.
-async function pickProvider() {
-  for (const provider of ["anthropic", "openai", "google"]) {
-    try {
-      const key = await getApiKey(provider);
-      if (key) {
-        // Модель по умолчанию для каждого провайдера. Когда появится
-        // Системная LLM (Сессия 49) — оно будет читаться из team_settings.
-        const model = DEFAULT_MODEL_BY_PROVIDER[provider];
-        return { provider, model };
-      }
-    } catch {
-      // Ключ не задан — переходим к следующему провайдеру.
-    }
-  }
-  return null;
-}
-
-const DEFAULT_MODEL_BY_PROVIDER = {
-  anthropic: "claude-haiku-4-5",
-  openai: "gpt-4o-mini",
-  google: "gemini-2.5-flash",
-};
+import { sendSystemRequest } from "./systemLLMService.js";
 
 const MAX_QUESTIONS = 3;
 
@@ -51,11 +24,6 @@ const MAX_QUESTIONS = 3;
 // =========================================================================
 export async function generateClarifications(task) {
   if (!task) return [];
-  const provider = await pickProvider();
-  if (!provider) {
-    console.warn("[clarification] нет доступного провайдера, пропуск");
-    return [];
-  }
 
   let agent = null;
   let roleSummary = "";
@@ -78,34 +46,20 @@ export async function generateClarifications(task) {
   const systemPrompt = buildSystemPrompt(agent, roleSummary);
   const userPrompt = buildUserPrompt(task);
 
+  // Сессия 49: переход на Системную LLM. provider/model берётся в Админке.
   let response;
   try {
-    response = await llmCall({
-      provider: provider.provider,
-      model: provider.model,
+    response = await sendSystemRequest({
+      systemFunction: "clarification",
       systemPrompt,
       userPrompt,
       maxTokens: 600,
+      taskId: task.id ?? null,
+      agentId: task.agent_id ?? null,
     });
   } catch (err) {
     console.warn(`[clarification] LLM call failed: ${err?.message ?? err}`);
     return [];
-  }
-
-  try {
-    await recordCall({
-      provider: provider.provider,
-      model: provider.model,
-      inputTokens: Number(response?.inputTokens ?? 0),
-      outputTokens: Number(response?.outputTokens ?? 0),
-      cachedTokens: Number(response?.cachedTokens ?? 0),
-      taskId: task.id ?? null,
-      success: true,
-      agentId: task.agent_id ?? null,
-      purpose: "clarification",
-    });
-  } catch (err) {
-    console.warn(`[clarification] recordCall failed: ${err?.message ?? err}`);
   }
 
   return parseClarificationsResponse(response?.text ?? "");

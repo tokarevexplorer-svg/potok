@@ -18,6 +18,7 @@
 import { downloadFile } from "./teamStorage.js";
 import { getServiceRoleClient } from "./teamSupabase.js";
 import { call as llmCall, LLMError } from "./llmClient.js";
+import { sendSystemRequest } from "./systemLLMService.js";
 import { recordCall } from "./costTracker.js";
 import { getApiKey } from "./keysService.js";
 import { getTaskById } from "./teamSupabase.js";
@@ -222,14 +223,6 @@ export async function parseAndSave({
 // 'system'): это расход на конкретного агента, удобно для будущей
 // поагентной аналитики.
 async function tryParseWithLLM({ agentId, taskId, score, rawInput }) {
-  const key = await getApiKey("anthropic").catch(() => null);
-  if (!key) {
-    console.warn(
-      "[feedbackParser] Anthropic-ключ не найден — эпизод сохранится без parsed_text.",
-    );
-    return null;
-  }
-
   let taskTitle = null;
   if (taskId) {
     try {
@@ -240,46 +233,39 @@ async function tryParseWithLLM({ agentId, taskId, score, rawInput }) {
     }
   }
 
-  const model = await resolveDefaultAnthropicModel();
   const userPrompt = buildUserPrompt({ taskTitle, score, rawInput });
 
   try {
-    const result = await llmCall({
-      provider: "anthropic",
-      model,
+    // Сессия 49: переход на Системную LLM. Provider/model выбирается в
+    // Админке (системные настройки), а не локально через resolveDefaultAnthropicModel.
+    const result = await sendSystemRequest({
+      systemFunction: "feedback_parse",
       systemPrompt: SYSTEM_PROMPT,
       userPrompt,
-      cacheableBlocks: [],
       maxTokens: 256,
-    });
-
-    await recordCall({
-      provider: "anthropic",
-      model,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      cachedTokens: result.cachedTokens,
-      success: true,
-      agentId,
       taskId: taskId ?? null,
-      purpose: "feedback_parse",
+      agentId,
     });
-
     return cleanParsedText(result.text);
   } catch (err) {
     console.error("[feedbackParser] LLM-вызов упал:", err);
-    await recordCall({
-      provider: "anthropic",
-      model,
-      success: false,
-      error: err?.message ?? String(err),
-      agentId,
-      taskId: taskId ?? null,
-      purpose: "feedback_parse",
-    }).catch(() => {});
-    // При LLMError — пробрасываем, чтобы caller знал. Прочие ошибки
-    // (например, сеть) тоже пробрасываем — лучше явно показать «не
-    // удалось распарсить», чем тихо сохранять без parsed_text.
+    // Sessия 49: запись об ошибке через recordCall с тем же purpose.
+    // sendSystemRequest сам не пишет failure-record, поэтому делаем здесь.
+    try {
+      const { getSystemLLMConfig } = await import("./systemLLMService.js");
+      const cfg = await getSystemLLMConfig();
+      await recordCall({
+        provider: cfg.provider,
+        model: cfg.model,
+        success: false,
+        error: err?.message ?? String(err),
+        agentId,
+        taskId: taskId ?? null,
+        purpose: "feedback_parse",
+      });
+    } catch {
+      /* ignore */
+    }
     if (err instanceof LLMError) throw err;
     throw new LLMError(`Не удалось нейтрализовать комментарий: ${err?.message ?? err}`);
   }

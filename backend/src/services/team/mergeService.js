@@ -5,30 +5,10 @@
 // новый артефакт, склееный через LLM. Расход пишется с purpose='merge'.
 
 import { downloadFile, uploadFile } from "./teamStorage.js";
-import { call as llmCall } from "./llmClient.js";
-import { recordCall } from "./costTracker.js";
-import { getApiKey } from "./keysService.js";
+import { sendSystemRequest } from "./systemLLMService.js";
 
 const BUCKET = "team-database";
 const MERGE_FOLDER = "merges";
-
-// Подбираем дешёвую модель по тем же провайдерам, что в Сессии 33.
-async function pickProvider() {
-  const options = [
-    { name: "anthropic", model: "claude-haiku-4-5" },
-    { name: "openai", model: "gpt-4o-mini" },
-    { name: "google", model: "gemini-2.5-flash" },
-  ];
-  for (const o of options) {
-    try {
-      const key = await getApiKey(o.name);
-      if (key) return o;
-    } catch {
-      // Continue
-    }
-  }
-  return null;
-}
 
 function nowSlug() {
   const d = new Date();
@@ -72,13 +52,7 @@ export async function mergeArtifacts(artifactPaths, instruction, { targetTaskId 
     throw new Error("После скачивания осталось меньше 2 артефактов.");
   }
 
-  // 2) Выбираем LLM-провайдера.
-  const provider = await pickProvider();
-  if (!provider) {
-    throw new Error("Нет доступного LLM-провайдера для объединения.");
-  }
-
-  // 3) Собираем промпт.
+  // 2) Собираем промпт.
   const systemPrompt = [
     "Ты объединяешь несколько артефактов в один документ по инструкции пользователя.",
     "Следуй инструкции точно. Не добавляй собственных комментариев и не «улучшай» сверх запрошенного.",
@@ -95,46 +69,28 @@ export async function mergeArtifacts(artifactPaths, instruction, { targetTaskId 
     "Выдай объединённый документ. Никаких пояснений до или после — только сам документ.",
   ].join("\n\n");
 
-  // 4) Запрос.
+  // 3) Запрос + биллинг через Системную LLM (Сессия 49).
   let response;
   try {
-    response = await llmCall({
-      provider: provider.name,
-      model: provider.model,
+    response = await sendSystemRequest({
+      systemFunction: "merge",
       systemPrompt,
       userPrompt,
       maxTokens: 8192,
+      taskId: targetTaskId,
     });
   } catch (err) {
     throw new Error(`LLM упал на объединении: ${err?.message ?? err}`);
   }
 
-  // 5) Запись расходов.
-  let apiEntry = null;
-  try {
-    apiEntry = await recordCall({
-      provider: provider.name,
-      model: provider.model,
-      inputTokens: Number(response?.inputTokens ?? 0),
-      outputTokens: Number(response?.outputTokens ?? 0),
-      cachedTokens: Number(response?.cachedTokens ?? 0),
-      taskId: targetTaskId,
-      success: true,
-      agentId: null,
-      purpose: "merge",
-    });
-  } catch (err) {
-    console.warn(`[merge] recordCall failed: ${err?.message ?? err}`);
-  }
-
-  // 6) Сохраняем результат как новый артефакт.
+  // 4) Сохраняем результат как новый артефакт.
   const text = response?.text ?? "";
   const fileName = `merge_${nowSlug()}.md`;
   const targetPath = `${MERGE_FOLDER}/${fileName}`;
   const header = [
     `# Объединение ${sources.length} артефактов`,
     "",
-    `_${new Date().toISOString()} · ${provider.name}/${provider.model}_`,
+    `_${new Date().toISOString()} · ${response.provider}/${response.model}_`,
     "",
     "## Инструкция",
     "",
@@ -153,9 +109,9 @@ export async function mergeArtifacts(artifactPaths, instruction, { targetTaskId 
     artifact_path: targetPath,
     content: text,
     sources: sources.map((s) => s.path),
-    provider: provider.name,
-    model: provider.model,
-    cost_usd: Number(apiEntry?.cost_usd ?? 0),
+    provider: response.provider,
+    model: response.model,
+    cost_usd: Number(response?.costUsd ?? 0),
     tokens: {
       input: Number(response?.inputTokens ?? 0),
       output: Number(response?.outputTokens ?? 0),
