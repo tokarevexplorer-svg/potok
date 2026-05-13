@@ -314,6 +314,18 @@ export async function createAgent(fields = {}) {
   // через invalidatePromptCache (бампает instructionVersion + awareness).
   invalidatePromptCache();
 
+  // Сессия 42: объявление в Telegram-чат от системного бота. Fire-and-forget,
+  // динамический импорт — чтобы избежать циклической зависимости
+  // (telegramService → agentService → telegramService).
+  setImmediate(async () => {
+    try {
+      const { announceAgentRosterChange } = await import("./telegramService.js");
+      await announceAgentRosterChange("joined", displayName);
+    } catch (err) {
+      console.warn(`[team/agents] announce join failed: ${err?.message ?? err}`);
+    }
+  });
+
   return data;
 }
 
@@ -460,6 +472,27 @@ async function setStatus(agentId, newStatus, comment) {
   // меняет роль агента в команде). Сессия 12: единый канал инвалидации
   // через invalidatePromptCache (бампает instructionVersion + awareness).
   invalidatePromptCache();
+
+  // Сессия 42: объявление в Telegram. Маппинг статуса на тип сообщения.
+  // resumed = вернулся из paused или archived в active.
+  const announceKind =
+    newStatus === "paused"
+      ? "paused"
+      : newStatus === "archived"
+        ? "archived"
+        : newStatus === "active"
+          ? "resumed"
+          : null;
+  if (announceKind) {
+    setImmediate(async () => {
+      try {
+        const { announceAgentRosterChange } = await import("./telegramService.js");
+        await announceAgentRosterChange(announceKind, current.display_name);
+      } catch (err) {
+        console.warn(`[team/agents] announce status failed: ${err?.message ?? err}`);
+      }
+    });
+  }
 
   return data;
 }

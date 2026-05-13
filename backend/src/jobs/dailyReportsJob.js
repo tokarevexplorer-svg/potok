@@ -141,7 +141,9 @@ async function setLastReportDate(date) {
 // =========================================================================
 // Отчёт по одному агенту.
 // =========================================================================
-async function sendAgentReport(agentId, now, tz) {
+// Экспортирован с Сессии 42 — нужен для интеграционного теста
+// (test-telegram.js, тест paused-агента). Был internal-only.
+export async function sendAgentReport(agentId, now, tz) {
   // Задачи агента за сегодня (по созданию). Берём DISTINCT ON (id) — последний
   // снапшот каждой задачи.
   const startOfDayIso = startOfDayInTz(now, tz).toISOString();
@@ -173,6 +175,13 @@ async function sendAgentReport(agentId, now, tz) {
     agent = await getAgent(agentId);
   } catch {
     agent = { display_name: agentId };
+  }
+
+  // Сессия 42: paused/archived агенты не получают ежедневный отчёт даже если
+  // запись бота ещё `active` в team_telegram_bots. Telegram-бот живёт отдельно
+  // от статуса агента — этот гард их сшивает в одну сторону.
+  if (agent && agent.status && agent.status !== "active") {
+    return { ok: false, reason: `agent status ${agent.status}` };
   }
 
   // Generate отчёт через дешёвую LLM.

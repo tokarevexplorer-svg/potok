@@ -1419,3 +1419,57 @@ URL: Telegram-чат группы
 - С правильным header — должен вернуть 200 (handled: false, unsupported update type).
 
 
+
+---
+
+# Сессия 42 — Интеграционное тестирование Telegram и финализация
+
+## ✅ Выполнено (автоматически)
+
+- **Backend**: `node --check` прошёл для `telegramService.js`, `agentService.js`, `dailyReportsJob.js`, `scripts/test-telegram.js`.
+- **Frontend**: `next build` — Compiled successfully + Linting and checking validity of types прошли. Page-data collection упала на pre-existing missing local Supabase env (как и во всех сессиях с 14).
+- **`npm run test:telegram`** на проде/dev с реальным TELEGRAM_SYSTEM_BOT_TOKEN: `8 pass, 0 fail, 0 skip из 8`.
+  - [1] Отправка от системного бота (message_id=12)
+  - [2] Отправка от бота агента (agent=igor, message_id=14)
+  - [3] Тихий час → enqueue (запись действительно осела в `team_telegram_queue`)
+  - [4] flushQueue (тестовая запись с фейк-токеном перешла из `queued` в `failed`, что подтверждает: flushQueue реально снимает записи со статуса queued независимо от успеха sendMessage)
+  - [5] Агент без бота → ok=false с reason="no agent bot"
+  - [6] Paused-агент → sendAgentReport вернул `reason="agent status paused"` (новый гард в `dailyReportsJob.sendAgentReport`)
+  - [7] Нотификация → Telegram (dispatchNotificationToTelegram отработал без exception)
+  - [8] Urgent обходит тихий час (proposal с description="urgent ..." не лёг в очередь, ушёл сразу через sendMessage)
+- **Тестовые объекты**: автоматический cleanup в скрипте (team_telegram_queue, team_tasks dummy, team_agents tmp).
+
+## ⚠️ Требует ручной проверки
+
+### Сессия 42 — объявления о составе команды в Telegram
+
+URL: общий Telegram-чат группы (`telegram_chat_id` из Админки).
+
+Что сделать (после регистрации webhook'ов, см. подсказку в README):
+1. Открой `/blog/team/staff` → «+ Добавить сотрудника» → создай тестового агента.
+2. В общем чате должно появиться от системного бота: `👋 <b>Имя</b> присоединился к команде.`
+3. На карточке нового агента → «Приостановить». В чат → `⏸ <b>Имя</b> на паузе.`
+4. Кнопка «Вернуть в работу». В чат → `▶️ <b>Имя</b> вернулся в строй.`
+5. Кнопка «Архивировать» (с confirm). В чат → `📦 <b>Имя</b> выведен из команды.`
+6. Удаление тестового агента из таблицы `team_agents` (опционально, чтобы не плодить мусор).
+
+Что должно произойти:
+- Все 4 события приходят от системного бота (не от агентского).
+- Сообщения форматируются HTML (имя — bold).
+- Если Telegram выключен в Админке (`telegram_enabled=false`) — сообщения тихо пропускаются, лог в console.warn.
+
+Связано с: `announceAgentRosterChange(kind, displayName)` в `telegramService.js` + setImmediate-вызовы в `agentService.createAgent` и `agentService.setStatus`.
+
+### Сессия 42 — полный end-to-end из «Что делать после сессии»
+
+ТЗ просит прогнать end-to-end: задача → done → push → отчёт → голосовое → правило → Accept. Каждый отдельный шаг проверен в более ранних сессиях (40 — push, 41 — голос/Accept, эта сессия — тесты на уровне сервиса). Связку «всё вместе на одном агенте за один проход» лучше прогнать руками после регистрации webhook'ов.
+
+## 🐛 Найденные баги (не починил)
+
+Нет.
+
+## Что я НЕ делал и почему
+
+- **Playwright E2E**: Сессия 42 — pure backend (test script + service-level гард на paused + объявления состава). UI-страниц не трогал, новых API-эндпоинтов не добавлял. Регрессий на дашборде/сотрудниках нет — функции `createAgent` / `setStatus` остаются совместимыми, добавлен только fire-and-forget `setImmediate`-хвост.
+- **Rate-limit 429 проверка**: моделировать ответ Telegram 429 локально требует mock'а fetch — пропустил, бизнес-логика retry-after документирована в коде Сессий 39-40 (`callBotApi → error.retryAfter`, `sendMessage` retry-loop до 3 попыток). Реальная проверка возможна только под нагрузкой.
+

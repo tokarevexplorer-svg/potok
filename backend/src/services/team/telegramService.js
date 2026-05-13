@@ -892,3 +892,40 @@ function formatNotificationForTelegram(n) {
       return null;
   }
 }
+
+// =========================================================================
+// announceAgentRosterChange — Сессия 42 (изменения состава команды)
+// =========================================================================
+// Лёгкое объявление в общий чат от системного бота: «X присоединился / на
+// паузе / вернулся в строй / выведен». Если Telegram выключен — тихо выходит.
+// Fire-and-forget из agentService: ошибки логирует, не пробрасывает.
+//
+// kind ∈ { 'joined' | 'paused' | 'resumed' | 'archived' }
+export async function announceAgentRosterChange(kind, displayName) {
+  const name = String(displayName ?? "").trim();
+  if (!name) return { ok: false, reason: "no name" };
+  const safeName = escapeHtml(name);
+  let text;
+  switch (kind) {
+    case "joined":
+      text = `👋 <b>${safeName}</b> присоединился к команде.`;
+      break;
+    case "paused":
+      text = `⏸ <b>${safeName}</b> на паузе.`;
+      break;
+    case "resumed":
+      text = `▶️ <b>${safeName}</b> вернулся в строй.`;
+      break;
+    case "archived":
+      text = `📦 <b>${safeName}</b> выведен из команды.`;
+      break;
+    default:
+      return { ok: false, reason: `unknown kind ${kind}` };
+  }
+  try {
+    return await sendMessageFromSystem(text, { sourceType: "roster_change" });
+  } catch (err) {
+    console.warn(`[telegram] announceRosterChange failed: ${err?.message ?? err}`);
+    return { ok: false, error: err?.message ?? String(err) };
+  }
+}
