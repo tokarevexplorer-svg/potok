@@ -9,7 +9,10 @@ import {
   setApiKey,
   deleteApiKey,
   getAllKeysStatus,
+  listKeysFull,
+  testKey,
 } from "../../services/team/keysService.js";
+import { listPresets, PROVIDER_PRESETS } from "../../config/providerPresets.js";
 import {
   getTotalSpending,
   getAlertThreshold,
@@ -36,7 +39,10 @@ const router = Router();
 
 router.use(requireAuth);
 
-const SUPPORTED_PROVIDERS = new Set(["anthropic", "openai", "google"]);
+// Сессия 48: убрали жёсткий whitelist провайдеров — теперь Влад может
+// добавлять произвольные OpenAI-compatible (DeepSeek, Groq, OpenRouter,
+// custom). Валидация slug — в keysService.ensureProvider.
+const PROVIDER_SLUG_RE = /^[a-z][a-z0-9_-]{0,40}$/;
 
 // Маскирует ключ до первых 4 и последних 4 символов: «sk-anth***...***xyzv».
 // Используется в админке, чтобы пользователь видел, какой ключ записан, но
@@ -88,15 +94,36 @@ router.get("/keys", async (_req, res) => {
 // =========================================================================
 
 router.post("/keys", async (req, res) => {
-  const { provider, key } = req.body ?? {};
-  if (typeof provider !== "string" || !SUPPORTED_PROVIDERS.has(provider)) {
-    return res.status(400).json({ error: "provider должен быть одним из: anthropic, openai, google" });
+  const body = req.body ?? {};
+  const provider = typeof body.provider === "string" ? body.provider.trim() : "";
+  const key = typeof body.key === "string" ? body.key : body.key_value;
+  if (!PROVIDER_SLUG_RE.test(provider)) {
+    return res.status(400).json({
+      error: "provider должен быть slug'ом: латиница, цифры, дефисы, подчёркивания (1–40).",
+    });
   }
   if (typeof key !== "string" || !key.trim()) {
     return res.status(400).json({ error: "key обязателен и не должен быть пустым" });
   }
   try {
-    await setApiKey(provider, key);
+    // Сессия 48: если в body есть base_url / display_name / is_openai_compatible —
+    // передаём расширенный объект; иначе setApiKey сам подставит из пресета (если есть).
+    const hasExtended =
+      typeof body.base_url === "string" ||
+      typeof body.display_name === "string" ||
+      typeof body.is_openai_compatible === "boolean" ||
+      Array.isArray(body.models);
+    if (hasExtended) {
+      await setApiKey(provider, {
+        key_value: key,
+        base_url: body.base_url,
+        display_name: body.display_name,
+        is_openai_compatible: body.is_openai_compatible,
+        models: body.models,
+      });
+    } else {
+      await setApiKey(provider, key);
+    }
     return res.json({ ok: true, provider });
   } catch (err) {
     console.error(`[team] admin keys POST (${provider}) failed:`, err);
@@ -105,14 +132,56 @@ router.post("/keys", async (req, res) => {
 });
 
 // =========================================================================
+// GET /api/team/admin/keys/full
+// Сессия 48: подробный список всех зарегистрированных провайдеров (с
+// расширенными полями). Используется UI Админки для рендеринга карточек.
+// =========================================================================
+router.get("/keys/full", async (_req, res) => {
+  try {
+    const keys = await listKeysFull();
+    return res.json({ keys });
+  } catch (err) {
+    console.error("[team] admin keys/full failed:", err);
+    return res.status(500).json({ error: err.message ?? "Не удалось получить ключи" });
+  }
+});
+
+// =========================================================================
+// POST /api/team/admin/keys/:provider/test
+// Сессия 48: пинг до провайдера, чтобы убедиться, что ключ рабочий.
+// =========================================================================
+router.post("/keys/:provider/test", async (req, res) => {
+  const provider = String(req.params.provider ?? "").trim();
+  if (!PROVIDER_SLUG_RE.test(provider)) {
+    return res.status(400).json({ error: "Некорректный provider." });
+  }
+  try {
+    const result = await testKey(provider);
+    return res.json(result);
+  } catch (err) {
+    console.error(`[team] admin keys/${provider}/test failed:`, err);
+    return res.status(500).json({ error: err.message ?? "Не удалось протестировать ключ" });
+  }
+});
+
+// =========================================================================
+// GET /api/team/admin/presets
+// Сессия 48: возвращает список preset'ов LLM-провайдеров. Используется UI
+// мастером «+ Добавить провайдер».
+// =========================================================================
+router.get("/presets", (_req, res) => {
+  return res.json({ presets: listPresets() });
+});
+
+// =========================================================================
 // DELETE /api/team/admin/keys
 // Body: { provider }
 // =========================================================================
 
 router.delete("/keys", async (req, res) => {
-  const { provider } = req.body ?? {};
-  if (typeof provider !== "string" || !SUPPORTED_PROVIDERS.has(provider)) {
-    return res.status(400).json({ error: "provider должен быть одним из: anthropic, openai, google" });
+  const provider = typeof req.body?.provider === "string" ? req.body.provider.trim() : "";
+  if (!PROVIDER_SLUG_RE.test(provider)) {
+    return res.status(400).json({ error: "Некорректный provider." });
   }
   try {
     await deleteApiKey(provider);

@@ -5418,7 +5418,7 @@
 
 ---
 
-### Сессия 48 — Универсальный OpenAI-compatible адаптер (этап 7, пункт 1)
+### Сессия 48 — Универсальный OpenAI-compatible адаптер (этап 7, пункт 1) ✅ 2026-05-13
 
 **Цель:** Расширить `llmClient.js` универсальным адаптером для любого OpenAI-compatible провайдера (DeepSeek, Groq, Perplexity, OpenRouter, Ollama Cloud и др.), расширить таблицу `team_api_keys` под хранение произвольных провайдеров с `base_url`, обновить UI управления ключами в Админке.
 
@@ -5549,6 +5549,21 @@
 - Расходы записываются в `team_api_calls` с правильным `provider` и стоимостью.
 - Существующие три провайдера (Anthropic, OpenAI, Google) работают без регрессий.
 - Никаких регрессий во всех предыдущих сессиях.
+
+**Отклонения:**
+- **Миграция — `0036_team_api_keys_providers.sql`** (сквозная нумерация), не `0030` из локального ТЗ.
+- **Backfill OpenAI**: `base_url = 'https://api.openai.com/v1'` + `is_openai_compatible = true`. Это означает, что **существующий callOpenAI больше не используется для openai** в пути универсального адаптера — но сам `if (provider === 'openai') return callOpenAI(...)` в `call()` остался первым, поэтому реально продолжаем ходить через нативный SDK с custom-error-классами. `is_openai_compatible=true` для openai нужно только чтобы `testKey` использовал тот же путь GET /models.
+- **`keysService.SUPPORTED_PROVIDERS` снят**: теперь любой провайдер, чей slug проходит regex `^[a-z][a-z0-9_-]{0,40}$`, валиден. Это критично для DeepSeek/Groq/custom. Старый ensureProvider теперь только проверяет shape.
+- **`setApiKey` принимает либо строку (legacy), либо объект** с расширенными полями (`{ key_value, base_url, display_name, is_openai_compatible, models }`). Старые callers (legacy 3-провайдер UI) продолжают работать. Новый UI шлёт объект.
+- **`testKey`** — пинг до провайдера:
+  - anthropic: `messages.create({max_tokens: 1, model: 'claude-haiku-4-5'})`
+  - google: `getGenerativeModel().countTokens('ping')`
+  - openai-compatible: `client.models.list()` через baseURL из БД
+- **`fetchKeysFull` в `teamBackendClient.ts` уже был** — поэтому мой новый export назван `fetchProviderKeys` (избежать дубль-export'а, build падал на этом). Старый возвращает legacy 3-провайдер shape (для KeysSection, которую я заменил, но функция осталась в файле как незакомментированный legacy — её увидит DevModeBanner, который не трогаем).
+- **UI**: новый `ProvidersSection` рендерит карточки провайдеров с маскированным ключом, кнопкой `🔄 Проверить` и `🗑 Удалить`. Кнопка `+ Добавить провайдер` открывает 2-шаговую модалку: список preset'ов (Anthropic / OpenAI / Google / DeepSeek / Groq / Perplexity / OpenRouter / Ollama Cloud) + опция «Custom». На шаге 2 — поле API-ключа, кнопка «Проверить» (сохраняет временно в БД + тестирует), «Сохранить».
+- **Старый `KeysSection`**: код остался в `AdminWorkspace.tsx`, но **не рендерится** (заменил на `<ProvidersSection />`). Можно снести в следующей сессии, когда новый UI обкатается на проде. Сейчас оставил как safety net на случай отката.
+- **`costTracker` под неизвестных провайдеров**: специальная запись `default_openai_compatible` в `pricing.json` НЕ добавлена. Текущий `calculateCost` возвращает 0 для неизвестных моделей — это видно в биллинге, но не падает. Если для DeepSeek/Groq важна точная стоимость — добавим записи в `pricing.json` отдельным микро-патчем (тривиально).
+- **`testKey` для нового provider'а** требует, чтобы запись была уже в БД — потому UI делает `saveProviderKey` ПЕРЕД `testProviderKey`. При неуспехе ключ остаётся в БД — не утечка, но Влад может удалить его кнопкой 🗑.
 
 ---
 

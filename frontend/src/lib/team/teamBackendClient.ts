@@ -821,6 +821,75 @@ export async function promoteArtifactToBase(
 }
 
 // =========================================================================
+// Сессия 48: универсальный OpenAI-compatible адаптер — расширенное API ключей.
+// =========================================================================
+
+export interface ProviderKey {
+  provider: string;
+  display_name: string;
+  base_url: string | null;
+  is_openai_compatible: boolean;
+  models: string[];
+  has_key: boolean;
+  key_preview: string | null;
+  updated_at: string | null;
+}
+
+export interface ProviderPreset {
+  id: string;
+  display_name: string;
+  base_url: string | null;
+  is_openai_compatible: boolean;
+  models: string[];
+  help_url: string;
+}
+
+export async function fetchProviderKeys(): Promise<ProviderKey[]> {
+  const data = await backendFetch("/api/team/admin/keys/full", { method: "GET" });
+  return ((data ?? {}) as { keys?: ProviderKey[] }).keys ?? [];
+}
+
+export async function fetchProviderPresets(): Promise<ProviderPreset[]> {
+  const data = await backendFetch("/api/team/admin/presets", { method: "GET" });
+  return ((data ?? {}) as { presets?: ProviderPreset[] }).presets ?? [];
+}
+
+export async function testProviderKey(
+  provider: string,
+): Promise<{ success: boolean; error?: string }> {
+  const data = await backendFetch(
+    `/api/team/admin/keys/${encodeURIComponent(provider)}/test`,
+    { method: "POST" },
+  );
+  return (data ?? {}) as { success: boolean; error?: string };
+}
+
+export interface SaveProviderKeyInput {
+  provider: string;
+  key: string;
+  base_url?: string | null;
+  display_name?: string;
+  is_openai_compatible?: boolean;
+  models?: string[];
+}
+
+export async function saveProviderKey(input: SaveProviderKeyInput): Promise<void> {
+  await backendFetch("/api/team/admin/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteProviderKey(provider: string): Promise<void> {
+  await backendFetch("/api/team/admin/keys", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider }),
+  });
+}
+
+// =========================================================================
 // Сессия 44: тумблер Anthropic Batch API
 // =========================================================================
 

@@ -46,6 +46,7 @@ import {
 } from "@/lib/team/teamBackendClient";
 import { formatUsd } from "@/lib/team/format";
 import TelegramSection from "./TelegramSection";
+import ProvidersSection from "./ProvidersSection";
 
 type Provider = "anthropic" | "openai" | "google";
 
@@ -162,17 +163,9 @@ export default function AdminWorkspace() {
         }}
       />
 
-      <KeysSection
-        keys={keys}
-        error={keysError}
-        editing={editing}
-        onStartEdit={(p) => setEditing(p)}
-        onCancelEdit={() => setEditing(null)}
-        onChanged={() => {
-          setEditing(null);
-          void reloadAll();
-        }}
-      />
+      {/* Сессия 48: новый ProvidersSection поддерживает произвольных
+          провайдеров (DeepSeek, Groq, custom). Заменил KeysSection. */}
+      <ProvidersSection />
 
       <SpendingSection spending={spending} error={spendingError} />
 

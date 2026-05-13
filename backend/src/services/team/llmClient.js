@@ -95,7 +95,10 @@ export async function call({
   if (provider === "google") {
     return callGoogle({ model, systemPrompt, userPrompt, maxTokens });
   }
-  throw new LLMError(`Неизвестный провайдер: ${provider}`);
+  // Сессия 48: универсальный OpenAI-compatible путь для любого провайдера,
+  // где в team_api_keys стоит is_openai_compatible=true (DeepSeek, Groq,
+  // Perplexity, OpenRouter, Ollama Cloud, custom). base_url берётся из БД.
+  return callOpenAICompatible({ provider, model, systemPrompt, userPrompt, maxTokens });
 }
 
 // Сессия 32: обёртка над call(), которая автоматически подтягивает Web Search
@@ -638,4 +641,111 @@ export async function getBatchResults(batchId) {
     }
   }
   return out;
+}
+
+// =========================================================================
+// callOpenAICompatible (Сессия 48 этапа 2, пункт 1, этап 7)
+// =========================================================================
+// Универсальный адаптер для любого провайдера, поддерживающего OpenAI
+// Chat Completions API. Используется для DeepSeek, Groq, Perplexity,
+// OpenRouter, Ollama Cloud, и custom-провайдеров.
+//
+// Отличия от callOpenAI:
+//   1. base_url берётся из team_api_keys (а не вшит в SDK).
+//   2. Ошибки SDK маппятся в LLMError без специфики OpenAI-классов.
+//   3. cachedTokens возвращается 0 (большинство OpenAI-compatible не дают
+//      эту цифру; кому надо — расширим под конкретного провайдера).
+
+async function fetchKeyRow(provider) {
+  const { getServiceRoleClient } = await import("./teamSupabase.js");
+  const client = getServiceRoleClient();
+  const { data, error } = await client
+    .from("team_api_keys")
+    .select("key_value, base_url, is_openai_compatible, display_name")
+    .eq("provider", provider)
+    .maybeSingle();
+  if (error) {
+    throw new LLMError(
+      `Не удалось получить настройки провайдера ${provider}: ${error.message}`,
+    );
+  }
+  return data ?? null;
+}
+
+async function callOpenAICompatible({ provider, model, systemPrompt, userPrompt, maxTokens }) {
+  const row = await fetchKeyRow(provider);
+  if (!row || !row.key_value) {
+    throw new LLMError(
+      `Не задан API-ключ для провайдера ${provider}. Добавь его в Админке.`,
+    );
+  }
+  if (!row.is_openai_compatible) {
+    throw new LLMError(
+      `Провайдер ${provider} не помечен как OpenAI-compatible. Включи флаг в Админке или добавь нативный адаптер.`,
+    );
+  }
+  if (!row.base_url) {
+    throw new LLMError(
+      `У провайдера ${provider} не указан base_url. Заполни поле в Админке.`,
+    );
+  }
+
+  const client = new OpenAI({
+    apiKey: row.key_value,
+    baseURL: row.base_url,
+  });
+
+  const messages = [];
+  if (systemPrompt && systemPrompt.trim()) {
+    messages.push({ role: "system", content: systemPrompt });
+  }
+  messages.push({ role: "user", content: userPrompt || " " });
+
+  let response;
+  try {
+    response = await client.chat.completions.create({
+      model,
+      messages,
+      max_tokens: maxTokens,
+    });
+  } catch (exc) {
+    // SDK openai реиспользует свои классы ошибок и для custom-baseURL.
+    if (exc instanceof OpenAI.AuthenticationError) {
+      throw new LLMError(
+        `${row.display_name ?? provider}: ключ невалидный или отозван. Обнови в Админке.`,
+      );
+    }
+    if (exc instanceof OpenAI.NotFoundError) {
+      throw new LLMError(
+        `${row.display_name ?? provider}: модель "${model}" не найдена. Проверь id или укажи другую.`,
+      );
+    }
+    if (exc instanceof OpenAI.BadRequestError) {
+      throw new LLMError(
+        `${row.display_name ?? provider}: некорректный запрос — ${shortExcMessage(exc)}`,
+      );
+    }
+    if (exc instanceof OpenAI.RateLimitError) {
+      throw new LLMError(
+        `${row.display_name ?? provider}: превышен лимит запросов. Попробуй позже.`,
+      );
+    }
+    if (exc instanceof OpenAI.APIConnectionError) {
+      throw new LLMError(
+        `${row.display_name ?? provider}: не удалось подключиться (${shortExcMessage(exc)}). Проверь base_url и сеть.`,
+      );
+    }
+    throw new LLMError(
+      `${row.display_name ?? provider}: ${shortExcMessage(exc)}`,
+    );
+  }
+
+  const text = response.choices?.[0]?.message?.content ?? "";
+  const usage = response.usage ?? {};
+  return {
+    text,
+    inputTokens: Number(usage.prompt_tokens ?? 0),
+    outputTokens: Number(usage.completion_tokens ?? 0),
+    cachedTokens: Number(usage.prompt_tokens_details?.cached_tokens ?? 0),
+  };
 }

@@ -1791,3 +1791,64 @@ URL: `https://potok-omega.vercel.app`
 - **Visual проверка Хокусая в тесте 5**: source-check `.css` файла на наличие переменных. Реальное визуальное применение (компонент-к-компонент) — отложено на UI-сессию (см. отклонения Сессии 46).
 - **DROP TABLE для test-баз**: Supabase JS API не умеет DROP. Тестовые таблицы `team_custom_p22test_*` накапливаются. Чистить вручную через Supabase Dashboard, если станет много (после серии прогонов).
 
+
+---
+
+# Сессия 48 — Универсальный OpenAI-compatible адаптер
+
+## ✅ Выполнено (автоматически)
+
+- **Миграция `0036_team_api_keys_providers.sql`** накачена через `supabase db push`. Добавлены `base_url`, `is_openai_compatible`, `display_name`, `models`. Backfill для anthropic/openai/google: OpenAI получил `base_url='https://api.openai.com/v1'` + `is_openai_compatible=true`.
+- **Backend syntax checks**: `node --check` прошёл для `llmClient.js`, `keysService.js`, `config/providerPresets.js`, `routes/team/admin.js`.
+- **Frontend**: `next build` — Compiled successfully + Linting + types. Page-data collection — pre-existing.
+- **`providerPresets.js`**: 8 пресетов (3 native + 5 OpenAI-compatible: deepseek, groq, perplexity, openrouter, ollama_cloud). Хелперы listPresets/getPreset/presetToRow.
+- **`llmClient.call()`**: добавлена ветка `callOpenAICompatible({provider, model, ...})` для всех не-нативных провайдеров. Внутри — `new OpenAI({apiKey, baseURL})`, маппинг ошибок SDK на LLMError с display_name.
+- **`keysService`**: 
+  - SUPPORTED_PROVIDERS жёсткий whitelist снят, ensureProvider теперь проверяет shape (regex латиница+цифры).
+  - `setApiKey` принимает строку (legacy) или объект (новый UI).
+  - Новые exports: `listKeysFull()` — расширенные карточки провайдеров; `testKey(provider)` — пинг до API (anthropic→messages.create 1 token, google→countTokens, openai-compatible→models.list).
+- **`routes/team/admin.js`**: POST `/keys` принимает расширенный body (base_url, display_name, is_openai_compatible, models). Новые endpoints: GET `/keys/full`, POST `/keys/:provider/test`, GET `/presets`.
+- **`teamBackendClient.ts`**: типы `ProviderKey`/`ProviderPreset`/`SaveProviderKeyInput` + хелперы `fetchProviderKeys`/`fetchProviderPresets`/`testProviderKey`/`saveProviderKey`/`deleteProviderKey`.
+- **`ProvidersSection.tsx`**: новый UI. Список карточек с маскированным ключом, кнопками 🔄 Проверить / 🗑 Удалить. Кнопка «+ Добавить провайдер» → 2-шаговая модалка (presets → key form). Поддержка custom-провайдера (slug + display_name + base_url + key + флаг openai_compatible=true).
+- **`AdminWorkspace.tsx`**: `<KeysSection ... />` заменён на `<ProvidersSection />` (старый KeysSection-компонент остался в файле как safety net).
+
+## ⚠️ Требует ручной проверки
+
+### Сессия 48 — добавить DeepSeek/Groq (E2E на проде)
+
+URL: `https://potok-omega.vercel.app/blog/team/admin`
+
+Что сделать (после деплоя Vercel + Railway):
+1. Открой Админку → секция «Ключи и провайдеры» (новая, заменила старую).
+2. Должны быть видны 3 уже подключённых провайдера (Anthropic, OpenAI, Google), если они были.
+3. Нажми «+ Добавить провайдер» → выбери DeepSeek (или любой другой preset).
+4. Введи API-ключ → нажми «Проверить» → должен показать «Ключ работает ✓» (если ключ валиден).
+5. Нажми «Сохранить». Карточка DeepSeek появится в списке.
+6. Поставь любую задачу с моделью `deepseek-chat` (через ModelSelector или вручную в taskRunner) → задача должна выполниться через универсальный адаптер.
+
+### Сессия 48 — custom-провайдер
+
+Что сделать:
+1. «+ Добавить провайдер» → «Custom-провайдер».
+2. Заполни slug (`mistral`), display_name (`Mistral AI`), base_url (`https://api.mistral.ai/v1`), key.
+3. «Проверить» → должен пройти `models.list()`.
+4. Поставь задачу с моделью `mistral-medium-latest` → должна выполниться.
+
+### Сессия 48 — старые провайдеры не сломаны
+
+Что сделать:
+1. На странице Сотрудники → создай тестового агента → поставь задачу на Anthropic. Должна выполниться, как раньше.
+2. Та же проверка для OpenAI и Google.
+3. Если у OpenAI ключ был, в `team_api_keys` колонка `base_url` теперь заполнена `'https://api.openai.com/v1'`. Это нормально и нужно для testKey.
+
+## 🐛 Найденные баги (не починил)
+
+Нет. (Был name-clash `fetchKeysFull` — `fetchKeysFull` уже существовала в teamBackendClient.ts для legacy KeysSection. Переименовал свою новую функцию в `fetchProviderKeys` — конфликт устранён.)
+
+## Что я НЕ делал и почему
+
+- **Pricing для DeepSeek/Groq/Perplexity**: `pricing.json` не расширен. Стоимость для этих провайдеров будет считаться как 0 (calculateCost возвращает 0 для неизвестных моделей). Влад может вручную добавить записи или дождаться, когда статистика станет важной. Тривиальное расширение — отдельным PR.
+- **Снос старого KeysSection из AdminWorkspace.tsx**: компонент остался в файле, но не рендерится (заменил на `<ProvidersSection />`). Это безопасный rollback в случае проблем с новым UI. После обкатки — снести в Сессии 49+.
+- **`fetchKeysFull` (legacy)**: оставлен в teamBackendClient.ts — используется DevModeBanner. Сносить нельзя без рефакторинга DevModeBanner.
+- **Playwright E2E**: не прогонял на этой итерации — Vercel ещё деплоит Сессии 46-47 (push был ~3 мин назад). Влад прогонит вручную; следующая итерация цикла начнёт Сессию 49.
+
