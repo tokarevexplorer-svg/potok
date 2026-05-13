@@ -27,7 +27,7 @@ import {
   getServiceRoleClient,
 } from "./teamSupabase.js";
 import { downloadFile, uploadFile, listFiles } from "./teamStorage.js";
-import { call as llmCall } from "./llmClient.js";
+import { call as llmCall, sendBatchRequest } from "./llmClient.js";
 import { fetchSource } from "./contentFetcher.js";
 import { recordCall, getCostForTask, checkTaskLimit } from "./costTracker.js";
 import {
@@ -174,6 +174,15 @@ function mergeSnapshot(current, update) {
       update.comparisonGroupId !== undefined
         ? update.comparisonGroupId
         : current.comparison_group_id,
+    // Сессия 44: batch-режим. batchMode фиксируется при createTask и носится
+    // через все снапшоты. batchId выставляется при submitTaskAsBatch и не
+    // снимается даже в финале (трассируемость).
+    batchMode:
+      typeof update.batchMode === "boolean"
+        ? update.batchMode
+        : current.batch_mode ?? false,
+    batchId:
+      update.batchId !== undefined ? update.batchId : current.batch_id ?? null,
   };
 }
 
@@ -341,6 +350,10 @@ export async function createTask({
   selfReviewExtraChecks = null,
   clarificationEnabled = false,
   comparisonGroupId = null,
+  // Сессия 44: batch-режим Anthropic. Если true — задача после создания пойдёт
+  // не через worker pool, а через submitTaskAsBatch (см. runTaskInBackground)
+  // и осядет в awaiting_resource до batchPollService.
+  batchMode = false,
 }) {
   if (!TASK_HANDLERS[taskType]) {
     throw new Error(`Тип задачи не поддерживается: ${taskType}`);
@@ -436,6 +449,10 @@ export async function createTask({
     clarificationAnswers: null,
     stepState: null,
     comparisonGroupId: comparisonGroupId || null,
+    // Сессия 44: batch-режим. Запоминаем флаг, batchId появится позже —
+    // в submitTaskAsBatch (из runTaskInBackground).
+    batchMode: batchMode === true,
+    batchId: null,
   };
 
   await appendTaskSnapshot(snapshot);
@@ -566,11 +583,93 @@ export async function applyClarificationAnswers(taskId, answers) {
   enqueueTeamTask(taskId);
 }
 
+// =========================================================================
+// submitTaskAsBatch (Сессия 44) — отправляет задачу в Anthropic Batch API.
+// =========================================================================
+// Вызывается из runTaskInBackground для задач с batch_mode=true и
+// провайдером anthropic. После успешной отправки задача висит в
+// awaiting_resource до batchPollService.
+//
+// На вход берём `task.prompt` (он уже построен при createTask или после
+// applyClarificationAnswers — см. previewPrompt) — не пересобираем заново.
+// Это сознательно: для research_direct/write_text источники/research уже
+// зафиксированы в момент создания задачи, batch фиксирует именно тот
+// промпт, который мы намеревались отправить.
+async function submitTaskAsBatch(task) {
+  const prompt = task.prompt ?? {};
+  const userPrompt = String(prompt.user ?? "").trim();
+  if (!userPrompt) {
+    await appendUpdate(task.id, {
+      status: "error",
+      error: "Не удалось отправить в batch: у задачи пустой user-промпт.",
+      finishedAt: nowIso(),
+    });
+    return;
+  }
+  const cacheableBlocks =
+    prompt.cacheable_blocks ?? prompt.cacheableBlocks ?? [];
+
+  try {
+    const { batchId } = await sendBatchRequest({
+      provider: task.provider,
+      model: task.model,
+      systemPrompt: String(prompt.system ?? ""),
+      userPrompt,
+      cacheableBlocks,
+      maxTokens: 8192,
+      customId: `task_${task.id}`,
+    });
+    await appendUpdate(task.id, {
+      status: "awaiting_resource",
+      batchId,
+      startedAt: nowIso(),
+    });
+    console.log(
+      `[taskRunner] batch submitted: task=${task.id} batch=${batchId} ` +
+        `(model ${task.model}, ${userPrompt.length} chars)`,
+    );
+  } catch (err) {
+    const message = err?.message ?? String(err);
+    await appendUpdate(task.id, {
+      status: "error",
+      error: `Не удалось отправить batch: ${message}`,
+      finishedAt: nowIso(),
+    });
+  }
+}
+
 // Главный воркер задачи. Дёргается из teamWorkerPool. Не должен бросать —
 // все ошибки записывает в БД как status=error.
 export async function runTaskInBackground(taskId) {
   const task = await getTaskById(taskId);
   if (!task) return;
+
+  // Сессия 44: batch-режим Anthropic. Если задача создана с batchMode=true и
+  // провайдер anthropic — не дёргаем handler, а отправляем в batch и оставляем
+  // в awaiting_resource. Дальше batchPollService раз в 5 мин подхватит.
+  // Edit_text_fragments требует parent artifact на этапе запуска — этот
+  // случай отдельный, в batch не пускаем (мало ценности, много спецлогики).
+  if (
+    task.batch_mode === true &&
+    task.provider === "anthropic" &&
+    task.type !== "edit_text_fragments" &&
+    !task.batch_id // защита от двойной отправки при recovery
+  ) {
+    await submitTaskAsBatch(task);
+    return;
+  }
+  if (task.batch_mode === true && task.provider !== "anthropic") {
+    console.warn(
+      `[taskRunner] batch_mode=true но провайдер ${task.provider} ≠ anthropic — ` +
+        `выполняем задачу ${taskId} обычным способом без batch.`,
+    );
+  }
+  if (task.batch_mode === true && task.type === "edit_text_fragments") {
+    console.warn(
+      `[taskRunner] batch_mode=true но тип edit_text_fragments не поддерживается ` +
+        `в batch — выполняем задачу ${taskId} обычно.`,
+    );
+  }
 
   const handler = TASK_HANDLERS[task.type];
   const startedAt = nowIso();

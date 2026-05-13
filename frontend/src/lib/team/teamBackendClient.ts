@@ -247,6 +247,10 @@ export interface RunTaskParams {
   // в статусе clarifying, агент формулирует до 3 вопросов, после ответов
   // Влада переходит в running.
   clarificationEnabled?: boolean | null;
+  // Сессия 44: чекбокс «Batch-режим». Если true и провайдер anthropic —
+  // задача отправляется в Anthropic Batch API (до 24ч, 50% скидка) и
+  // переводится в awaiting_resource до batchPollService.
+  batchMode?: boolean | null;
 }
 
 // Сессия 31: вопрос агента + ответ Влада.
@@ -687,6 +691,32 @@ export async function fetchAutonomyStatus(): Promise<AutonomyStatus> {
 
 export async function setAutonomyEnabled(enabled: boolean): Promise<void> {
   await backendFetch("/api/team/admin/autonomy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+// =========================================================================
+// Сессия 44: тумблер Anthropic Batch API
+// =========================================================================
+
+export interface BatchModeStatus {
+  enabled: boolean;
+  spent_30d_usd: number;
+}
+
+export async function fetchBatchModeStatus(): Promise<BatchModeStatus> {
+  const data = await backendFetch("/api/team/admin/batch-mode", { method: "GET" });
+  const obj = (data ?? {}) as Partial<BatchModeStatus>;
+  return {
+    enabled: !!obj.enabled,
+    spent_30d_usd: typeof obj.spent_30d_usd === "number" ? obj.spent_30d_usd : 0,
+  };
+}
+
+export async function setBatchModeEnabled(enabled: boolean): Promise<void> {
+  await backendFetch("/api/team/admin/batch-mode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ enabled }),

@@ -468,3 +468,174 @@ async function callGoogle({ model, systemPrompt, userPrompt, maxTokens }) {
     cachedTokens: Number(cachedTokens),
   };
 }
+
+// =========================================================================
+// Anthropic Batch API (Сессия 44, пункт 22 этапа 6)
+// =========================================================================
+// Batch API: до 24 часов ожидания, 50% скидка на токены. Идеален для
+// длинных reflection-задач, write_text черновиков, исследований без срочности.
+//
+// Поток: submitBatch → batch_id → batchPollService раз в 5 мин →
+// retrieveBatch (status='ended') → getBatchResults → артефакт + биллинг.
+//
+// Поддерживается ТОЛЬКО для anthropic. Для других провайдеров вернём ошибку
+// — taskRunner должен сделать fallback на обычный `call()` с warning.
+
+// Готовит body для batches.create({ requests: [...] }) из нашей доменной
+// формы (provider/model/system/user/cacheable). Возвращает «one-shot»
+// batch с единственным запросом — у нас по одной задаче на batch.
+function buildAnthropicBatchRequest({ model, systemPrompt, userPrompt, cacheableBlocks, maxTokens }) {
+  const systemBlocks = [];
+  for (const block of cacheableBlocks || []) {
+    if (!block || !block.trim()) continue;
+    systemBlocks.push({
+      type: "text",
+      text: block,
+      cache_control: { type: "ephemeral" },
+    });
+  }
+  if (systemPrompt && systemPrompt.trim()) {
+    systemBlocks.push({ type: "text", text: systemPrompt });
+  }
+  const params = {
+    model,
+    max_tokens: maxTokens,
+    messages: [{ role: "user", content: userPrompt || "ping" }],
+  };
+  if (systemBlocks.length > 0) {
+    params.system = systemBlocks;
+  }
+  return params;
+}
+
+// Отправить задачу в batch. Возвращает { batchId, status, createdAt }.
+// Если provider != 'anthropic' — бросает LLMError (taskRunner должен решить,
+// fallback на обычный call() или нет).
+export async function sendBatchRequest({
+  provider,
+  model,
+  systemPrompt = "",
+  userPrompt = "",
+  cacheableBlocks = [],
+  maxTokens = 4096,
+  customId = "task_main",
+}) {
+  if (provider !== "anthropic") {
+    throw new LLMError(
+      `Batch-режим поддерживается только для Anthropic. Получили ${provider}.`,
+    );
+  }
+  const apiKey = await ensureKey("anthropic");
+  const client = new Anthropic({ apiKey });
+
+  const params = buildAnthropicBatchRequest({
+    model,
+    systemPrompt,
+    userPrompt,
+    cacheableBlocks,
+    maxTokens,
+  });
+
+  let batch;
+  try {
+    batch = await client.messages.batches.create({
+      requests: [{ custom_id: customId, params }],
+    });
+  } catch (exc) {
+    if (exc instanceof Anthropic.AuthenticationError) {
+      throw new LLMError(
+        "Anthropic Batch API: ключ невалидный. Обнови его в Админке.",
+      );
+    }
+    if (exc instanceof Anthropic.NotFoundError) {
+      throw new LLMError(
+        "Anthropic Batch API: эндпоинт не найден. Проверь, что аккаунт включён в beta-доступ.",
+      );
+    }
+    throw new LLMError(`Anthropic Batch API: ${shortExcMessage(exc)}`);
+  }
+
+  return {
+    batchId: batch.id,
+    status: batch.processing_status ?? "in_progress",
+    createdAt: batch.created_at ?? null,
+  };
+}
+
+// Получить статус batch. Возвращает { status, counts, endedAt }.
+// status: 'in_progress' | 'canceling' | 'ended'.
+export async function checkBatchStatus(batchId) {
+  if (!batchId) throw new LLMError("checkBatchStatus: batchId обязателен.");
+  const apiKey = await ensureKey("anthropic");
+  const client = new Anthropic({ apiKey });
+  let batch;
+  try {
+    batch = await client.messages.batches.retrieve(batchId);
+  } catch (exc) {
+    if (exc instanceof Anthropic.NotFoundError) {
+      throw new LLMError(`Batch ${batchId} не найден у Anthropic.`);
+    }
+    throw new LLMError(`Anthropic Batch retrieve: ${shortExcMessage(exc)}`);
+  }
+  return {
+    status: batch.processing_status ?? "in_progress",
+    counts: batch.request_counts ?? null,
+    endedAt: batch.ended_at ?? null,
+  };
+}
+
+// Получить результаты завершённого batch. Возвращает массив с одним
+// элементом (у нас один request на batch) в формате
+// { customId, ok, text?, inputTokens?, outputTokens?, cachedTokens?, errorType?, errorMessage? }.
+export async function getBatchResults(batchId) {
+  if (!batchId) throw new LLMError("getBatchResults: batchId обязателен.");
+  const apiKey = await ensureKey("anthropic");
+  const client = new Anthropic({ apiKey });
+
+  let stream;
+  try {
+    stream = await client.messages.batches.results(batchId);
+  } catch (exc) {
+    throw new LLMError(`Anthropic Batch results: ${shortExcMessage(exc)}`);
+  }
+
+  const out = [];
+  for await (const entry of stream) {
+    const customId = entry?.custom_id ?? null;
+    const result = entry?.result ?? {};
+    const type = result?.type ?? "unknown";
+
+    if (type === "succeeded") {
+      const message = result.message ?? {};
+      let text = "";
+      for (const block of message.content ?? []) {
+        if (block?.type === "text" && typeof block.text === "string") {
+          text += block.text;
+        }
+      }
+      const usage = message.usage ?? {};
+      const inputTokens = Number(usage.input_tokens ?? 0);
+      const outputTokens = Number(usage.output_tokens ?? 0);
+      const cacheRead = Number(usage.cache_read_input_tokens ?? 0);
+      const cacheCreation = Number(usage.cache_creation_input_tokens ?? 0);
+      out.push({
+        customId,
+        ok: true,
+        text,
+        inputTokens: inputTokens + cacheRead + cacheCreation,
+        outputTokens,
+        cachedTokens: cacheRead,
+      });
+    } else {
+      // errored | canceled | expired
+      const err = result.error ?? {};
+      out.push({
+        customId,
+        ok: false,
+        errorType: type,
+        errorMessage: err?.message ?? `Batch result type=${type}`,
+      });
+    }
+  }
+  return out;
+}

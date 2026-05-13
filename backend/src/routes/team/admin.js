@@ -517,4 +517,67 @@ router.post("/autonomy", async (req, res) => {
   }
 });
 
+// =========================================================================
+// GET /api/team/admin/batch-mode
+// Сессия 44: статус тумблера Anthropic Batch + сводка расходов по
+// purpose='batch' за 30 дней. UI Админки показывает обе цифры.
+// =========================================================================
+router.get("/batch-mode", async (_req, res) => {
+  try {
+    const value = await getSetting("anthropic_batch_enabled");
+    let enabled = false;
+    if (typeof value === "boolean") enabled = value;
+    else if (typeof value === "string") enabled = value === "true";
+    else if (value && typeof value === "object" && typeof value.value === "boolean") {
+      enabled = value.value;
+    }
+
+    const client = (
+      await import("../../services/team/teamSupabase.js")
+    ).getServiceRoleClient();
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await client
+      .from("team_api_calls")
+      .select("cost_usd")
+      .gte("timestamp", cutoff)
+      .eq("purpose", "batch");
+    let spent = 0;
+    if (!error) {
+      for (const row of data ?? []) {
+        const v = Number(row?.cost_usd ?? 0);
+        if (Number.isFinite(v)) spent += v;
+      }
+    }
+    return res.json({
+      enabled,
+      spent_30d_usd: Math.round(spent * 10_000) / 10_000,
+    });
+  } catch (err) {
+    console.error("[team] admin batch-mode GET failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось прочитать статус batch-режима" });
+  }
+});
+
+// =========================================================================
+// POST /api/team/admin/batch-mode
+// Body: { enabled: boolean }
+// =========================================================================
+router.post("/batch-mode", async (req, res) => {
+  const body = req.body ?? {};
+  if (typeof body.enabled !== "boolean") {
+    return res.status(400).json({ error: "enabled должен быть boolean" });
+  }
+  try {
+    await setSetting("anthropic_batch_enabled", body.enabled);
+    return res.json({ enabled: body.enabled });
+  } catch (err) {
+    console.error("[team] admin batch-mode POST failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось сохранить настройку batch-режима" });
+  }
+});
+
 export default router;

@@ -93,6 +93,12 @@ export async function appendTaskSnapshot(snapshot) {
     clarification_questions: snapshot.clarificationQuestions ?? null,
     clarification_answers: snapshot.clarificationAnswers ?? null,
     comparison_group_id: snapshot.comparisonGroupId ?? null,
+    // Сессия 44: batch-режим Anthropic (миграция 0033). batchMode фиксируется
+    // при createTask и переносится между снапшотами. batchId появляется в
+    // момент submitTaskAsBatch и снимается при completion (или error).
+    batch_mode:
+      typeof snapshot.batchMode === "boolean" ? snapshot.batchMode : null,
+    batch_id: snapshot.batchId ?? null,
   };
 
   const { data, error } = await client

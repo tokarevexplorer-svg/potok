@@ -7,6 +7,7 @@ import ModelSelector from "./ModelSelector";
 import {
   BackendApiError,
   createProject,
+  fetchBatchModeStatus,
   fetchProjects,
   fetchTaskTemplateDefaults,
   previewPrompt,
@@ -93,6 +94,11 @@ export default function TaskRunnerModal({
   // умолчанию для всех задач засорило бы UX). Бэкенд при таком флаге
   // перед запуском задачи запросит у агента до 3 уточняющих вопросов.
   const [clarification, setClarification] = useState(false);
+  // Сессия 44: «Batch-режим Anthropic» — рабочий чекбокс. Виден только если
+  // в Админке включён `anthropic_batch_enabled` (fetchBatchModeStatus). Сам
+  // флаг по умолчанию false.
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchAvailable, setBatchAvailable] = useState(false);
 
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptPreview, setPromptPreview] = useState<PreviewPromptResult | null>(null);
@@ -127,6 +133,9 @@ export default function TaskRunnerModal({
       setSelfReview(false);
       setSelfReviewExtraChecks("");
       setClarification(false);
+      setBatchMode(false);
+      // batchAvailable не сбрасываем — он зависит от глобальной настройки,
+      // эффект ниже подтянет свежее значение.
       setPromptOpen(false);
       setPromptPreview(null);
       setPromptError(null);
@@ -190,6 +199,15 @@ export default function TaskRunnerModal({
       })
       .catch(() => {
         // Не критично — флажок останется выключенным.
+      });
+    // Сессия 44: проверяем глобальный тумблер batch-режима. Если выключен —
+    // чекбокс «Batch-режим» в форме не показываем.
+    fetchBatchModeStatus()
+      .then((s) => {
+        if (!cancelled) setBatchAvailable(!!s.enabled);
+      })
+      .catch(() => {
+        if (!cancelled) setBatchAvailable(false);
       });
     return () => {
       cancelled = true;
@@ -300,6 +318,9 @@ export default function TaskRunnerModal({
         // Сессия 31: уточнения от агента. Если true — бэкенд переведёт
         // задачу в clarifying → awaiting_input и UI покажет форму ответов.
         clarificationEnabled: clarification,
+        // Сессия 44: batch-режим Anthropic. Принимается только когда
+        // batchAvailable=true (Админка) и пользователь явно поставил галку.
+        batchMode: batchAvailable && batchMode,
       });
       onCreated(taskId);
     } catch (err) {
@@ -507,6 +528,28 @@ export default function TaskRunnerModal({
               </span>
             </span>
           </label>
+
+          {/* Сессия 44: чекбокс «Batch-режим Anthropic». Виден только если
+              Админка включила anthropic_batch_enabled. До 24ч ожидания,
+              50% скидка. Задача переходит в awaiting_resource, batchPollService
+              сам подхватит результат. */}
+          {batchAvailable && (
+            <label className="flex items-center gap-2 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={batchMode}
+                onChange={(e) => setBatchMode(e.target.checked)}
+                className="accent-accent"
+              />
+              <span>
+                ⏳ Batch-режим (Anthropic){" "}
+                <span className="text-xs italic text-ink-faint">
+                  (до 24ч ожидания, 50% скидка на токены — для длинных задач
+                  без срочности)
+                </span>
+              </span>
+            </label>
+          )}
 
           {/* Сессия 36: кнопка прикрепления файла. После успешной загрузки
               путь в Storage дописывается в user_input как блок «[Файл: …]» —

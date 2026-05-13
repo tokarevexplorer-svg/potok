@@ -140,6 +140,7 @@ router.post("/run", async (req, res) => {
     selfReviewEnabled,
     selfReviewExtraChecks,
     clarificationEnabled,
+    batchMode,
   } = req.body ?? {};
 
   if (typeof taskType !== "string" || !TASK_HANDLERS[taskType]) {
@@ -289,6 +290,17 @@ router.post("/run", async (req, res) => {
         .json({ error: "clarificationEnabled должен быть boolean или null." });
     }
 
+    // Сессия 44: batchMode — boolean, дефолт false. Validate в createTask
+    // позже (там же decide, поддерживается ли провайдер).
+    let normalizedBatchMode = false;
+    if (typeof batchMode === "boolean") {
+      normalizedBatchMode = batchMode;
+    } else if (batchMode !== undefined && batchMode !== null) {
+      return res
+        .status(400)
+        .json({ error: "batchMode должен быть boolean или null." });
+    }
+
     const taskId = await createTask({
       taskType,
       params: finalParams,
@@ -301,6 +313,7 @@ router.post("/run", async (req, res) => {
       selfReviewEnabled: normalizedSelfReview,
       selfReviewExtraChecks: normalizedExtraChecks,
       clarificationEnabled: normalizedClarification,
+      batchMode: normalizedBatchMode,
     });
     return res.status(202).json({ taskId });
   } catch (err) {

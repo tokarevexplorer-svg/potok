@@ -8,6 +8,7 @@ import { runTaskInBackground } from "./services/team/taskRunner.js";
 import { recoverUnfinishedTeamTasks } from "./services/team/teamRecoveryService.js";
 import { startAutonomyCron } from "./cron/autonomyCron.js";
 import { startTelegramCron } from "./cron/telegramCron.js";
+import { startBatchCron } from "./cron/batchCron.js";
 
 // Настраиваем пул до старта сервера: процессор и конкурентность.
 configureWorkerPool({
@@ -44,4 +45,8 @@ app.listen(env.port, () => {
   // Сессия 39: cron Telegram-очереди. Сам проверит наличие
   // TELEGRAM_SYSTEM_BOT_TOKEN и переменных, иначе не запустится.
   startTelegramCron();
+
+  // Сессия 44: cron Anthropic Batch poll. Тикает раз в 5 мин, внутри
+  // проверяет anthropic_batch_enabled — без флага молчит.
+  startBatchCron();
 });

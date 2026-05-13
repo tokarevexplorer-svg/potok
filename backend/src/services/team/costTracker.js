@@ -152,18 +152,29 @@ export async function recordCall({
   // tavily/perplexity) calculateCost не знает ставок — даём caller'у
   // возможность передать готовую сумму.
   costOverrideUsd = null,
+  // Сессия 44: Anthropic Batch API даёт 50% скидку. Передаётся 0.5 из
+  // batchPollService — pricing считается обычным calculateCost, потом
+  // умножается на 0.5. Если задан costOverrideUsd, multiplier игнорируется.
+  costMultiplier = 1,
 }) {
-  const cost =
-    typeof costOverrideUsd === "number" && Number.isFinite(costOverrideUsd)
-      ? costOverrideUsd
-      : await calculateCost({
-          provider,
-          model,
-          inputTokens,
-          outputTokens,
-          cachedTokens,
-          audioMinutes,
-        });
+  let cost;
+  if (typeof costOverrideUsd === "number" && Number.isFinite(costOverrideUsd)) {
+    cost = costOverrideUsd;
+  } else {
+    const raw = await calculateCost({
+      provider,
+      model,
+      inputTokens,
+      outputTokens,
+      cachedTokens,
+      audioMinutes,
+    });
+    const mult =
+      Number.isFinite(costMultiplier) && costMultiplier > 0
+        ? costMultiplier
+        : 1;
+    cost = Number(raw) * mult;
+  }
 
   return await recordApiCall({
     provider,

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import {
   type AutonomyStatus,
+  type BatchModeStatus,
   type DevModeHours,
   type DevModeStatus,
   type HardLimits,
@@ -26,6 +27,7 @@ import {
   deleteApiKey,
   fetchAlertThreshold,
   fetchAutonomyStatus,
+  fetchBatchModeStatus,
   fetchDevMode,
   fetchHardLimits,
   fetchKeysFull,
@@ -38,6 +40,7 @@ import {
   setAlertThreshold,
   setApiKey,
   setAutonomyEnabled,
+  setBatchModeEnabled,
   setDevMode,
   updateTool,
 } from "@/lib/team/teamBackendClient";
@@ -197,6 +200,8 @@ export default function AdminWorkspace() {
       <TelegramSection />
 
       <AutonomySection />
+
+      <BatchModeSection />
 
       <DevModeSection
         devMode={devMode}
@@ -1349,6 +1354,115 @@ function AutonomySection() {
                 <p className="text-xs text-ink-muted">
                   Расходы на автономность за 30 дней:{" "}
                   {formatUsd(status?.spent_30d_usd ?? 0)}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void toggle()}
+              disabled={saving}
+              className={
+                "focus-ring inline-flex h-10 items-center rounded-xl px-4 text-sm font-semibold transition disabled:opacity-50 " +
+                (status?.enabled
+                  ? "border border-line bg-surface text-ink-muted hover:border-line-strong hover:text-ink"
+                  : "bg-accent text-surface shadow-card hover:bg-accent-hover")
+              }
+            >
+              {saving ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : status?.enabled ? (
+                "Выключить"
+              ) : (
+                "Включить"
+              )}
+            </button>
+          </div>
+          {error && (
+            <p className="mt-3 rounded-lg bg-accent-soft px-3 py-2 text-sm text-accent">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// =========================================================================
+// Сессия 44: тумблер Anthropic Batch API (50% скидка, до 24ч).
+// =========================================================================
+function BatchModeSection() {
+  const [status, setStatus] = useState<BatchModeStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetchBatchModeStatus()
+      .then((data) => {
+        if (!cancelled) {
+          setStatus(data);
+          setLoading(false);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function toggle() {
+    if (!status || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await setBatchModeEnabled(!status.enabled);
+      const fresh = await fetchBatchModeStatus();
+      setStatus(fresh);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section>
+      <SectionHeader
+        title="Batch-режим Anthropic"
+        description="Anthropic Batch API: до 24 часов ожидания, 50% скидка на токены. Подходит для долгих задач без срочности (длинные драфты, исследования). Когда включено — в форме постановки задачи появится галочка «Batch-режим» для агентов на anthropic-провайдере."
+      />
+      {loading ? (
+        <div className="inline-flex items-center gap-2 text-sm text-ink-muted">
+          <Loader2 size={14} className="animate-spin" /> Загружаем настройку…
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-line bg-elevated p-5 shadow-card">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span
+                className={
+                  "inline-flex h-10 w-10 items-center justify-center rounded-xl " +
+                  (status?.enabled ? "bg-accent text-surface" : "bg-canvas text-ink-muted")
+                }
+              >
+                <Sparkles size={18} />
+              </span>
+              <div>
+                <p className="font-display text-base font-semibold text-ink">
+                  {status?.enabled ? "Включено" : "Выключено"}
+                </p>
+                <p className="text-xs text-ink-muted">
+                  Расходы на batch-режим за 30 дней:{" "}
+                  {formatUsd(status?.spent_30d_usd ?? 0)} (со скидкой 50%)
                 </p>
               </div>
             </div>
