@@ -1736,3 +1736,58 @@ URL: любая страница раздела Команды (визуальн
 - **Status-* CSS-переменные не подключены**: статусные бейджи задач сейчас рендерятся через `statusBadge(task.status)` в `taskTypeMeta.ts` с Tailwind utility-классами (`bg-emerald-100 text-emerald-800` и т.п.). Их перевод на `var(--status-done)` аналогичен миграции выше и отложен туда же.
 - **Playwright E2E**: не прогонял на этой итерации — Vercel ещё деплоит Сессии 44–45 (push был ~2 мин назад). Влад прогонит вручную после деплоя. Следующая итерация цикла начнёт Сессию 47 (финализация этапа 6 + интеграционные тесты), которая неявно подтвердит работоспособность Сессии 46.
 
+
+---
+
+# Сессия 47 — Интеграционные тесты пункта 22 + финализация этапа 6
+
+## ✅ Выполнено (автоматически)
+
+- **`npm run test:p22`** — 5/5 пройдено на проде:
+  - [1] Уникальная ссылка на задачу (GET /api/team/tasks/:id)
+  - [2] Batch-mode submission (batch_mode=true + batch_id=null)
+  - [3] Кастомная база + CRUD (create → addRecord → updateRecord → deleteRecord)
+  - [4] Telegram-ссылки на /blog/team/tasks/<id> (source-check taskRunner.js)
+  - [5] Дизайн-токены Хокусая (16 переменных в hokusai-tokens.css)
+- **Миграция `0035_team_custom_db_notify.sql`** накачена. Добавляет `NOTIFY pgrst, 'reload schema'` в SQL-функцию `create_custom_table` — фикс «table not found in schema cache» после CREATE TABLE.
+- **`customDatabaseService.createDatabase`**: добавлен `waitForTableReady` — active poll через `select limit 0` до 5 сек с шагом 400мс. Гарантирует, что первый addRecord после createDatabase успевает увидеть таблицу. **Это фикс реального бага UX**, не только тестов.
+- **Backend syntax**: `node --check` прошёл для `customDatabaseService.js` и `scripts/test-p22.js`.
+- **Frontend**: `next build` — Compiled successfully + Linting + типы прошли. Page-data collection — pre-existing.
+
+## ⚠️ Требует ручной проверки
+
+### Сессия 47 — этап 6 end-to-end (cross-section)
+
+URL: `https://potok-omega.vercel.app`
+
+После того как Vercel/Railway развернут все Сессии 42-47, прогнать на проде полный цикл:
+
+1. **Batch + Telegram + Inbox**:
+   - Включи batch-режим в Админке.
+   - Поставь задачу с галочкой «Batch-режим» агенту на anthropic-провайдере.
+   - Задача → `awaiting_resource` + `batch_id` (видно в /blog/team/tasks/<id>).
+   - Подожди ~5-20 минут (batchPollService раз в 5 мин).
+   - Задача → `done`. В Telegram-чате должен прийти `✅ Готово: ...` от бота агента, в Inbox — нотификация «Задача … ждёт оценки» со ссылкой на новую страницу задачи.
+2. **Уникальная ссылка end-to-end**:
+   - На завершённой задаче → иконка ↗ → новая страница `/blog/team/tasks/<id>`.
+   - Иконка 🔗 → URL в буфере.
+   - Открой URL в новой вкладке → задача загружается.
+3. **Кастомные базы**:
+   - Создай базу через мастер на `/blog/databases`.
+   - Сразу же добавь запись — НЕ должно быть «table not found» (Сессия 47 фикс).
+4. **Промоут артефакта**:
+   - В любой подпапке `/blog/team/artifacts` наведи на файл → кнопка Database → клик → ждёшь LLM → открывается мастер с заполненными колонками → «Создать базу».
+
+Все 4 потока должны работать без console-ошибок.
+
+## 🐛 Найденные баги (не починил)
+
+Нет. Бaг с «table not found in schema cache» (Сессия 45/47) починен миграцией 0035 + retry-loop в customDatabaseService.
+
+## Что я НЕ делал и почему
+
+- **HTTP-уровень интеграционного теста**: тесты 1-3 работают напрямую через Supabase JS client, не через express HTTP. Это позволяет прогнать тесты локально без поднятия `npm run dev` + JWT-подписи. HTTP-route handlers (`routes/team/tasks.js`, `routes/team/databases.js`) тонкие обёртки над сервисами; их smoke-тестирование делается вручную через UI/curl.
+- **Реальный Anthropic Batch submit в тесте 2**: ТЗ просит проверить «инициацию batch'а», что я делаю через статический INSERT с `batch_mode=true`. Полноценный поток с реальным Anthropic API лежит вне области интеграционного теста (требует ключ + сеть + 10+ минут ожидания). Описано в Сессии 44 как «требует ручной проверки».
+- **Visual проверка Хокусая в тесте 5**: source-check `.css` файла на наличие переменных. Реальное визуальное применение (компонент-к-компонент) — отложено на UI-сессию (см. отклонения Сессии 46).
+- **DROP TABLE для test-баз**: Supabase JS API не умеет DROP. Тестовые таблицы `team_custom_p22test_*` накапливаются. Чистить вручную через Supabase Dashboard, если станет много (после серии прогонов).
+

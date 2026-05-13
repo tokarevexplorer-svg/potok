@@ -21,7 +21,8 @@
     "seed:preproduction-templates": "node scripts/seed-preproduction-templates.js",
     "test:p17": "node scripts/test-p17-integration.js",
     "test:pipeline": "node scripts/test-pipeline-e2e.js",
-    "test:telegram": "node scripts/test-telegram.js"
+    "test:telegram": "node scripts/test-telegram.js",
+    "test:p22": "node scripts/test-p22.js"
   },
   "engines": {
     "node": ">=20"

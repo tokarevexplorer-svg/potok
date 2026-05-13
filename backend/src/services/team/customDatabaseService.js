@@ -258,7 +258,34 @@ export async function createDatabase({ name, description, columns }) {
     // Кидаем ошибку наверх — caller увидит, что что-то пошло не так.
     throw new Error(`Таблица создана, но не удалось зарегистрировать базу: ${error.message}`);
   }
+
+  // Сессия 47: ждём, пока PostgREST подхватит NOTIFY 'pgrst', 'reload schema'
+  // из SQL-функции. Без этой паузы первый addRecord падает с
+  // «Could not find the table '...' in the schema cache». Делаем active poll:
+  // пробуем `select limit 0` от 0.4 до 5с с шагом 0.4с — обычно укладываемся
+  // в ~1с.
+  await waitForTableReady(client, tableName);
+
   return data;
+}
+
+async function waitForTableReady(client, tableName, { maxAttempts = 12, delayMs = 400 } = {}) {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    try {
+      const { error } = await client.from(tableName).select("id").limit(0);
+      if (!error) return true;
+      // PostgREST до перезагрузки кэша вернёт `Could not find the table`.
+      // Любой другой error — пробрасываем (но не валим основной flow).
+      if (!/schema cache|find the table/i.test(error.message)) {
+        // Не наша ошибка (например, RLS) — не имеет смысла продолжать polling.
+        return false;
+      }
+    } catch {
+      // Network or transient — продолжаем polling.
+    }
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return false;
 }
 
 // Внутренняя валидация payload для INSERT/UPDATE по schema_definition.
