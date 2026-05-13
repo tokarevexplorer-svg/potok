@@ -947,6 +947,45 @@ export async function fetchBillingSummary(
 }
 
 // =========================================================================
+// Сессия 50: мониторинг NotebookLM.
+// =========================================================================
+
+export interface NotebookLMStatus {
+  status: "green" | "yellow" | "red" | "unknown";
+  age_ms?: number;
+  lastSeen?: string;
+  workerStatus?: string;
+  version?: string | null;
+  lastTask?: { id: string; name: string } | null;
+  message?: string;
+}
+
+export async function fetchNotebookLMStatus(): Promise<NotebookLMStatus> {
+  const data = await backendFetch("/api/team/admin/notebooklm/status", { method: "GET" });
+  return (data ?? { status: "unknown" }) as NotebookLMStatus;
+}
+
+export async function queueNotebookLMTest(): Promise<{ queued: boolean; taskId: string | null }> {
+  const data = await backendFetch("/api/team/admin/notebooklm/test", { method: "POST" });
+  return (data ?? {}) as { queued: boolean; taskId: string | null };
+}
+
+export interface NotebookLMTestResult {
+  completed: boolean;
+  status?: string;
+  result?: unknown;
+  error?: string;
+}
+
+export async function fetchNotebookLMTestResult(taskId: string): Promise<NotebookLMTestResult> {
+  const data = await backendFetch(
+    `/api/team/admin/notebooklm/test/${encodeURIComponent(taskId)}`,
+    { method: "GET" },
+  );
+  return (data ?? {}) as NotebookLMTestResult;
+}
+
+// =========================================================================
 // Сессия 44: тумблер Anthropic Batch API
 // =========================================================================
 

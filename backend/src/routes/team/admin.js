@@ -19,6 +19,11 @@ import {
   getSystemSpentThisMonth,
 } from "../../services/team/systemLLMService.js";
 import {
+  getStatus as getNotebookLMStatus,
+  queueTestTask as queueNotebookLMTest,
+  getTestResult as getNotebookLMTestResult,
+} from "../../services/team/notebookLMMonitorService.js";
+import {
   getTotalSpending,
   getAlertThreshold,
   getDailySpentUsd,
@@ -791,5 +796,47 @@ function buildBillingSummary(rows) {
       .sort((a, b) => (a.date < b.date ? -1 : 1)),
   };
 }
+
+// =========================================================================
+// NotebookLM heartbeat (Сессия 50)
+// =========================================================================
+
+// GET /api/team/admin/notebooklm/status
+router.get("/notebooklm/status", async (_req, res) => {
+  try {
+    const status = await getNotebookLMStatus();
+    return res.json(status);
+  } catch (err) {
+    console.error("[team] notebooklm/status failed:", err);
+    return res.status(500).json({ error: err.message ?? "Не удалось прочитать статус" });
+  }
+});
+
+// POST /api/team/admin/notebooklm/test — ставит фиктивную задачу в очередь.
+router.post("/notebooklm/test", async (_req, res) => {
+  try {
+    const result = await queueNotebookLMTest();
+    return res.json(result);
+  } catch (err) {
+    console.error("[team] notebooklm/test failed:", err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось поставить тестовую задачу" });
+  }
+});
+
+// GET /api/team/admin/notebooklm/test/:taskId — статус тестовой задачи.
+router.get("/notebooklm/test/:taskId", async (req, res) => {
+  const taskId = req.params.taskId;
+  try {
+    const result = await getNotebookLMTestResult(taskId);
+    return res.json(result);
+  } catch (err) {
+    console.error(`[team] notebooklm/test/${taskId} failed:`, err);
+    return res
+      .status(500)
+      .json({ error: err.message ?? "Не удалось получить результат теста" });
+  }
+});
 
 export default router;

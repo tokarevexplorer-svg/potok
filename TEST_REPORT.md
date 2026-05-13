@@ -1918,3 +1918,71 @@ URL: тот же блок «Системная LLM».
 - **Кнопка «Обновить курс ₽»**: ENV-переменная `usd_to_rub_rate` в team_settings не используется ни одним компонентом UI. Добавится при наличии реального запроса от Влада.
 - **Playwright E2E**: не прогонял — Vercel ещё деплоит Сессию 48. Влад прогонит руками; следующая итерация цикла начнёт Сессию 50.
 
+
+---
+
+# Сессия 50 — NotebookLM heartbeat + финализация Админки
+
+## ✅ Выполнено (автоматически)
+
+- **Миграция `0038_team_notebooklm.sql`** накачена через `supabase db push`. Создаёт `team_notebooklm_heartbeat` (id SERIAL, status, version, last_task_id/name, created_at + index DESC) и `team_notebooklm_queue` (UUID id, type, payload JSONB, status CHECK, result/error, timestamps + partial index по status='queued'|'running').
+- **`notebookLMMonitorService.js`** — exports `getStatus` / `queueTestTask` / `getTestResult`.
+  - `getStatus`: читает последний heartbeat, маппит age на green (<1мин) / yellow (1–5мин) / red (>5мин) / unknown (нет данных).
+  - `queueTestTask`: INSERT row в очередь с type='health_check'. Возвращает taskId.
+  - `getTestResult(taskId)`: SELECT по id, маппит статус queue в `{completed, status, result/error}`.
+- **`routes/team/admin.js`** — три новых эндпоинта под `/api/team/admin/notebooklm/{status,test,test/:taskId}`.
+- **Backend syntax**: `node --check` прошёл для `notebookLMMonitorService.js` и `routes/team/admin.js`.
+- **`teamBackendClient.ts`** — типы `NotebookLMStatus` / `NotebookLMTestResult` + функции `fetchNotebookLMStatus` / `queueNotebookLMTest` / `fetchNotebookLMTestResult`.
+- **`NotebookLMSection.tsx`** — UI блок: индикатор (Activity-icon + цветной dot, 4 состояния), описание текущего отклика и версии воркера, имя последней задачи (если есть), кнопка «Прогнать тест» с polling каждые 3 сек (max 30 сек). Auto-refresh статуса каждые 30 сек.
+- **`AdminWorkspace.tsx`** — `<NotebookLMSection />` смонтирован между `<SpendingSection />` и `<AlertSection />`.
+- **Frontend `next build`** — Compiled successfully + Linting + types прошли.
+
+## ⚠️ Требует ручной проверки
+
+### Сессия 50 — индикатор 🟢/🟡/🔴 без реального воркера
+
+URL: `https://potok-omega.vercel.app/blog/team/admin`
+
+Что сделать (после деплоя):
+1. Открой Админку → новый блок «NotebookLM» (между Расходами и алертами).
+2. В пустой БД индикатор должен показать ⊘ «Нет данных» (никто не отправлял heartbeat).
+3. Через Supabase Dashboard → SQL Editor:
+   ```sql
+   INSERT INTO team_notebooklm_heartbeat (status, version)
+   VALUES ('alive', '0.1.0');
+   ```
+4. Подожди 30 сек (auto-refresh) или обнови страницу → индикатор → 🟢 «Онлайн», «Последний отклик: N сек назад».
+5. Подожди 1+ минуту → 🟡.
+6. Подожди 5+ минут → 🔴.
+
+### Сессия 50 — кнопка «Прогнать тест» без воркера
+
+Что сделать:
+1. Нажми «Прогнать тест» в блоке NotebookLM.
+2. В Supabase Dashboard → `team_notebooklm_queue` → новая запись со `status='queued'`.
+3. В UI должно появиться «⏳ Ставим задачу…», потом «⏳ Жду воркера… (3 сек)», далее каждые 3 секунды.
+4. Через 30 секунд (10 попыток) → «⏳ Таймаут — воркер не ответил за 30 сек». Это ожидаемо без реального воркера.
+5. Полная интеграция «нажми тест → воркер ответил → ✓» возможна только когда локальный воркер запущен и забирает задачи из очереди.
+
+### Сессия 50 — реальный воркер (заглушка для теста)
+
+Чтобы проверить полный цикл локально без настоящего воркера:
+1. В терминале вручную обнови очередь после нажатия «Прогнать тест»:
+   ```sql
+   UPDATE team_notebooklm_queue
+   SET status='done', result='{"ok": true}'::jsonb, completed_at=now()
+   WHERE status='queued' ORDER BY created_at DESC LIMIT 1;
+   ```
+2. UI должен показать «✓ Тест пройден — воркер ответил.»
+
+## 🐛 Найденные баги (не починил)
+
+Нет.
+
+## Что я НЕ делал и почему
+
+- **Реальный NotebookLM-воркер**: написание worker.py / worker.js на Влада-машине — отдельная задача (этап 5, пункт 17). Сессия 50 только готовит backend-инфраструктуру и UI монитор; настоящий воркер пишется руками с привязкой к окружению Влада.
+- **Конкретные heartbeat-команды от воркера**: какие именно поля воркер шлёт (помимо status/version/last_task) — определяется в момент написания воркера. Сейчас shape таблицы достаточен для типовых сценариев.
+- **Полная финализация компоновки Админки** (по ТЗ-порядку Безопасность → Ключи → System LLM → Расходы → NotebookLM → Telegram → Проактивность): большая часть порядка уже совпадает. Полная сверка визуальной консистентности (отступы между блоками, заголовки) откладывается до отдельной UI-сессии.
+- **Playwright E2E**: не прогонял — Vercel ещё деплоит Сессию 49. Влад прогонит руками; следующая итерация цикла начнёт Сессию 51 (финализация этапа 7).
+

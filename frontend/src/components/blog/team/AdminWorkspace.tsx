@@ -48,6 +48,7 @@ import { formatUsd } from "@/lib/team/format";
 import TelegramSection from "./TelegramSection";
 import ProvidersSection from "./ProvidersSection";
 import SystemLLMSection from "./SystemLLMSection";
+import NotebookLMSection from "./NotebookLMSection";
 
 type Provider = "anthropic" | "openai" | "google";
 
@@ -172,6 +173,9 @@ export default function AdminWorkspace() {
       <SystemLLMSection />
 
       <SpendingSection spending={spending} error={spendingError} />
+
+      {/* Сессия 50: heartbeat-мониторинг локального NotebookLM-воркера. */}
+      <NotebookLMSection />
 
       <AlertSection
         threshold={threshold}
