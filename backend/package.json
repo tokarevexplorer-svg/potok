@@ -22,7 +22,8 @@
     "test:p17": "node scripts/test-p17-integration.js",
     "test:pipeline": "node scripts/test-pipeline-e2e.js",
     "test:telegram": "node scripts/test-telegram.js",
-    "test:p22": "node scripts/test-p22.js"
+    "test:p22": "node scripts/test-p22.js",
+    "test:p1": "node scripts/test-p1.js"
   },
   "engines": {
     "node": ">=20"
