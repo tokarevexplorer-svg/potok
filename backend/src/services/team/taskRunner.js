@@ -746,7 +746,9 @@ export async function runTaskInBackground(taskId) {
         agent_id: task.agent_id ?? null,
         related_entity_id: taskId,
         related_entity_type: "task",
-        link: "/blog/team/dashboard",
+        // Сессия 43: ведём прямо на полноэкранную карточку задачи,
+        // а не на общий дашборд — теперь у задач есть уникальный URL.
+        link: `/blog/team/tasks/${taskId}`,
       });
     } catch (err) {
       console.warn(
@@ -769,7 +771,9 @@ export async function runTaskInBackground(taskId) {
           agent_id: task.agent_id ?? null,
           related_entity_id: taskId,
           related_entity_type: "task",
-          link: "/blog/team/dashboard",
+          // Сессия 43: ведём на полноэкранную карточку задачи —
+          // оттуда видно артефакт и панель «Передать дальше».
+          link: `/blog/team/tasks/${taskId}`,
         });
       } catch (err) {
         console.warn(

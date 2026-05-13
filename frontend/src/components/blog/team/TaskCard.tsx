@@ -1,6 +1,16 @@
 "use client";
 
-import { ArrowLeftFromLine, Cpu, GitBranch, Loader2, User } from "lucide-react";
+import { useState } from "react";
+import Link from "next/link";
+import {
+  ArrowLeftFromLine,
+  Cpu,
+  GitBranch,
+  Link2,
+  Loader2,
+  Maximize2,
+  User,
+} from "lucide-react";
 import type { TeamTask } from "@/lib/team/types";
 import type { TeamAgent } from "@/lib/team/teamAgentsService";
 import type { TeamProject } from "@/lib/team/teamBackendClient";
@@ -16,9 +26,25 @@ interface TaskCardProps {
   projectsById?: Map<string, TeamProject>;
 }
 
+// Сессия 43: префикс для копируемой ссылки. Берём из public ENV
+// (NEXT_PUBLIC_SITE_URL), а если не задан — из window.location.origin.
+function taskShareUrl(taskId: string): string {
+  const envUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
+  if (envUrl) return `${envUrl}/blog/team/tasks/${taskId}`;
+  if (typeof window !== "undefined") {
+    return `${window.location.origin}/blog/team/tasks/${taskId}`;
+  }
+  return `/blog/team/tasks/${taskId}`;
+}
+
 // Карточка одной задачи в канбане. Стиль повторяет TeamSectionCard и
 // TeamStatTile из Сессии 28: rounded-xl + border, hover-эффект — приподнимается.
 // Цветовое кодирование статуса — через бейдж сверху.
+//
+// Сессия 43: outer — `<div>` с absolute-overlay-кнопкой; над ним сидят две
+// icon-кнопки (↗ Развернуть, 🔗 Скопировать ссылку). Это позволяет иметь
+// несколько кликабельных элементов в одной карточке без вложенных <button>
+// (тот же приём, что в StaffWorkspace из Сессии 19).
 export default function TaskCard({
   task,
   onClick,
@@ -28,6 +54,7 @@ export default function TaskCard({
   const badge = statusBadge(task.status);
   const isRunning = task.status === "running";
   const isError = task.status === "error";
+  const [copied, setCopied] = useState(false);
 
   // Превью результата: первые ~200 символов из result, очищенные от
   // markdown-разметки (## заголовки, **жирность* и т.д.) — на карточке нужен
@@ -38,13 +65,59 @@ export default function TaskCard({
   const agent = task.agentId ? agentsById?.get(task.agentId) ?? null : null;
   const project = task.projectId ? projectsById?.get(task.projectId) ?? null : null;
 
+  const handleCopyLink = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const url = taskShareUrl(task.id);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Если clipboard заблокирован (HTTP, права) — открываем prompt с URL,
+      // чтобы Влад мог вручную скопировать.
+      if (typeof window !== "undefined") window.prompt("Скопируйте ссылку:", url);
+    }
+  };
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="focus-ring group flex w-full flex-col gap-3 rounded-xl border border-line bg-surface p-4 text-left transition hover:-translate-y-[1px] hover:border-line-strong hover:shadow-card"
-    >
-      <div className="flex items-start justify-between gap-2">
+    <div className="group relative flex w-full flex-col gap-3 rounded-xl border border-line bg-surface p-4 transition hover:-translate-y-[1px] hover:border-line-strong hover:shadow-card">
+      {/* Кликабельный overlay — открывает TaskViewerModal через onClick prop.
+          z-0 чтобы icon-кнопки сверху перехватывали клики. */}
+      <button
+        type="button"
+        onClick={onClick}
+        className="focus-ring absolute inset-0 z-0 rounded-xl text-left"
+        aria-label={`Открыть задачу ${task.title || task.id}`}
+      />
+
+      {/* Icon-кнопки в правом верхнем углу — поверх overlay. */}
+      <div className="absolute right-3 top-3 z-10 flex items-center gap-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
+        <Link
+          href={`/blog/team/tasks/${task.id}`}
+          onClick={(e) => e.stopPropagation()}
+          title="Развернуть на отдельной странице"
+          aria-label="Развернуть"
+          className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface text-ink-muted hover:bg-canvas hover:text-ink"
+        >
+          <Maximize2 size={14} />
+        </Link>
+        <button
+          type="button"
+          onClick={handleCopyLink}
+          title={copied ? "Ссылка скопирована" : "Скопировать ссылку"}
+          aria-label="Скопировать ссылку"
+          className="focus-ring inline-flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface text-ink-muted hover:bg-canvas hover:text-ink"
+        >
+          {copied ? (
+            <span className="text-[10px] font-semibold text-emerald-600">✓</span>
+          ) : (
+            <Link2 size={14} />
+          )}
+        </button>
+      </div>
+
+      <div className="relative z-[1] flex items-start justify-between gap-2 pointer-events-none">
         <span
           className={
             "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide " +
@@ -54,10 +127,11 @@ export default function TaskCard({
           {isRunning && <Loader2 size={10} className="animate-spin" />}
           {badge.label}
         </span>
-        <span className="text-xs text-ink-faint">{formatRelative(task.createdAt)}</span>
+        {/* Дата уехала левее, чтобы дать место иконкам в правом углу. */}
+        <span className="pr-16 text-xs text-ink-faint">{formatRelative(task.createdAt)}</span>
       </div>
 
-      <div className="flex flex-col gap-1">
+      <div className="relative z-[1] flex flex-col gap-1 pointer-events-none">
         <p className="text-xs font-medium uppercase tracking-wide text-ink-faint">
           {taskTypeLabel(task.type)}
         </p>
@@ -114,22 +188,24 @@ export default function TaskCard({
       </div>
 
       {isRunning && !preview && (
-        <p className="text-xs text-ink-muted">Ждём ответ модели…</p>
+        <p className="relative z-[1] text-xs text-ink-muted pointer-events-none">
+          Ждём ответ модели…
+        </p>
       )}
 
       {isError && task.error && (
-        <p className="line-clamp-3 rounded-lg bg-rose-50 px-2 py-1.5 text-xs text-rose-800">
+        <p className="relative z-[1] line-clamp-3 rounded-lg bg-rose-50 px-2 py-1.5 text-xs text-rose-800 pointer-events-none">
           {task.error}
         </p>
       )}
 
       {preview && (
-        <p className="line-clamp-3 whitespace-pre-line text-sm leading-relaxed text-ink-muted">
+        <p className="relative z-[1] line-clamp-3 whitespace-pre-line text-sm leading-relaxed text-ink-muted pointer-events-none">
           {preview}
         </p>
       )}
 
-      <div className="mt-auto flex items-center justify-between text-xs text-ink-faint">
+      <div className="relative z-[1] mt-auto flex items-center justify-between text-xs text-ink-faint pointer-events-none">
         <span className="inline-flex items-center gap-1">
           <Cpu size={12} />
           {task.model || task.provider || "—"}
@@ -143,7 +219,7 @@ export default function TaskCard({
           )}
         </span>
       </div>
-    </button>
+    </div>
   );
 }
 
