@@ -14,6 +14,10 @@ import {
   listDatabases,
   getDatabaseById,
   getDatabaseRecords,
+  createDatabase,
+  addRecord,
+  updateRecord,
+  deleteRecord,
 } from "../../services/team/customDatabaseService.js";
 import { requireAuth } from "../../middleware/requireAuth.js";
 
@@ -81,6 +85,66 @@ router.get("/:id/records", async (req, res) => {
   } catch (err) {
     console.error(`[team/databases] records ${id} failed:`, err);
     return res.status(500).json({ error: err.message ?? "Не удалось получить записи" });
+  }
+});
+
+// =========================================================================
+// Сессия 45: создание базы и CRUD записей.
+// =========================================================================
+
+// POST /api/team/databases
+// Body: { name, description?, columns: [{ name, label?, type, options? }] }
+router.post("/", async (req, res) => {
+  const body = req.body ?? {};
+  try {
+    const created = await createDatabase({
+      name: body.name,
+      description: body.description ?? null,
+      columns: body.columns,
+    });
+    return res.status(201).json({ database: created });
+  } catch (err) {
+    console.error("[team/databases] create failed:", err);
+    return res.status(400).json({ error: err.message ?? "Не удалось создать базу" });
+  }
+});
+
+// POST /api/team/databases/:id/records
+// Body: { data: { <колонка>: <значение>, ... } }
+router.post("/:id/records", async (req, res) => {
+  const { id } = req.params;
+  const body = req.body ?? {};
+  try {
+    const row = await addRecord(id, body.data ?? body);
+    return res.status(201).json({ record: row });
+  } catch (err) {
+    console.error(`[team/databases] addRecord ${id} failed:`, err);
+    return res.status(400).json({ error: err.message ?? "Не удалось добавить запись" });
+  }
+});
+
+// PATCH /api/team/databases/:id/records/:recordId
+router.patch("/:id/records/:recordId", async (req, res) => {
+  const { id, recordId } = req.params;
+  const body = req.body ?? {};
+  try {
+    const row = await updateRecord(id, recordId, body.data ?? body);
+    return res.json({ record: row });
+  } catch (err) {
+    console.error(`[team/databases] updateRecord ${id}/${recordId} failed:`, err);
+    return res.status(400).json({ error: err.message ?? "Не удалось обновить запись" });
+  }
+});
+
+// DELETE /api/team/databases/:id/records/:recordId
+router.delete("/:id/records/:recordId", async (req, res) => {
+  const { id, recordId } = req.params;
+  try {
+    await deleteRecord(id, recordId);
+    return res.json({ deleted: true });
+  } catch (err) {
+    console.error(`[team/databases] deleteRecord ${id}/${recordId} failed:`, err);
+    return res.status(400).json({ error: err.message ?? "Не удалось удалить запись" });
   }
 });
 

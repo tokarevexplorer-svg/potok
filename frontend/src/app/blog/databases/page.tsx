@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowUpRight, BookmarkCheck, Boxes, Users } from "lucide-react";
 import { fetchBackendJsonSafe } from "@/lib/apiClient";
+import CreateDatabaseButton from "@/components/blog/databases/CreateDatabaseButton";
 
 export const metadata = {
   title: "Базы — Поток",
@@ -67,9 +68,12 @@ export default async function DatabasesPage() {
         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-faint">
           Блог · Базы
         </p>
-        <h1 className="mt-2 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-          Базы
-        </h1>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+            Базы
+          </h1>
+          <CreateDatabaseButton />
+        </div>
         <p className="mt-3 max-w-2xl text-base text-ink-muted">
           Структурированное переиспользуемое знание команды.
         </p>

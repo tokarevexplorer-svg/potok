@@ -698,6 +698,101 @@ export async function setAutonomyEnabled(enabled: boolean): Promise<void> {
 }
 
 // =========================================================================
+// Сессия 45: создание пользовательских баз + CRUD записей.
+// =========================================================================
+
+export type CustomColumnType =
+  | "text"
+  | "long_text"
+  | "number"
+  | "url"
+  | "select"
+  | "multi_select"
+  | "date"
+  | "boolean";
+
+export interface CustomColumnSpec {
+  name: string;
+  label?: string;
+  type: CustomColumnType;
+  options?: string[];
+}
+
+export interface CreateDatabaseInput {
+  name: string;
+  description?: string | null;
+  columns: CustomColumnSpec[];
+}
+
+export interface CustomDatabase {
+  id: string;
+  name: string;
+  description: string | null;
+  table_name: string;
+  db_type: "referensy" | "competitor" | "custom";
+  schema_definition: {
+    columns?: { key: string; label: string; type: CustomColumnType; options?: string[] }[];
+  } | null;
+  created_at?: string;
+}
+
+export async function createCustomDatabase(
+  input: CreateDatabaseInput,
+): Promise<CustomDatabase> {
+  const data = await backendFetch("/api/team/databases", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const obj = (data ?? {}) as { database?: CustomDatabase };
+  if (!obj.database) throw new Error("Бэкенд не вернул созданную базу.");
+  return obj.database;
+}
+
+export async function addDatabaseRecord(
+  databaseId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const data = await backendFetch(
+    `/api/team/databases/${encodeURIComponent(databaseId)}/records`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: payload }),
+    },
+  );
+  const obj = (data ?? {}) as { record?: Record<string, unknown> };
+  return obj.record ?? {};
+}
+
+export async function updateDatabaseRecord(
+  databaseId: string,
+  recordId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const data = await backendFetch(
+    `/api/team/databases/${encodeURIComponent(databaseId)}/records/${encodeURIComponent(recordId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: payload }),
+    },
+  );
+  const obj = (data ?? {}) as { record?: Record<string, unknown> };
+  return obj.record ?? {};
+}
+
+export async function deleteDatabaseRecord(
+  databaseId: string,
+  recordId: string,
+): Promise<void> {
+  await backendFetch(
+    `/api/team/databases/${encodeURIComponent(databaseId)}/records/${encodeURIComponent(recordId)}`,
+    { method: "DELETE" },
+  );
+}
+
+// =========================================================================
 // Сессия 44: тумблер Anthropic Batch API
 // =========================================================================
 

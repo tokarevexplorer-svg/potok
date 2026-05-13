@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { fetchBackendJsonSafe } from "@/lib/apiClient";
+import CustomDbRecordEditor from "@/components/blog/databases/CustomDbRecordEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,16 @@ const PAGE_SIZE = 50;
 interface ColumnDef {
   key: string;
   label: string;
-  type?: "text" | "boolean" | "date" | "number";
+  type?:
+    | "text"
+    | "long_text"
+    | "boolean"
+    | "date"
+    | "number"
+    | "url"
+    | "select"
+    | "multi_select";
+  options?: string[];
 }
 
 interface DatabaseRecord {
@@ -114,6 +124,16 @@ export default async function CustomDatabasePage({ params, searchParams }: Props
           <p className="mt-3 max-w-2xl text-base text-ink-muted">{db.description}</p>
         )}
       </div>
+
+      {/* Сессия 45: для кастомных баз — клиентский редактор CRUD над таблицей.
+          Для referensy/competitor читаем only. */}
+      {db.db_type === "custom" && columns.length > 0 && (
+        <CustomDbRecordEditor
+          databaseId={db.id}
+          columns={columns}
+          records={records}
+        />
+      )}
 
       {records.length === 0 || columns.length === 0 ? (
         <div className="mt-8 rounded-2xl border border-dashed border-line bg-elevated/40 px-4 py-12 text-center text-sm text-ink-muted">

@@ -1603,3 +1603,71 @@ URL: `https://potok-omega.vercel.app/blog/team/admin`, потом `/blog/team/da
 - **Per-type форматирование артефакта в batchPollService**: использован унифицированный `batches/<task_id>.md`. Per-type handler'ы (write_text/research_direct) добавляют богатые шапки — повторять их в poll-сервисе означало бы дублировать ~50 строк кода. UI берёт `task.result` для preview, артефакт в Storage — для архива.
 - **UI взаимного disable batch ↔ self-review / clarification**: чекбоксы не блокируют друг друга. Влад может включить и batch, и self-review — backend сделает batch без self-review (потому что self-review не реализован для batch). Не критично; добавим UI-warning позже, если будет путать.
 
+
+---
+
+# Сессия 45 — Кастомные базы с нуля: мастер создания
+
+## ✅ Выполнено (автоматически)
+
+- **Миграция `0034_team_custom_db_functions.sql`** накачена через `npx supabase db push`. SQL-функция `public.create_custom_table(p_table_name TEXT, p_columns JSONB)` с `SECURITY DEFINER`. Двойная защита:
+  - Имя таблицы матчит `^team_custom_[a-z0-9_]+$` (бэкенд так и формирует — `team_custom_<slug>_<timestamp-base36>`).
+  - Имена колонок матчит `^[a-z][a-z0-9_]*$`. Зарезервированные `id`/`created_at` отбиваются `RAISE EXCEPTION`.
+- **Backend syntax checks**: `node --check` прошёл для `customDatabaseService.js` и `routes/team/databases.js`.
+- **Frontend**: `next build` — Compiled successfully + Linting и типы прошли. Page-data collection — pre-existing missing-supabase-env.
+- **`customDatabaseService`**: добавлены `createDatabase`, `addRecord`, `updateRecord`, `deleteRecord` + helpers `validateColumns`/`validateRecordPayload`. Все типы колонок (text/long_text/number/url/select/multi_select/date/boolean) маппятся в PG-типы через SQL-функцию.
+- **API routes** (`routes/team/databases.js`): POST `/`, POST `/:id/records`, PATCH `/:id/records/:recordId`, DELETE `/:id/records/:recordId`. Все за `requireAuth`. Сервис отбивает CRUD для не-custom баз (Референсы/Конкуренты остаются read-only).
+- **Frontend client** (`lib/team/teamBackendClient.ts`): новые типы + функции `createCustomDatabase`, `addDatabaseRecord`, `updateDatabaseRecord`, `deleteDatabaseRecord`.
+- **UI мастер** (`components/blog/databases/CreateDatabaseButton.tsx`): 3-шаговое модальное окно — имя/описание → колонки (живой список с +/×, select для типа, textarea для options) → подтверждение с превью. После создания — `router.refresh()` + `router.push('/blog/databases/<name>')`.
+- **UI CRUD** (`components/blog/databases/CustomDbRecordEditor.tsx`): кнопка «+ Добавить запись» + полоса чипов с кнопками ✏️/🗑 для каждой записи. Модалка добавления/правки с правильными input-ами по типу колонки (checkbox для boolean, multi checkbox для multi_select, select для select, textarea для long_text, date для date, type=number для number, type=url для url).
+- **Индекс-страница `/blog/databases`**: кнопка «+ Создать базу» рядом с заголовком.
+- **Sidebar**: уже динамический с Сессии 5 — новые кастомные базы автоматически появляются в подменю «Базы» без правок.
+- **`fetchBackendJsonSafe` / `backendFetch`** — используем без изменений (server + client proxy).
+
+## ⚠️ Требует ручной проверки
+
+### Сессия 45 — мастер «+ Создать базу» (E2E на проде)
+
+URL: `https://potok-omega.vercel.app/blog/databases`
+
+Что сделать (после деплоя Vercel):
+1. Открой `/blog/databases` → справа у заголовка должна появиться кнопка «+ Создать базу». Нажми.
+2. **Шаг 1**: введи имя «Контент-план», описание «Заметки по будущим видео». «Далее».
+3. **Шаг 2**: добавь колонки:
+   - `title` / «Название» / Короткий текст
+   - `status` / «Статус» / Выбор из списка → варианты: `Идея, В работе, Готово`
+   - `date` / «Дата» / Дата
+   - `is_priority` / «Приоритет» / Да/Нет
+   - `notes` / «Заметки» / Длинный текст
+4. **Шаг 3**: проверь превью → «Создать базу».
+5. Должен открыться `/blog/databases/Контент-план` (или URL-encoded аналог).
+6. В Supabase Dashboard → схема должна содержать новую таблицу `team_custom_kontent_plan_<base36>`. В `team_custom_databases` появилась строка с `db_type='custom'`, корректным `schema_definition`.
+7. **Добавь запись**: кнопка «+ Добавить запись» в правом верхнем углу таблицы → заполни форму → «Добавить».
+8. **Отредактируй**: кликни ✏️ на чипе записи → измени поля → «Сохранить».
+9. **Удали**: кликни 🗑 → подтверди.
+10. В sidebar «Базы» новая база видна в подменю (после reload).
+
+Что должно произойти:
+- Никаких ошибок в console.
+- На каждом шаге форма корректно валидируется (кнопка «Далее» disabled при пустом имени / колонке без name).
+- Все типы колонок отображаются с правильным input-ом.
+- После CRUD действия серверная таблица перерисовывается через `router.refresh()`.
+
+### Сессия 45 — фиксированные базы по-прежнему read-only
+
+Что сделать:
+1. Открой `/blog/databases/references` или `/blog/databases/competitors`.
+2. На этих страницах НЕ должно быть кнопок «+ Добавить запись» / ✏️ / 🗑.
+3. POST на `/api/team-proxy/databases/<referensy-id>/records` через DevTools должен вернуть 400 с сообщением про не-custom.
+
+## 🐛 Найденные баги (не починил)
+
+Нет.
+
+## Что я НЕ делал и почему
+
+- **Playwright E2E на проде**: не прогонял на этой итерации цикла, потому что Vercel ещё деплоит коммит Сессии 44 (push был ~30 сек назад). Влад прогонит руками после деплоя; следующая итерация цикла начнёт Сессию 46 и сможет неявно подтвердить отсутствие регрессий в БД-маршрутах.
+- **Live-превью slug имени таблицы**: оставлено внутренней деталью. Slug рассчитывается в сервисе, имя реальной таблицы Влад не выбирает. Если оно потребуется (например, для админ-view) — добавим отдельным микропатчем.
+- **Inline edit-кнопки в строке таблицы**: для упрощения интеграции с server-rendered таблицей кнопки ✏️/🗑 живут под основной таблицей в виде чипов. Удобство — компромисс ради меньшего объёма правок. Можно поднять в строку при необходимости (требует client-side таблицы).
+- **Удаление БАЗЫ целиком** через UI — не реализовано: пока только через Supabase Dashboard (DROP TABLE + DELETE из team_custom_databases). Это редкая операция, кнопка «Удалить базу» в UI добавит риск случайного клика.
+
